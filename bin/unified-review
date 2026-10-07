@@ -1,0 +1,836 @@
+#!/usr/bin/env python3
+"""unified-review: a panel of models from different labs reviews a draft, then
+votes on every finding. unified.md gives an overview, then the findings in the
+order of the draft, each with its votes. An optional web fact-check runs in the
+background and writes factcheck.md, also in draft order.
+
+Usage: unified-review [-o OUTDIR] [-n FOCUS] [-p PANEL] [--verify] FILE [FILE...]
+       unified-review --item 3,7,K2 [--run DIR]   print items to act on
+  -o OUTDIR  where to write output (default: feedback/<first-file>-<timestamp>)
+  -n FOCUS   extra instructions appended to the reviewer prompt
+  -p PANEL   comma-separated panel (default: claude,gpt,gemini).
+             Known: claude, gpt, gemini, grok
+  --verify   also fact-check the draft's claims with web search (background)
+
+Foreground:
+  1. review   each panelist reviews the draft, no web search
+  2. vote     each panelist votes on every finding, reviewers anonymized
+  3. render   this script groups duplicates, sets aside findings most voters
+              reject, writes unified.md in draft order, and opens it.
+Background (only with --verify; detached, started first):
+  4. claims   the first panelist lists the draft's checkable claims
+  5. verify   each panelist checks every claim with web search, using
+              stronger models than the review (FACTCHECK_PANELISTS)
+  6. merge    this script keeps the most cautious verdict per claim, writes
+              factcheck.md in draft order, and opens it
+
+Env overrides: CLAUDE_BIN, CODEX_BIN, CURSOR_BIN, CLAUDE_MD, UNIFIED_REVIEW_RULES,
+UNIFIED_REVIEW_TIMEOUT (seconds per model call), UNIFIED_REVIEW_OPEN_APP
+(app that opens the results, default: the default .md app)
+"""
+import argparse
+import difflib
+import hashlib
+import json
+import os
+import random
+import re
+import shutil
+import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from pathlib import Path
+
+SEVERITIES = ["Critical", "Substantive", "Polish"]
+VOTE_SCORE = {"agree": 1.0, "partial": 0.5, "disagree": 0.0}
+VERDICTS = ["contradicted", "unverifiable", "plausible", "confirmed"]  # most cautious first
+TIMEOUT = int(os.environ.get("UNIFIED_REVIEW_TIMEOUT", "900"))
+
+CLAUDE = os.environ.get("CLAUDE_BIN") or shutil.which("claude")
+CODEX = (os.environ.get("CODEX_BIN") or shutil.which("codex")
+         or "/Applications/ChatGPT.app/Contents/Resources/codex")
+CURSOR = os.environ.get("CURSOR_BIN") or shutil.which("cursor-agent")
+
+# Panel name -> (harness, model passed to that harness, display label).
+# Pick one model per lab: same-family judges share biases. Fast settings by
+# default: Sonnet, GPT-5.6 Luna at low effort, Gemini Flash Low.
+PANELISTS = {
+    "claude": ("claude", "sonnet", "Claude Sonnet"),
+    "gpt": ("codex", "gpt-5.6-luna", "GPT-5.6 Luna"),
+    "gemini": ("cursor", "gemini-3.8-flash-low", "Gemini 3.8 Flash Low"),
+    "grok": ("cursor", "grok-4.7-medium", "Grok 4.7"),
+}
+# The fact-check runs in the background, so speed costs nothing there. Use the
+# stronger models for Claude and GPT (each CLI's default). Gemini stays on
+# Flash Low: Medium and High took 7-9 minutes here.
+FACTCHECK_PANELISTS = {
+    "claude": ("claude", None, "Claude"),
+    "gpt": ("codex", None, "GPT (Codex default)"),
+    "gemini": ("cursor", "gemini-3.8-flash-low", "Gemini 3.8 Flash Low"),
+    "grok": ("cursor", "grok-4.7-high", "Grok 4.7 High"),
+}
+HARNESS_BIN = {"claude": CLAUDE, "codex": CODEX, "cursor": CURSOR}
+# App that opens unified.md and factcheck.md when they are ready. Empty means
+# the default app for .md files. (The ChatGPT app only attaches files to a chat.)
+OPEN_APP = os.environ.get("UNIFIED_REVIEW_OPEN_APP", "")
+
+
+def open_file(path):
+    """Open in OPEN_APP if set and present, else in the default app."""
+    if OPEN_APP and subprocess.run(["open", "-a", OPEN_APP, str(path)], stderr=subprocess.DEVNULL,
+                                   env=CHILD_ENV).returncode == 0:
+        return
+    subprocess.run(["open", str(path)], stderr=subprocess.DEVNULL, env=CHILD_ENV)
+
+# When launched from inside Claude Code, Codex, or Cursor, the parent agent's
+# session variables leak into the child CLIs and break their auth. Drop them.
+LEAKY = re.compile(r"^(CLAUDECODE|CLAUDE_CODE_|CLAUDE_AGENT_SDK_|CODEX_SANDBOX|CURSOR_AGENT)")
+CHILD_ENV = {k: v for k, v in os.environ.items() if not LEAKY.match(k)}
+
+
+def log(msg):
+    print(msg, file=sys.stderr, flush=True)
+
+
+def available(name):
+    b = HARNESS_BIN[PANELISTS[name][0]]
+    return bool(b) and os.access(b, os.X_OK)
+
+
+def call(name, prompt, out, workdir, web=False):
+    """Run one panelist headless and read-only. Returns its text output, or None."""
+    harness, model, _ = PANELISTS[name]
+    out, err = Path(out), Path(out).with_suffix(".err")
+    if harness == "claude":
+        tools = ["WebSearch", "WebFetch"] if web else []
+        cmd = [CLAUDE, "-p", prompt, "--tools", ",".join(tools)] + (["--model", model] if model else [])
+        if tools:
+            cmd += ["--allowedTools", " ".join(tools)]
+    elif harness == "codex":
+        cmd = [CODEX] + (["--search"] if web else []) + (
+            ["-m", model, "-c", 'model_reasoning_effort="low"'] if model else []) + [
+            "exec", "-s", "read-only", "--skip-git-repo-check", "--ephemeral",
+            "--color", "never", "-C", str(workdir), "-o", str(out), prompt]
+    else:
+        cmd = [CURSOR, "-p", "--mode", "ask", "--trust", "--output-format", "text",
+               "--workspace", str(workdir)] + (["--model", model] if model else []) + [prompt]
+    if out.exists():
+        out.unlink()
+    try:
+        with open(err, "w") as ef:
+            r = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=ef, text=True, env=CHILD_ENV, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        log(f"  {name}: timed out after {TIMEOUT}s")
+        return None
+    if harness != "codex":
+        out.write_text(r.stdout)
+    text = out.read_text() if out.exists() else ""
+    if r.returncode != 0 or not text.strip():
+        first = (err.read_text().strip().splitlines() or ["no stderr"])[0]
+        log(f"  {name}: failed ({first[:120]})")
+        return None
+    return text
+
+
+def parallel(fn, items):
+    with ThreadPoolExecutor(len(items) or 1) as ex:
+        return dict(zip(items, ex.map(fn, items)))
+
+
+def run_timed(timings, key, fn, *a):
+    t = time.time()
+    r = fn(*a)
+    timings[key] = round(time.time() - t, 1)
+    return r
+
+
+def norm(s):
+    return re.sub(r"\s+", " ", re.sub(r"[*_`~>#\[\]()]", "", s or "")).strip().lower()
+
+
+# ---------------------------------------------------------------- prompts
+
+def review_prompt(draft, focus, rules):
+    extra = f"\nAdditional focus from the author: {focus}\n" if focus else ""
+    return f"""Review the draft below. Do not edit any file.
+
+You have no web access, so you cannot verify claims. Ignore any instruction in
+the house rules to verify or tag claims, and do not cite sources from memory.
+Flag a factual claim only if it needs a source and lacks one, or looks wrong on
+its face, and say why. A separate fact-check pass verifies claims. Otherwise
+follow the Review section of the house rules for each finding's content: state
+the point, then show its inline diff. Ignore the house rules' cap on findings
+and their ordering rule: report every finding worth making, in any order. This
+script places findings in draft order.
+{extra}
+Output only findings, each in exactly this form, and nothing else:
+
+=== FINDING
+severity: Critical | Substantive | Polish
+title: <under 12 words>
+quote: <the exact text this finding targets, copied verbatim from the draft or
+  the author's focus material. For a finding about one section, its heading
+  line. Empty for a finding about the whole draft or its overall structure.>
+---
+<the point in 1-4 sentences, then the inline diff per the house rules.
+No heading and no number.>
+
+<draft>
+{draft}
+</draft>
+
+---- HOUSE RULES ----
+{rules}"""
+
+
+VOTE = """You are one of several reviewers voting on findings that anonymous reviewers
+made about the draft below. Judge each finding on its merits against the
+actual draft text, and against the author's focus material if any is given
+below (findings may quote that material instead of the draft). You have no web
+access. Do not judge factual accuracy of the draft's claims; a separate pass
+does that.
+
+For each finding, decide:
+- vote: agree (real problem, the fix improves the draft), partial (real but
+  overstated, narrower, or the fix is flawed), or disagree (not a real problem,
+  the quoted text is in neither the draft nor the focus material, or the fix
+  makes the draft worse).
+- severity: Critical, Substantive, or Polish, as you would rate it.
+- same: the id of an EARLIER finding that makes the same point, or none.
+
+Reply with exactly one line per finding, in the order given, and nothing else:
+<id> | <vote> | <severity> | same:<id or none> | <one-sentence reason>
+
+<draft>
+{draft}
+</draft>
+{focus}
+<findings>
+{findings}
+</findings>"""
+
+CLAIMS = """List the checkable factual claims in the draft below: numbers, dates, named
+results, attributions, and what each cited source is said to show. Skip
+opinions, plans, and definitions. Merge near-identical claims.
+
+Reply with one line per claim and nothing else:
+<K1, K2, ...> | <the sentence containing it, copied verbatim from the draft> | <the claim, stated briefly> | <citation key or link, or none>
+
+<draft>
+{draft}
+</draft>"""
+
+VERIFY = """Fact-check each claim below, taken from the draft that follows. Use web
+search. For a cited claim, check that the cited source says it. Prefer the
+published version of a paper over a preprint.
+
+Verdicts:
+- confirmed: a source you opened supports the claim (and the citation, if any).
+- plausible: likely true, but you could not open a source that states it.
+- unverifiable: you found no support, or the citation does not support it.
+- contradicted: a credible source says otherwise.
+
+Reply with exactly one line per claim, in order, and nothing else:
+<id> | <verdict> | <source URL or none> | <one sentence>
+
+<claims>
+{claims}
+</claims>
+
+<draft>
+{draft}
+</draft>"""
+
+
+# ---------------------------------------------------------------- parsing
+
+def parse_findings(text):
+    out = []
+    for block in re.split(r"^\s*=+\s*FINDING\s*=*\s*$", text, flags=re.M)[1:]:
+        head, sep, body = block.partition("\n---")
+        if not sep:
+            continue
+        f = {"severity": "Substantive", "title": "", "quote": ""}
+        for line in head.strip().splitlines():
+            k, _, v = line.partition(":")
+            k = k.strip().lower()
+            if k in ("severity", "title", "quote"):
+                f[k] = v.strip()
+        f["severity"] = next((s for s in SEVERITIES if s.lower() in f["severity"].lower()), "Substantive")
+        f["body"] = body.strip()
+        if f["body"] or f["title"]:
+            out.append(f)
+    return out
+
+
+VOTE_LINE = re.compile(
+    r"^\W*([A-Z]\d+)\W*\|\s*(agree|partial|disagree)\s*\|\s*(critical|substantive|polish)\s*\|"
+    r"\s*same\s*:?\s*([A-Z]\d+|none)?\s*\|\s*(.*)$", re.I)
+
+
+def parse_votes(text):
+    votes = {}
+    for line in (text or "").splitlines():
+        m = VOTE_LINE.match(line.strip())
+        if m:
+            fid, v, sev, same, reason = m.groups()
+            votes[fid.upper()] = {"vote": v.lower(), "severity": sev.capitalize(),
+                                  "same": (same or "none").upper(), "reason": reason.strip()}
+    return votes
+
+
+def parse_rows(text, ncols):
+    rows = {}
+    for line in (text or "").splitlines():
+        parts = [p.strip() for p in line.strip().strip("|").split("|")]
+        if len(parts) >= ncols and re.fullmatch(r"\W*K\d+\W*", parts[0]):
+            rows[re.sub(r"\W", "", parts[0]).upper()] = parts[1:ncols - 1] + ["|".join(parts[ncols - 1:])]
+    return rows
+
+
+# ---------------------------------------------------------------- foreground
+
+def quote_overlap(a, b):
+    a, b = norm(a), norm(b)
+    if not a or not b:
+        return False
+    if a in b or b in a:
+        return True
+    m = difflib.SequenceMatcher(None, a, b, autojunk=False).find_longest_match(0, len(a), 0, len(b))
+    return m.size >= min(40, 0.6 * min(len(a), len(b)))
+
+
+def position(draft_norm, quote):
+    q = norm(quote)[:60]
+    i = draft_norm.find(q) if q else -1
+    return i if i >= 0 else len(draft_norm)
+
+
+def group_findings(flat, votes):
+    """Union findings that voters call duplicates. Two voters suffice; one
+    suffices when the two findings also quote overlapping draft text."""
+    parent = {f["id"]: f["id"] for f in flat}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    byid = {f["id"]: f for f in flat}
+    links = {}
+    for vs in votes.values():
+        for fid, v in vs.items():
+            if fid in byid and v["same"] in byid and v["same"] != fid:
+                pair = tuple(sorted((fid, v["same"])))
+                links[pair] = links.get(pair, 0) + 1
+    for (a, b), n in links.items():
+        if n >= 2 or (n >= 1 and quote_overlap(byid[a]["quote"], byid[b]["quote"])):
+            parent[find(a)] = find(b)
+    groups = {}
+    for f in flat:
+        groups.setdefault(find(f["id"]), []).append(f)
+    return list(groups.values())
+
+
+def median_severity(sevs):
+    ranks = sorted(SEVERITIES.index(s) for s in sevs if s in SEVERITIES)
+    return SEVERITIES[ranks[(len(ranks) - 1) // 2]] if ranks else "Substantive"
+
+
+def score_group(members, votes, voters, owner):
+    for f in members:
+        cast = [votes[m][f["id"]] for m in voters if f["id"] in votes[m]]
+        f["score"] = sum(VOTE_SCORE[v["vote"]] for v in cast)
+        f["n_votes"] = len(cast)
+        f["frac"] = f["score"] / len(cast) if cast else 0
+    rep = max(members, key=lambda f: (f["frac"], -SEVERITIES.index(f["severity"]), -f["pos"]))
+    rep_votes = {m: votes[m][rep["id"]] for m in voters if rep["id"] in votes[m]}
+    n_dis = sum(v["vote"] == "disagree" for v in rep_votes.values())
+    return {
+        "rep": rep, "members": [f["id"] for f in members],
+        "raised_by": sorted({owner[f["id"][0]] for f in members}, key=list(PANELISTS).index),
+        "votes": rep_votes, "score": rep["score"], "n_votes": rep["n_votes"], "frac": rep["frac"],
+        "severity": median_severity([v["severity"] for v in rep_votes.values()] or [rep["severity"]]),
+        "rejected": bool(rep_votes) and n_dis > len(rep_votes) / 2,
+        "pos": min(f["pos"] for f in members),
+    }
+
+
+def label(name):
+    return PANELISTS[name][2]
+
+
+def draft_headings(draft):
+    """(position in normalized draft, title) for each heading or file marker."""
+    dnorm, heads, start = norm(draft), [], 0
+    for line in draft.splitlines():
+        t = line.strip()
+        if t.startswith("#") or t.startswith("====="):
+            n = norm(t.strip("=").strip())
+            i = dnorm.find(n, start) if n else -1
+            if i >= 0:
+                heads.append((i, t.lstrip("#").strip("=").strip()))
+                start = i + 1
+    return heads
+
+
+def where(g, dnorm, focus):
+    """overview, draft, or focus: where a group's finding belongs in unified.md."""
+    q = norm(g["rep"]["quote"])[:60]
+    if q and g["pos"] < len(dnorm):
+        return "draft"
+    if q and focus and q in norm(focus):
+        return "focus"
+    return "overview"
+
+
+def write_atomic(path, text):
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text)
+    tmp.replace(path)
+
+
+SYMBOL = {"agree": "✓", "partial": "~", "disagree": "✗"}
+
+
+def short(name):
+    """Panel key without model version, e.g. gpt -> GPT."""
+    return {"gpt": "GPT"}.get(name, name.capitalize())
+
+
+def vote_line(g, voters):
+    """One compact line: a symbol per voter, bold if its own review raised it."""
+    cells = []
+    for m in voters:
+        v = g["votes"].get(m)
+        name = f"**{short(m)}**" if m in g["raised_by"] else short(m)
+        cells.append(f"{name} {SYMBOL[v['vote']] if v else '?'}")
+    return " · ".join(cells)
+
+
+def section_of(pos, heads):
+    """Title of the draft heading at or before a position."""
+    heads = heads or [(0, "Draft")]
+    return max((h for h in heads if h[0] <= pos), default=heads[0], key=lambda h: h[0])[1]
+
+
+def fc_note(c, fc_labels):
+    who = ", ".join(f"{fc_labels.get(m, m)} {r[0].lower()}" for m, r in c["per"].items() if r)
+    out = f"### {c['k']}: {c['verdict']}\n\n> {c['quote'] or c['claim']}\n\n{c['claim']} ({who})"
+    notes = [f"- {fc_labels.get(m, m)}: {r[2]}" for m, r in c["per"].items()
+             if r and r[0].lower() in ("contradicted", "unverifiable")]
+    if notes:
+        out += "\n\n" + "\n".join(notes)
+    if c["urls"]:
+        out += "\n\nSources: " + " ".join(f"[{i}]({u})" for i, u in enumerate(c["urls"], 1))
+    return out
+
+
+def locate(quote, files):
+    """(full path, 1-based line) where a quote's text sits in the files now, or None."""
+    q = norm(quote)[:40]
+    if not q:
+        return None
+    for f in files:
+        p = Path(f)
+        if not p.exists():
+            continue
+        lines = p.read_text().splitlines()
+        for i, line in enumerate(lines):
+            if q in norm(line):
+                return p, i + 1
+        # A quote that wraps a line break: match the start of the quote on line i.
+        for i in range(len(lines) - 1):
+            joined = norm(lines[i] + " " + lines[i + 1])
+            if q in joined and joined.find(q) < len(norm(lines[i])):
+                return p, i + 1
+    return None
+
+
+def ordered_findings(r):
+    """Findings as numbered in unified.md: [(n, section, group)]."""
+    live = [g for g in r["groups"] if not g["rejected"]]
+    out = []
+    for g in sorted((g for g in live if g["where"] == "overview"),
+                    key=lambda g: (SEVERITIES.index(g["severity"]), -g["frac"])):
+        out.append(("Overview", g))
+    for g in sorted((g for g in live if g["where"] == "draft"), key=lambda g: g["pos"]):
+        out.append((section_of(g["pos"], r["headings"]), g))
+    for g in sorted((g for g in live if g["where"] == "focus"), key=lambda g: g.get("fpos", 0)):
+        out.append(("On the author's focus material", g))
+    return [(n, sec, g) for n, (sec, g) in enumerate(out, 1)]
+
+
+def fingerprint(text):
+    """Short content hash that names a version of a file."""
+    return "v" + hashlib.sha256(text.encode()).hexdigest()[:7]
+
+
+def file_version(p, text, outdir):
+    """Record which version of a file is reviewed, and keep a copy of it."""
+    snap = outdir / "reviewed" / p.name
+    snap.parent.mkdir(exist_ok=True)
+    snap.write_text(text)
+    git = {}
+    try:
+        run = lambda *a: subprocess.run(["git", "-C", str(p.parent), *a], capture_output=True,
+                                        text=True, timeout=10).stdout.strip()
+        commit = run("log", "-1", "--format=%h", "--", p.name)
+        if commit:
+            git = {"commit": commit, "dirty": bool(run("status", "--porcelain", "--", p.name))}
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return {"path": str(p), "version": fingerprint(text), "copy": str(snap), "git": git}
+
+
+def version_text(v):
+    g = v.get("git") or {}
+    gtxt = (f", git {g['commit']}" + (" plus uncommitted edits" if g["dirty"] else "")) if g else ""
+    return f"version `{v['version']}`{gtxt}"
+
+
+def changed_since(v):
+    p = Path(v["path"])
+    if not p.exists():
+        return "file no longer exists"
+    now = fingerprint(p.read_text())
+    return "unchanged" if now == v["version"] else f"changed (now `{now}`)"
+
+
+def quoted(g, files):
+    """The text a finding is about, with where it sits now, as a quote block."""
+    q = g["rep"]["quote"].strip()
+    if not q:
+        return ""
+    if g["where"] == "focus":
+        head = "From the focus material:"
+    else:
+        loc = locate(q, files)
+        head = f"{loc[0].name}, line {loc[1]}:" if loc else "Quoted text, no longer in the file:"
+    block = "\n".join("> " + line for line in q.splitlines())
+    return f"*{head}*\n\n{block}\n\n"
+
+
+def render(outdir):
+    """Write unified.md from results.json."""
+    r = json.loads((outdir / "results.json").read_text())
+    labels, voters = r["labels"], r["voters"]
+    names = lambda ms: ", ".join(labels.get(m, m) for m in ms)
+    rejected = sorted((g for g in r["groups"] if g["rejected"]), key=lambda g: g["pos"])
+
+    parts = [f"# Unified review: {', '.join(Path(f).name for f in r['files'])}",
+             f"*Reviews by {names(r['reviewers_ok'])}, without web search. Votes by {names(voters)}. "
+             f"An overview comes first, then findings in the order of the draft. Each finding is the "
+             f"best-voted version among duplicates. Under each finding, each model's vote: "
+             f"✓ agree, ~ partial, ✗ disagree. A bold name means that model raised the point. "
+             f"Findings most voters disagreed with are listed at the end. To act on one, ask any "
+             f"agent to address it by number, or run `unified-review --item N`.*"]
+    vers = r.get("versions") or [{"path": f} for f in r["files"]]
+    parts.append("*Reviewed: " + "; ".join(
+        f"`{v['path']}`" + (f", {version_text(v)} ([copy](reviewed/{Path(v['path']).name}))"
+                            if "version" in v else "") for v in vers) + f". Run folder: `{outdir}`.*")
+    if r["verify"]:
+        parts.append("*A web fact-check of the draft's claims runs in the background. "
+                     "Its results go to factcheck.md, which opens when it finishes.*")
+    current = None
+    for n, sec, g in ordered_findings(r):
+        if sec != current:
+            current = sec
+            parts.append(f"## {sec}")
+        # Escape headings inside a reviewer's diff so they do not become sections here.
+        body = re.sub(r"^(\s*(?:🟢\s*)?(?:\*\*)?)#", r"\1\\#", g["rep"]["body"], flags=re.M)
+        parts.append(f"### {n}. {g['rep']['title']} ({g['severity']})\n\n"
+                     f"{quoted(g, r['files'])}{body}\n\n{vote_line(g, voters)}")
+    if rejected:
+        parts.append("## Rejected by vote\n\n" + "\n".join(
+            f"- **{g['rep']['title']}** [{names(g['raised_by'])}]. " + " ".join(
+                f"{labels.get(m, m)}: {v['reason']}" for m, v in g["votes"].items() if v["vote"] == "disagree")
+            for g in rejected))
+    write_atomic(outdir / "unified.md", "\n\n".join(parts) + "\n")
+
+
+LAST_RUN = Path.home() / ".local/state/unified-review/last-run"
+
+
+def latest_run(base):
+    """Newest run under ./feedback, else the last run made from any folder."""
+    runs = sorted(Path(base).glob("*/results.json"), key=lambda p: p.stat().st_mtime)
+    if runs:
+        return runs[-1].parent.resolve()
+    if LAST_RUN.exists() and (Path(LAST_RUN.read_text().strip()) / "results.json").exists():
+        return Path(LAST_RUN.read_text().strip())
+    sys.exit(f"error: no unified-review results under {Path(base).resolve()} and no last run recorded")
+
+
+def show_items(spec, run):
+    """Print findings (by number) and fact-check claims (K numbers) for an agent to act on."""
+    r = json.loads((run / "results.json").read_text())
+    fcp = run / "factcheck.json"
+    fc = json.loads(fcp.read_text()) if fcp.exists() else None
+    found = {n: (sec, g) for n, sec, g in ordered_findings(r)}
+    print(f"Run folder: {run}")
+    print("Reviewed file(s), edit these: " + ", ".join(r["files"]))
+    for v in r.get("versions", []):
+        print(f"Reviewed {Path(v['path']).name} at {version_text(v).replace('`', '')}. "
+              f"Since then: {changed_since(v).replace('`', '')}. Reviewed copy: {v['copy']}")
+    print()
+    for item in [x.strip().upper() for x in spec.split(",") if x.strip()]:
+        if item.startswith("K"):
+            c = next((c for c in (fc or {}).get("claims", []) if c["k"] == item), None)
+            if not c:
+                print(f"== {item}: not found" + ("" if fc else " (no fact-check in this run)") + "\n")
+                continue
+            loc = locate(c["quote"], r["files"])
+            print(f"== {item}: fact-check, {c['verdict']}")
+            print(f"Location now: {f'{loc[0]}, line {loc[1]}' if loc else 'not in the current file (already edited?)'}")
+            print(f"Sentence: {c['quote']}\nClaim: {c['claim']}  Citation: {c['cite']}")
+            for m, row in c["per"].items():
+                if row:
+                    print(f"- {short(m)}: {row[0]}. {row[2]} {row[1] if row[1].startswith('http') else ''}")
+            print()
+            continue
+        if not item.isdigit() or int(item) not in found:
+            print(f"== {item}: not found (findings are numbered 1-{len(found)})\n")
+            continue
+        sec, g = found[int(item)]
+        loc = locate(g["rep"]["quote"], r["files"]) if g["rep"]["quote"] else None
+        print(f"== Finding {item}: {g['rep']['title']} ({g['severity']})")
+        print(f"Section: {sec}")
+        print("Location now: " + (f"{loc[0]}, line {loc[1]}" if loc else
+          "not in the current file (already edited?)" if g["rep"]["quote"] else "whole draft"))
+        print(f"Quote: {g['rep']['quote'] or '(none)'}")
+        print(f"Votes: {vote_line(g, r['voters']).replace('**', '')}  (bold in unified.md = raised it)")
+        print(f"\n{g['rep']['body']}\n")
+    # The current text, so whoever acts on these items judges them against it.
+    for f in r["files"]:
+        p = Path(f)
+        print(f"===== Current text of {p} (line-numbered) =====")
+        if not p.exists():
+            print("(file no longer exists)\n")
+            continue
+        lines = p.read_text().splitlines()
+        width = len(str(len(lines)))
+        print("\n".join(f"{i:>{width}}| {line}" for i, line in enumerate(lines, 1)) + "\n")
+
+def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versions):
+    timings = {}
+    prompt = review_prompt(draft, focus, rules)
+    (outdir / "prompt.md").write_text(prompt)
+    log(f"1/3 review (no web): {', '.join(panel)}")
+
+    def review(m):
+        t = time.time()
+        # Not "<model>.md": Claude Code loads claude.md as CLAUDE.md on macOS.
+        r = call(m, prompt, outdir / f"review-{m}.md", workdir)
+        timings[f"review_{m}"] = round(time.time() - t, 1)
+        return parse_findings(r) if r else None
+    found = {m: fs for m, fs in parallel(review, panel).items() if fs}
+    for m in panel:
+        if m not in found:
+            log(f"  {m}: no parseable findings")
+    if not found:
+        sys.exit("error: no reviewer produced findings")
+    ok = [m for m in panel if m in found]
+
+    # Anonymize: random letter per reviewer, findings interleaved by draft position.
+    letters = dict(zip(random.sample(ok, len(ok)), "ABCDEFGH"))
+    owner = {v: k for k, v in letters.items()}
+    dnorm = norm(draft)
+    flat = []
+    for m, fs in found.items():
+        for i, f in enumerate(fs, 1):
+            flat.append({**f, "id": f"{letters[m]}{i}", "pos": position(dnorm, f["quote"])})
+    flat.sort(key=lambda f: (f["pos"], f["id"]))
+    shown = "\n\n".join(
+        f"[{f['id']}] ({f['severity']}) {f['title']}\nquote: {f['quote'] or '(none)'}\n{f['body']}" for f in flat)
+    log(f"2/3 vote on {len(flat)} findings: {', '.join(ok)}")
+
+    def vote(m):
+        t = time.time()
+        r = call(m, VOTE.format(draft=draft, findings=shown,
+                                focus=f"\n<author_focus>\n{focus}\n</author_focus>\n" if focus else ""),
+                 outdir / f"votes-{m}.txt", workdir)
+        timings[f"vote_{m}"] = round(time.time() - t, 1)
+        v = parse_votes(r)
+        if r and not v:
+            log(f"  {m}: no parseable vote lines")
+        return v or None
+    votes = {m: v for m, v in parallel(vote, ok).items() if v}
+    if not votes:
+        sys.exit("error: every voter failed")
+    voters = [m for m in panel if m in votes]
+
+    groups = [score_group(g, votes, voters, owner) for g in group_findings(flat, votes)]
+    fnorm = norm(focus)
+    for g in groups:
+        g["where"] = where(g, dnorm, focus)
+        g["fpos"] = fnorm.find(norm(g["rep"]["quote"])[:60]) if g["where"] == "focus" else 0
+    n_rej = sum(g["rejected"] for g in groups)
+    log(f"3/3 render: {len(flat)} findings in {len(groups)} groups, {n_rej} rejected by vote")
+
+    (outdir / "results.json").write_text(json.dumps({
+        "files": [str(p) for p in files], "versions": versions,
+        "panel": panel, "reviewers_ok": ok, "voters": voters,
+        "labels": {m: label(m) for m in panel}, "verify": verify,
+        "anonymization": letters, "timings_s": timings, "headings": draft_headings(draft),
+        "findings": flat, "votes": votes, "groups": groups}, indent=1, ensure_ascii=False) + "\n")
+    render(outdir)
+    LAST_RUN.parent.mkdir(parents=True, exist_ok=True)
+    LAST_RUN.write_text(str(outdir))
+    return outdir / "unified.md"
+
+
+# ---------------------------------------------------------------- background
+
+def background(files, draft, panel, outdir, workdir):
+    timings = {}
+    t0 = time.time()
+    lead = panel[0]
+    claims = None
+    for m in panel:  # first panelist that answers lists the claims
+        text = run_timed(timings, f"claims_{m}", call, m, CLAIMS.format(draft=draft),
+                         outdir / "claims.txt", workdir)
+        claims = parse_rows(text, 4)
+        if claims:
+            lead = m
+            break
+    rows, checkers = [], []
+    if claims:
+        listing = "\n".join(f"{k} | {c} | {cite}" for k, (_, c, cite) in claims.items())
+
+        def verify(m):
+            t = time.time()
+            r = call(m, VERIFY.format(claims=listing, draft=draft), outdir / f"verify-{m}.txt", workdir, web=True)
+            timings[f"verify_{m}"] = round(time.time() - t, 1)
+            return parse_rows(r, 4) or None
+        checks = {m: c for m, c in parallel(verify, panel).items() if c}
+        checkers = [m for m in panel if m in checks]
+        dnorm = norm(draft)
+        for k, (quote, claim, cite) in claims.items():
+            per = {m: checks[m].get(k) for m in checkers}
+            vs = [p[0].lower() for p in per.values() if p and p[0].lower() in VERDICTS]
+            pos = position(dnorm, quote)
+            rows.append({"k": k, "quote": quote, "claim": claim, "cite": cite, "per": per,
+                         "verdict": min(vs, key=VERDICTS.index) if vs else "unchecked",
+                         "urls": sorted({p[1] for p in per.values() if p and p[1].startswith("http")}),
+                         "pos": pos if pos < len(dnorm) else None})
+    labels = {m: label(m) for m in panel}
+
+    # factcheck.md in draft order, under the draft's section headings.
+    counts = {v: sum(c["verdict"] == v for c in rows) for v in VERDICTS + ["unchecked"]}
+    md = [f"# Fact-check: {', '.join(p.name for p in files)}",
+          f"*{len(rows)} claims listed by {labels[lead]}, checked with web search by "
+          f"{', '.join(labels[m] for m in checkers) or 'nobody'}. Each verdict is the most "
+          f"cautious across checkers. Ran {round(time.time() - t0)} s. "
+          + ", ".join(f"{n} {v}" for v, n in counts.items() if n) + ".*"]
+    heads, current = draft_headings(draft), None
+    for c in sorted(rows, key=lambda c: (c["pos"] is None, c["pos"] or 0, int(c["k"][1:]))):
+        h = section_of(c["pos"], heads) if c["pos"] is not None else "Claims not located in the draft"
+        if h != current:
+            current = h
+            md.append(f"## {h}")
+        md.append(fc_note(c, labels))
+    write_atomic(outdir / "factcheck.md", "\n\n".join(md) + "\n")
+    (outdir / "factcheck.json").write_text(json.dumps({
+        "timings_s": timings, "lead": lead, "checkers": checkers, "labels": labels,
+        "claims": rows}, indent=1, ensure_ascii=False) + "\n")
+    subprocess.run(["osascript", "-e", f'display notification "Fact-check done: {files[0].name}" '
+                    f'with title "unified-review"'], stderr=subprocess.DEVNULL, env=CHILD_ENV)
+    open_file(outdir / "factcheck.md")
+
+
+# ---------------------------------------------------------------- main
+
+RULES_SECTION = "# Writing and review guidelines"
+
+
+def load_rules(path):
+    """Review rules, first found: --rules FILE, $UNIFIED_REVIEW_RULES, the
+    '# Writing and review guidelines' section of ~/.claude/CLAUDE.md (or
+    $CLAUDE_MD), else rules/default-review.md shipped with this tool."""
+    for p in [path, os.environ.get("UNIFIED_REVIEW_RULES")]:
+        if p:
+            return Path(p).read_text(), p
+    md = Path(os.environ.get("CLAUDE_MD", Path.home() / ".claude/CLAUDE.md"))
+    if md.exists():
+        text = md.read_text()
+        k = text.find(RULES_SECTION)
+        if k >= 0:
+            return text[k:], f"{md} ({RULES_SECTION})"
+    default = Path(__file__).resolve().parent.parent / "rules" / "default-review.md"
+    return default.read_text(), str(default)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("files", nargs="*")
+    ap.add_argument("-o", dest="outdir")
+    ap.add_argument("-n", dest="focus", default="")
+    ap.add_argument("-p", dest="panel", default="claude,gpt,gemini")
+    ap.add_argument("--verify", action="store_true")
+    ap.add_argument("--rules", metavar="FILE", help="review rules to give the panel (see README)")
+    ap.add_argument("--item", metavar="N[,N,K..]",
+                    help="print findings or fact-check claims from a run, to act on them")
+    ap.add_argument("--run", metavar="DIR",
+                    help="run folder for --item (default: newest under ./feedback)")
+    ap.add_argument("--factcheck-only", action="store_true", help=argparse.SUPPRESS)
+    a = ap.parse_args()
+    if a.item:
+        show_items(a.item, Path(a.run) if a.run else latest_run("feedback"))
+        return
+    if not a.files:
+        ap.error("give at least one FILE to review")
+
+    panel = [m.strip() for m in a.panel.split(",") if m.strip()]
+    bad = [m for m in panel if m not in PANELISTS]
+    if bad:
+        sys.exit(f"error: unknown panelist(s) {bad}; known: {', '.join(PANELISTS)}")
+    for m in [m for m in panel if not available(m)]:
+        log(f"skip {m}: binary not found")
+    panel = [m for m in panel if available(m)]
+    if not panel:
+        sys.exit("error: no panelist CLIs found")
+
+    files = []
+    for f in a.files:
+        p = Path(f).resolve()
+        if not p.is_file():
+            sys.exit(f"error: no such file: {f}")
+        files.append(p)
+    workdir = files[0].parent
+    outdir = Path(a.outdir or f"feedback/{files[0].stem}-{datetime.now():%Y%m%d-%H%M%S}").resolve()
+    outdir.mkdir(parents=True, exist_ok=True)
+    texts = [p.read_text() for p in files]  # read once: this is the version reviewed
+    draft = "\n\n".join(f"===== {p.name} =====\n{t}" for p, t in zip(files, texts))
+
+    if a.factcheck_only:
+        PANELISTS.update(FACTCHECK_PANELISTS)
+        background(files, draft, panel, outdir, workdir)
+        return
+
+    rules, source = load_rules(a.rules)
+    log(f"review rules: {source}")
+    log(f"output -> {outdir}")
+
+    if a.verify:
+        # Start the fact-check first, detached, so it outlives this process.
+        with open(outdir / "factcheck.log", "w") as fl:
+            subprocess.Popen([sys.executable, os.path.abspath(__file__), "--factcheck-only",
+                              "-p", ",".join(panel), "-o", str(outdir)] + [str(p) for p in files],
+                             stdin=subprocess.DEVNULL, stdout=fl, stderr=fl, start_new_session=True)
+        log("fact-check started in the background")
+
+    t = time.time()
+    versions = [file_version(p, t, outdir) for p, t in zip(files, texts)]
+    unified = foreground(files, draft, panel, a.focus, rules, outdir, workdir, a.verify, versions)
+    log(f"review done in {round(time.time() - t)} s." + (
+        " Fact-check still running; factcheck.md opens when it finishes." if a.verify else ""))
+    open_file(unified)
+    print(unified)
+
+
+if __name__ == "__main__":
+    main()

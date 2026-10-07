@@ -1,0 +1,7 @@
+feedback/
+__pycache__/
+.DS_Store
+/CLAUDE.md
+notes/.llm-council-*.json
+.obsidian/
+notes/
