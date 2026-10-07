@@ -65,7 +65,7 @@ cd agent-council
 
 Reviewers follow a rules file. The first one found wins: `--rules FILE`, then `$UNIFIED_REVIEW_RULES`, then the `# Writing and review guidelines` section of `~/.claude/CLAUDE.md`, then [`rules/default-review.md`](rules/default-review.md). The script tells reviewers to ignore any cap on findings or ordering rule in those rules, because it orders findings itself.
 
-## Agent instructions
+## CLAUDE.md
 
 
 ## Limits

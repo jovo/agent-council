@@ -3,18 +3,14 @@ description: Master agent instructions
 alwaysApply: true
 ---
 
+
 # This file
 
-This is the **master** agent-instructions file: `~/github/agent-council/CLAUDE.md`.
 
 Edit only this file. Do not fork copies for Claude, Codex, or Cursor.
 
 Required symlinks (recreate if missing):
 
-- `~/.claude/CLAUDE.md` → `~/github/agent-council/CLAUDE.md` (Claude Code)
-- `~/.codex/AGENTS.md` → `~/github/agent-council/CLAUDE.md` (Codex)
-- `~/.cursor/rules/agent-instructions.mdc` → `~/github/agent-council/CLAUDE.md` (Cursor user rules, always apply)
-- `~/.agent-instructions.md` → `~/github/agent-council/CLAUDE.md` (legacy path)
 - `~/.local/bin/unified-review`, `~/.claude/skills/unified-review`, `~/.codex/skills/unified-review`, `~/.cursor/skills/unified-review` → `~/github/agent-council` (`bin/` and `skills/`). Recreate with `~/github/agent-council/install.sh`.
 
 Project-level `CLAUDE.md` / `AGENTS.md` files remain for repo-specific rules and override or supplement this file when more specific.
