@@ -169,7 +169,7 @@ baseline and sample count, and show uncertainty when repetitions support it.
 
 ## Citations
 
-- **Which bibliography.** If the project uses a shared bibliography, follow that bibliography's own instructions. Otherwise follow the project's citation instructions.
+- **Which bibliography.** If the project uses a shared bibliography, follow that bibliography's own instructions. Otherwise follow the project's citation instructions. For a ready-made shared bibliography (Zotero, Better BibTeX, one `references.bib` for many repos, with agent instructions), see [jovo/bib](https://github.com/jovo/bib).
 - Never invent a citation key. Look it up in the project's bibliography.
 - With pandoc, cite in prose as `[@Key]` or `[@Key1; @Key2]`. Do not hand-roll `[k]` numbers. Citeproc numbers references and collapses three or more consecutive ones into a range.
 - Include a DOI or stable URL for each entry. For open-access sources, note the license.

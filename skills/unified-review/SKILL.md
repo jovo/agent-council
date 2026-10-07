@@ -41,8 +41,9 @@ short list of rejected findings. There is no cap on findings.
   `unified.md`, `factcheck.md` (with `--verify`), each panelist's raw review
   (`review-claude.md`, `review-gpt.md`, `review-gemini.md`), votes, `results.json` (findings, votes, groups,
   timings), and `*.err` logs. The last line of stdout is the path to `unified.md`.
-- If a panelist fails, the script continues with the rest, which
-  vote without it. Report which one failed and the first line of its `.err` file. Common
+- The script checks logins first and retries a failed call once. If a panelist
+  still fails, the run continues without it, and the header of `unified.md` says
+  which one failed and why. Report that line to the user. Common
   cause: the CLI is not logged in (`claude` then `/login`, `cursor-agent login`,
   `codex login`).
 

@@ -99,8 +99,34 @@ def available(name):
     return bool(b) and os.access(b, os.X_OK)
 
 
-def call(name, prompt, out, workdir, web=False):
-    """Run one panelist headless and read-only. Returns its text output, or None."""
+# Every failed panelist step, with its reason, for results.json and the reports.
+FAILURES = []
+AUTH_ERROR = re.compile(r"log ?in|logged out|not logged|auth|api key|unauthori[sz]ed|credential", re.I)
+
+
+def fail(stage, name, reason):
+    FAILURES.append({"stage": stage, "model": name, "reason": reason})
+    log(f"  {name}: {stage} failed ({reason})")
+
+
+def call(name, prompt, out, workdir, web=False, stage="call"):
+    """Run one panelist headless and read-only. Returns its text output, or None.
+
+    Retries once after a timeout, an error, or empty output, but not after a
+    login error, which a retry cannot fix. Records the final failure."""
+    for attempt in (1, 2):
+        text, reason = call_once(name, prompt, out, workdir, web)
+        if text is not None:
+            return text
+        if attempt == 1 and not reason.startswith("not logged in"):
+            log(f"  {name}: {stage} attempt 1 failed ({reason}), retrying")
+            continue
+        fail(stage, name, reason + (" after one retry" if attempt == 2 else ""))
+        return None
+
+
+def call_once(name, prompt, out, workdir, web):
+    """One attempt. Returns (text, None) or (None, reason)."""
     harness, model, _ = PANELISTS[name]
     out, err = Path(out), Path(out).with_suffix(".err")
     if harness == "claude":
@@ -123,16 +149,57 @@ def call(name, prompt, out, workdir, web=False):
             r = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=ef, text=True, env=CHILD_ENV, timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
-        log(f"  {name}: timed out after {TIMEOUT}s")
-        return None
+        return None, f"timed out after {TIMEOUT} s"
+    except OSError as e:
+        return None, f"could not start: {e}"
     if harness != "codex":
         out.write_text(r.stdout)
     text = out.read_text() if out.exists() else ""
-    if r.returncode != 0 or not text.strip():
-        first = (err.read_text().strip().splitlines() or ["no stderr"])[0]
-        log(f"  {name}: failed ({first[:120]})")
-        return None
-    return text
+    if r.returncode == 0 and text.strip():
+        return text, None
+    stderr = err.read_text().strip()
+    first = (stderr.splitlines() or [""])[0][:120]
+    if AUTH_ERROR.search(stderr + " " + text[:300]):
+        return None, f"not logged in ({first})" if first else "not logged in"
+    if r.returncode != 0:
+        return None, f"exit code {r.returncode}" + (f": {first}" if first else "")
+    return None, "empty output"
+
+
+def preflight(panel):
+    """Check, without a model call, that each panelist's CLI is logged in.
+    Returns the panelists to use. An unclear status keeps the panelist."""
+    def check(m):
+        harness = PANELISTS[m][0]
+        cmd = {"claude": [CLAUDE, "auth", "status"], "codex": [CODEX, "login", "status"],
+               "cursor": [CURSOR, "status"]}[harness]
+        try:
+            r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                               env=CHILD_ENV, timeout=30)
+        except (OSError, subprocess.SubprocessError) as e:
+            return None, f"status check did not run ({e})"
+        outp = r.stdout + r.stderr
+        if harness == "claude":
+            try:
+                return bool(json.loads(r.stdout).get("loggedIn")), "claude auth status"
+            except ValueError:
+                return None, "status unclear"
+        if re.search(r"not logged in|logged out", outp, re.I):
+            return False, "not logged in"
+        if re.search(r"logged in", outp, re.I):
+            return True, ""
+        return None, f"status unclear: {outp.strip()[:80]}"
+    keep = []
+    for m, (ok, why) in parallel(check, panel).items():
+        if ok is False:
+            login = {"claude": "claude, then /login", "codex": "codex login",
+                     "cursor": "cursor-agent login"}[PANELISTS[m][0]]
+            fail("preflight", m, f"not logged in. Run: {login}")
+        else:
+            if ok is None:
+                log(f"  {m}: {why}, trying anyway")
+            keep.append(m)
+    return [m for m in panel if m in keep]
 
 
 def parallel(fn, items):
@@ -285,9 +352,10 @@ def parse_votes(text):
 def parse_rows(text, ncols):
     rows = {}
     for line in (text or "").splitlines():
-        parts = [p.strip() for p in line.strip().strip("|").split("|")]
-        if len(parts) >= ncols and re.fullmatch(r"\W*K\d+\W*", parts[0]):
-            rows[re.sub(r"\W", "", parts[0]).upper()] = parts[1:ncols - 1] + ["|".join(parts[ncols - 1:])]
+        # Split into at most ncols fields, so a "|" inside the last field is kept as written.
+        parts = [p.strip() for p in line.strip().strip("|").split("|", ncols - 1)]
+        if len(parts) == ncols and re.fullmatch(r"\W*K\d+\W*", parts[0]):
+            rows[re.sub(r"\W", "", parts[0]).upper()] = parts[1:]
     return rows
 
 
@@ -349,12 +417,15 @@ def score_group(members, votes, voters, owner):
     rep = max(members, key=lambda f: (f["frac"], -SEVERITIES.index(f["severity"]), -f["pos"]))
     rep_votes = {m: votes[m][rep["id"]] for m in voters if rep["id"] in votes[m]}
     n_dis = sum(v["vote"] == "disagree" for v in rep_votes.values())
+    n_agree = sum(v["vote"] == "agree" for v in rep_votes.values())
     return {
         "rep": rep, "members": [f["id"] for f in members],
         "raised_by": sorted({owner[f["id"][0]] for f in members}, key=list(PANELISTS).index),
         "votes": rep_votes, "score": rep["score"], "n_votes": rep["n_votes"], "frac": rep["frac"],
         "severity": median_severity([v["severity"] for v in rep_votes.values()] or [rep["severity"]]),
         "rejected": bool(rep_votes) and n_dis > len(rep_votes) / 2,
+        # Split vote: at least one model agreed and at least one disagreed.
+        "contested": n_agree > 0 and n_dis > 0,
         "pos": min(f["pos"] for f in members),
     }
 
@@ -514,6 +585,19 @@ def quoted(g, files):
     return f"*{head}*\n\n{block}\n\n"
 
 
+def participation(fails, roles, names, consequence):
+    """Lines saying which panelists failed, and a warning when too few took part.
+    roles: [(verb, models that did it)]."""
+    out = []
+    if fails:
+        out.append("*Failed: " + "; ".join(
+            f"{names([f['model']])} {f['stage']} ({f['reason']})" for f in fails) + ".*")
+    few = [verb for verb, ms in roles if len(ms) < 2]
+    if few:
+        out.append(f"**Warning: fewer than two models {' and '.join(few)}. {consequence}**")
+    return out
+
+
 def render(outdir):
     """Write unified.md from results.json."""
     r = json.loads((outdir / "results.json").read_text())
@@ -526,8 +610,11 @@ def render(outdir):
              f"An overview comes first, then findings in the order of the draft. Each finding is the "
              f"best-voted version among duplicates. Under each finding, each model's vote: "
              f"✓ agree, ~ partial, ✗ disagree. A bold name means that model raised the point. "
+             f"Contested means at least one model agreed and at least one disagreed. "
              f"Findings most voters disagreed with are listed at the end. To act on one, ask any "
              f"agent to address it by number, or run `unified-review --item N`.*"]
+    parts += participation(r.get("failures"), [("reviewed", r["reviewers_ok"]), ("voted", voters)], names,
+                           "Agreement, duplicate grouping, and rejection by vote mean little in this run.")
     vers = r.get("versions") or [{"path": f} for f in r["files"]]
     parts.append("*Reviewed: " + "; ".join(
         f"`{v['path']}`" + (f", {version_text(v)} ([copy](reviewed/{Path(v['path']).name}))"
@@ -542,11 +629,13 @@ def render(outdir):
             parts.append(f"## {sec}")
         # Escape headings inside a reviewer's diff so they do not become sections here.
         body = re.sub(r"^(\s*(?:🟢\s*)?(?:\*\*)?)#", r"\1\\#", g["rep"]["body"], flags=re.M)
-        parts.append(f"### {n}. {g['rep']['title']} ({g['severity']})\n\n"
+        tag = g["severity"] + (", contested" if g.get("contested") else "")
+        parts.append(f"### {n}. {g['rep']['title']} ({tag})\n\n"
                      f"{quoted(g, r['files'])}{body}\n\n{vote_line(g, voters)}")
     if rejected:
         parts.append("## Rejected by vote\n\n" + "\n".join(
-            f"- **{g['rep']['title']}** [{names(g['raised_by'])}]. " + " ".join(
+            f"- **{g['rep']['title']}** [{names(g['raised_by'])}]" + (" (contested)" if g.get("contested") else "")
+            + ". " + " ".join(
                 f"{labels.get(m, m)}: {v['reason']}" for m, v in g["votes"].items() if v["vote"] == "disagree")
             for g in rejected))
     write_atomic(outdir / "unified.md", "\n\n".join(parts) + "\n")
@@ -624,13 +713,17 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     def review(m):
         t = time.time()
         # Not "<model>.md": Claude Code loads claude.md as CLAUDE.md on macOS.
-        r = call(m, prompt, outdir / f"review-{m}.md", workdir)
+        fs = None
+        for attempt in (1, 2):  # retry once if the reply is not in the expected format
+            r = call(m, prompt, outdir / f"review-{m}.md", workdir, stage="review")
+            fs = parse_findings(r) if r else None
+            if fs or r is None:
+                break
+            if attempt == 2:
+                fail("review", m, "reply had no findings in the expected format, after one retry")
         timings[f"review_{m}"] = round(time.time() - t, 1)
-        return parse_findings(r) if r else None
+        return fs
     found = {m: fs for m, fs in parallel(review, panel).items() if fs}
-    for m in panel:
-        if m not in found:
-            log(f"  {m}: no parseable findings")
     if not found:
         sys.exit("error: no reviewer produced findings")
     ok = [m for m in panel if m in found]
@@ -650,13 +743,17 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
 
     def vote(m):
         t = time.time()
-        r = call(m, VOTE.format(draft=draft, findings=shown,
-                                focus=f"\n<author_focus>\n{focus}\n</author_focus>\n" if focus else ""),
-                 outdir / f"votes-{m}.txt", workdir)
+        prompt_v = VOTE.format(draft=draft, findings=shown,
+                               focus=f"\n<author_focus>\n{focus}\n</author_focus>\n" if focus else "")
+        v = None
+        for attempt in (1, 2):  # retry once if the reply has no vote lines
+            r = call(m, prompt_v, outdir / f"votes-{m}.txt", workdir, stage="vote")
+            v = parse_votes(r) if r else None
+            if v or r is None:
+                break
+            if attempt == 2:
+                fail("vote", m, "reply had no vote lines in the expected format, after one retry")
         timings[f"vote_{m}"] = round(time.time() - t, 1)
-        v = parse_votes(r)
-        if r and not v:
-            log(f"  {m}: no parseable vote lines")
         return v or None
     votes = {m: v for m, v in parallel(vote, ok).items() if v}
     if not votes:
@@ -675,6 +772,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         "files": [str(p) for p in files], "versions": versions,
         "panel": panel, "reviewers_ok": ok, "voters": voters,
         "labels": {m: label(m) for m in panel}, "verify": verify,
+        "failures": FAILURES,
         "anonymization": letters, "timings_s": timings, "headings": draft_headings(draft),
         "findings": flat, "votes": votes, "groups": groups}, indent=1, ensure_ascii=False) + "\n")
     render(outdir)
@@ -692,7 +790,7 @@ def background(files, draft, panel, outdir, workdir):
     claims = None
     for m in panel:  # first panelist that answers lists the claims
         text = run_timed(timings, f"claims_{m}", call, m, CLAIMS.format(draft=draft),
-                         outdir / "claims.txt", workdir)
+                         outdir / "claims.txt", workdir, False, "claims")
         claims = parse_rows(text, 4)
         if claims:
             lead = m
@@ -703,7 +801,10 @@ def background(files, draft, panel, outdir, workdir):
 
         def verify(m):
             t = time.time()
-            r = call(m, VERIFY.format(claims=listing, draft=draft), outdir / f"verify-{m}.txt", workdir, web=True)
+            r = call(m, VERIFY.format(claims=listing, draft=draft), outdir / f"verify-{m}.txt", workdir,
+                     web=True, stage="verify")
+            if r and not parse_rows(r, 4):
+                fail("verify", m, "reply had no claim lines in the expected format")
             timings[f"verify_{m}"] = round(time.time() - t, 1)
             return parse_rows(r, 4) or None
         checks = {m: c for m, c in parallel(verify, panel).items() if c}
@@ -726,6 +827,9 @@ def background(files, draft, panel, outdir, workdir):
           f"{', '.join(labels[m] for m in checkers) or 'nobody'}. Each verdict is the most "
           f"cautious across checkers. Ran {round(time.time() - t0)} s. "
           + ", ".join(f"{n} {v}" for v, n in counts.items() if n) + ".*"]
+    md += participation(FAILURES, [("checked claims", checkers)],
+                        lambda ms: ", ".join(labels.get(m, m) for m in ms),
+                        "Verdicts rest on a single checker or none.")
     heads, current = draft_headings(draft), None
     for c in sorted(rows, key=lambda c: (c["pos"] is None, c["pos"] or 0, int(c["k"][1:]))):
         h = section_of(c["pos"], heads) if c["pos"] is not None else "Claims not located in the draft"
@@ -736,7 +840,7 @@ def background(files, draft, panel, outdir, workdir):
     write_atomic(outdir / "factcheck.md", "\n\n".join(md) + "\n")
     (outdir / "factcheck.json").write_text(json.dumps({
         "timings_s": timings, "lead": lead, "checkers": checkers, "labels": labels,
-        "claims": rows}, indent=1, ensure_ascii=False) + "\n")
+        "failures": FAILURES, "claims": rows}, indent=1, ensure_ascii=False) + "\n")
     subprocess.run(["osascript", "-e", f'display notification "Fact-check done: {files[0].name}" '
                     f'with title "unified-review"'], stderr=subprocess.DEVNULL, env=CHILD_ENV)
     open_file(outdir / "factcheck.md")
@@ -793,6 +897,10 @@ def main():
     panel = [m for m in panel if available(m)]
     if not panel:
         sys.exit("error: no panelist CLIs found")
+    if not a.factcheck_only:
+        panel = preflight(panel)
+        if not panel:
+            sys.exit("error: no panelist is logged in")
 
     files = []
     for f in a.files:

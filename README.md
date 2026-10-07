@@ -16,8 +16,12 @@ So agent-council does not let any one model decide. Each model reviews independe
 unified-review [-n FOCUS] [-p PANEL] [--verify] [--rules FILE] [-o OUTDIR] FILE [FILE...]
 ```
 
+Before starting, the script checks that each CLI is logged in, using its status command, and drops any panelist that is not.
+
 1. **Review.** Each panelist reviews the draft without web search. Findings come back in a fixed format: severity, title, the exact text targeted, then the point and an inline diff.
 2. **Vote.** Each panelist votes agree, partial, or disagree on every finding, sees reviewers only as A, B, C, and flags duplicates.
+A model call that times out, errors, or returns nothing gets one retry, except after a login error. A reply in the wrong format also gets one retry.
+
 3. **Render.** The script groups duplicates (two voters calling them duplicates, or one voter plus overlapping quoted text), keeps the best-voted version of each, sets aside findings a majority rejects, and writes `unified.md`. The file opens in your default Markdown app.
 4. **Fact-check (optional, `--verify`).** A detached background process lists the draft's checkable claims, has each panelist check them with web search, keeps the most cautious verdict per claim, writes `factcheck.md`, and opens it.
 
@@ -29,7 +33,7 @@ On one 1,300-word memo, a review took 40 to 120 seconds and the fact-check about
 
 Each run writes a folder, `feedback/<file>-<timestamp>/`:
 
-- `unified.md`: an overview, then findings in the order of the draft under its own section headings, then findings about any focus material, then rejected findings with the voters' reasons. Each finding shows the file and line, the quoted text, the point and diff, and one line of votes such as `Claude ✓ · **GPT** ✓ · Gemini ~` (✓ agree, ~ partial, ✗ disagree, bold for the model that raised it). There is no cap on the number of findings.
+- `unified.md`: an overview, then findings in the order of the draft under its own section headings, then findings about any focus material, then rejected findings with the voters' reasons. Each finding shows the file and line, the quoted text, the point and diff, and one line of votes such as `Claude ✓ · **GPT** ✓ · Gemini ~` (✓ agree, ~ partial, ✗ disagree, bold for the model that raised it). A finding is marked contested when at least one model agreed and at least one disagreed. The header lists any panelist that failed and why, and warns when fewer than two models reviewed or voted. There is no cap on the number of findings.
 - `factcheck.md` (with `--verify`): each claim in draft order, with its sentence, each checker's verdict, notes, and sources.
 - `reviewed/`: an exact copy of the text reviewed. The header of `unified.md` gives its content fingerprint and git commit.
 - `results.json`, `factcheck.json`: findings, votes, groups, verdicts, and per-stage timings.
@@ -74,6 +78,14 @@ Reviewers follow a rules file. The first one found wins: `--rules FILE`, then `$
 - Anonymizing reviewers reduces self-preference but does not remove it, since models can recognize their own text. Voting by all panelists limits how much any one model's bias moves the result.
 - Reviews run without web search. Factual claims are tagged unverified unless you run `--verify`.
 - The fact-check marks a claim with the most cautious verdict across checkers. A checker that fails to find a source pulls a claim down to "plausible" even when another confirmed it.
+
+## Tests
+
+```
+python3 -m unittest discover tests
+```
+
+The tests use made-up fixtures and fake CLI calls, so they run offline and make no model calls.
 
 ## License
 
