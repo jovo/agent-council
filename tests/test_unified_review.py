@@ -111,6 +111,35 @@ class GroupingAndScoring(unittest.TestCase):
         self.assertEqual(g["raised_by"], ["claude", "gpt"])
 
 
+
+class Agreement(unittest.TestCase):
+    def test_alpha_matches_krippendorff_2011_example(self):
+        # Krippendorff (2011), "Computing Krippendorff's alpha-reliability": 4 coders,
+        # 12 units, values 1-5, missing data. Published ordinal alpha is 0.815.
+        coders = [[1, 2, 3, 3, 2, 1, 4, 1, 2, None, None, None], [1, 2, 3, 3, 2, 2, 4, 1, 2, 5, None, 3],
+                  [None, 3, 3, 3, 2, 3, 4, 2, 2, 5, 1, None], [1, 2, 3, 3, 2, 4, 4, 1, 2, 5, 1, None]]
+        units = [[c[u] - 1 for c in coders if c[u] is not None] for u in range(12)]
+        self.assertAlmostEqual(ur.krippendorff_alpha_ordinal(units, levels=5), 0.815, places=3)
+
+    def test_alpha_undefined_without_variation_or_pairs(self):
+        self.assertIsNone(ur.krippendorff_alpha_ordinal([[2, 2], [2, 2, 2]]))
+        self.assertIsNone(ur.krippendorff_alpha_ordinal([[1], [0]]))
+
+    def test_perfect_agreement_is_one(self):
+        self.assertAlmostEqual(ur.krippendorff_alpha_ordinal([[0, 0], [2, 2], [1, 1], [2, 2]]), 1.0)
+
+    def test_vote_agreement_leaves_out_self_votes(self):
+        flat = [finding("A1"), finding("B1"), finding("A2")]
+        owner = {"A": "claude", "B": "gpt"}
+        votes = {"claude": {"A1": vote("agree"), "B1": vote("disagree"), "A2": vote("agree")},
+                 "gpt": {"A1": vote("disagree"), "B1": vote("agree"), "A2": vote("agree")},
+                 "gemini": {"A1": vote("disagree"), "B1": vote("disagree"), "A2": vote("agree")}}
+        ag = ur.vote_agreement(flat, votes, owner, boot=50)
+        # Without self-votes, every finding has two votes and they match: alpha is 1.
+        self.assertEqual(ag["units"], 3)
+        self.assertEqual(ag["alpha"], 1.0)
+
+
 class Calls(unittest.TestCase):
     def setUp(self):
         ur.FAILURES.clear()
@@ -173,24 +202,30 @@ class Rendering(unittest.TestCase):
             "reviewers_ok": list(reviewers), "voters": list(voters), "verify": False,
             "failures": list(failures), "headings": ur.draft_headings(draft), "groups": groups}))
 
-    def group(self, title, quote, where, pos, contested=False, rejected=False):
+    def group(self, title, quote, where, pos, contested=False, rejected=False, severity="Substantive"):
         return {"rep": {"title": title, "quote": quote, "body": "Point."}, "where": where, "pos": pos,
-                "severity": "Substantive", "frac": 1, "score": 2, "n_votes": 2, "raised_by": ["claude"],
+                "severity": severity, "frac": 1, "score": 2, "n_votes": 2, "raised_by": ["claude"],
                 "votes": {"claude": vote("agree"), "gpt": vote("disagree" if contested else "agree")},
                 "contested": contested, "rejected": rejected}
 
-    def test_layout_line_numbers_and_labels(self):
-        draft_norm = ur.norm("===== draft.md =====\n" + self.doc.read_text())
-        pos = ur.position(draft_norm, "Rome was founded in 1066.")
-        self.results([self.group("Late finding", "More text here.", "draft", ur.position(draft_norm, "More text here.")),
+    def test_layout_severity_then_draft_order(self):
+        dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
+        at = lambda q: ur.position(dn, q)
+        self.results([self.group("Late polish", "More text here.", "draft", at("More text here."), severity="Polish"),
+                      self.group("Late substantive", "More text here.", "draft", at("More text here.")),
                       self.group("Overall", "", "overview", 0),
-                      self.group("Date", "Rome was founded in 1066.", "draft", pos, contested=True)])
+                      self.group("Date", "Rome was founded in 1066.", "draft", at("Rome was founded in 1066."),
+                                 contested=True, severity="Critical"),
+                      self.group("Early substantive", "First line.", "draft", at("First line."))])
         ur.render(self.tmp)
         md = (self.tmp / "unified.md").read_text()
-        order = [md.index(t) for t in ("## Overview", "### 1. Overall", "## Intro", "### 2. Date", "## Body", "### 3. Late finding")]
+        order = [md.index(t) for t in ("## Critical", "### 1. Date (contested)", "## Substantive", "### 2. Overall",
+                                       "### 3. Early substantive", "### 4. Late substantive", "## Polish",
+                                       "### 5. Late polish")]
         self.assertEqual(order, sorted(order))
-        self.assertIn("### 2. Date (Substantive, contested)", md)
-        self.assertIn("draft.md, line 4:", md)  # not line 3: the off-by-one regression
+        self.assertIn("*Intro · draft.md, line 4:*", md)  # line 4, not 3: the off-by-one regression
+        self.assertIn("*Body · draft.md, line 8:*", md)
+        self.assertIn("*Whole draft*", md)
         self.assertNotIn("Warning", md)
 
     def test_failures_and_warning(self):
@@ -201,6 +236,90 @@ class Rendering(unittest.TestCase):
         self.assertIn("*Failed: GPT review (timed out after 900 s after one retry).*", md)
         self.assertIn("**Warning: fewer than two models reviewed.", md)
 
+
+
+class Versions(unittest.TestCase):
+    def test_numbers_count_up_and_repeat_for_same_text(self):
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            with mock.patch.object(ur, "RUNS_DIR", tmp):
+                f = "/x/draft.md"
+                self.assertEqual(ur.version_number(f, "va"), 1)
+                self.assertEqual(ur.version_number(f, "vb"), 2)
+                self.assertEqual(ur.version_number(f, "va"), 1)  # unchanged text keeps its number
+                self.assertIsNone(ur.version_number(f, "vc", register=False))
+                self.assertEqual(ur.version_number("/x/other.md", "va"), 1)  # numbered per file
+        finally:
+            shutil.rmtree(tmp)
+
+
+class Opening(unittest.TestCase):
+    def opened(self, bundle, which=True):
+        cmds, out = [], []
+        env = {"__CFBundleIdentifier": bundle} if bundle else {}
+        with mock.patch.dict(ur.os.environ, env, clear=True), \
+             mock.patch.object(ur, "OPEN_APP", ""), \
+             mock.patch.object(ur.shutil, "which", lambda c: "/bin/" + c if which else None), \
+             mock.patch.object(ur.subprocess, "run", lambda cmd, **k: cmds.append(cmd) or SimpleNamespace(returncode=0)), \
+             mock.patch("builtins.print", lambda *a, **k: out.append(" ".join(map(str, a)))):
+            ur.open_file("/r/unified.md")
+        return cmds, out
+
+    def test_cursor_and_vscode_open_in_the_editor(self):
+        self.assertEqual(self.opened("com.todesktop.230313mzl4w4u92")[0], [["cursor", "/r/unified.md"]])
+        self.assertEqual(self.opened("com.microsoft.VSCode")[0], [["code", "/r/unified.md"]])
+        self.assertEqual(self.opened("com.microsoft.VSCode", which=False)[0],
+                         [["open", "-b", "com.microsoft.VSCode", "/r/unified.md"]])
+
+    def test_agent_apps_get_a_line_instead(self):
+        cmds, out = self.opened("com.anthropic.claudefordesktop")
+        self.assertEqual(cmds, [])
+        self.assertEqual(out[0], "OPEN IN APP: /r/unified.md")
+
+    def test_terminal_uses_default_app(self):
+        self.assertEqual(self.opened("com.apple.Terminal")[0], [["open", "/r/unified.md"]])
+        self.assertEqual(self.opened("")[0], [["open", "/r/unified.md"]])
+
+
+class Decisions(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.doc = self.tmp / "draft.md"
+        self.doc.write_text("# Intro\n\nRome was founded in 1066.\n")
+        self.run = self.tmp / "run"
+        self.run.mkdir()
+        g = {"rep": {"title": "Date is wrong", "quote": "Rome was founded in 1066.", "body": "Wrong date.\n\n~~1066~~"},
+             "where": "draft", "pos": 0, "severity": "Critical", "frac": 1, "rejected": False, "members": ["A1"]}
+        (self.run / "results.json").write_text(json.dumps({"files": [str(self.doc)], "headings": [], "groups": [g],
+                                                           "versions": [{"path": str(self.doc), "number": 2}]}))
+        self.patch = mock.patch.object(ur, "RUNS_DIR", self.tmp)
+        self.patch.start()
+
+    def tearDown(self):
+        self.patch.stop()
+        shutil.rmtree(self.tmp)
+
+    def test_record_lift_and_expire(self):
+        with mock.patch("builtins.print"):
+            ur.record_decisions("1", "ignore", "intentional", self.run)
+        d = ur.load_decisions()[str(self.doc)][0]
+        self.assertEqual((d["id"], d["decision"], d["note"], d["version"]), ("D1", "ignore", "intentional", 2))
+        dnorm = ur.norm(self.doc.read_text())
+        self.assertEqual([x["id"] for x in ur.active_decisions([self.doc], dnorm)[0]], ["D1"])
+        # Rewriting the quoted sentence ends the decline.
+        self.assertEqual(ur.active_decisions([self.doc], ur.norm("Rome was founded in 753 BC."))[0], [])
+        with mock.patch("builtins.print"):
+            ur.record_decisions("D1", "lifted", "", None)
+        self.assertEqual(ur.active_decisions([self.doc], dnorm)[0], [])
+
+    def test_prompt_lists_declines_and_applied(self):
+        block = ur.decisions_block([{"id": "D1", "title": "Date is wrong", "quote": "Rome", "note": "keep"}], ["Fix typo"])
+        self.assertIn("[D1] Date is wrong", block)
+        self.assertIn("Author's reason: keep", block)
+        self.assertIn("- Fix typo", block)
+
+    def test_votes_can_point_at_declines(self):
+        self.assertEqual(ur.parse_votes("A1 | agree | Polish | same:D3 | repeats it")["A1"]["same"], "D3")
 
 
 if __name__ == "__main__":

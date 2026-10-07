@@ -1,0 +1,357 @@
+/* @theme base */
+
+/*
+ * Shared Marp theme for every deck in this repository (`theme: base`).
+ * There are no per-deck themes.
+ *
+ * Vocabulary (the complete list; do not add deck- or slide-specific classes):
+ *   Slide layouts (_class):  (none) · cover · divider · full
+ *   Slide modifiers:         center · invert (light palette; set `class: invert` in
+ *                            front matter for a whole light deck)
+ *   Components:              cols · contrast · rows-2 · flow
+ *
+ * Classless conventions:
+ *   # h1                       slide title; the body flows beneath it
+ *   # <span>A</span> <span>B</span>   paired column titles over a contrast
+ *   <figure>                   at slide level, fills the remaining height
+ *   *x* italic · **x** bold · ***x*** highlight (accent colour)
+ *   > sentence                 the slide's takeaway (bold, pinned to the bottom)
+ *   [label](url) on `full`     corner link, e.g. a video's Play link
+ *   assets/equations/*.svg     LaTeX math exported at body size (dvisvgm --zoom=2.1)
+ *   ![bg](...)                 Marp background image (with `full`)
+ *   ![bg left:40%](...)        image on one side, slide content on the other
+ *   <!-- _footer: ... -->      source line for the slide (Marp footer directive)
+ *
+ * Paths in url() resolve from the rendered deck.html, i.e. decks/<deck>/.
+ */
+
+/* Status symbols for tables: ● yes, ◐ partly, ○ no. A tiny colour font
+   (built by fonts/build-symbols.py) draws only these three characters, in
+   green, orange and red; all other text falls through to New Computer Modern. */
+/* New Computer Modern (GUST Font License, fonts/LICENSE-NewCM.txt): Sans Bold
+   titles, Book body. The same family as the PDF house style. */
+@font-face {
+  font-family: 'NewCM Title';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('../theme/fonts/NewCMSans10-Bold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'NewCM Body';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('../theme/fonts/NewCM10-Book.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'NewCM Body';
+  font-style: italic;
+  font-weight: 400;
+  font-display: block;
+  src: url('../theme/fonts/NewCM10-BookItalic.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'NewCM Body';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('../theme/fonts/NewCM10-Bold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'NewCM Body';
+  font-style: italic;
+  font-weight: 700;
+  font-display: block;
+  src: url('../theme/fonts/NewCM10-BoldItalic.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Base Symbols';
+  src: url('../theme/fonts/base-symbols.ttf') format('truetype');
+  unicode-range: U+25CB, U+25CF, U+25D0;
+}
+
+:root {
+  /* colour */
+  --bg: #05070b;
+  --ink: #f4f7fb;
+  --muted: #a6b2c4;
+  --accent: #f6c343;      /* ***word***: highlighted words */
+  --rule: #283244;
+  --panel: #0a0f16;
+  /* derived from --accent, so changing the accent changes these too */
+  --tint: linear-gradient(135deg,
+            color-mix(in srgb, var(--accent) 12%, transparent),
+            color-mix(in srgb, var(--accent) 2.5%, transparent));
+  --glow: radial-gradient(circle at 80% 16%,
+            color-mix(in srgb, var(--accent) 30%, var(--bg)) 0%,
+            color-mix(in srgb, var(--accent) 7%, var(--bg)) 35%,
+            var(--bg) 72%);
+
+  /* type scale (repo CLAUDE.md) */
+  --font: 'Base Symbols', 'NewCM Body', serif; /* reading text */
+  --font-title: 'NewCM Title', serif; /* headings: #, ##, ### */
+  --type-title: 45px;     /* every h1: slide, cover, divider */
+  --type-body: 28px;      /* body text; bold for headings, claims, takeaways */
+  --type-small: 22px;     /* grey: labels, captions, tables, explanations, sources */
+  --bold: 700;            /* the only bold weight */
+
+  /* spacing scale */
+  --s1: 8px;
+  --s2: 14px;
+  --s3: 28px;
+  --s4: 48px;
+  --s5: 72px;
+  --s6: 120px;
+  --reserve-footer: calc(var(--s3) + 1.24 * var(--type-small) + var(--s2));
+  --cell-x: 34px;   /* inner padding of contrast columns and their titles */
+
+  /* stacks (Every Layout): the space between consecutive items, by level */
+  --stack-slide: var(--s3);   /* between blocks on a slide */
+  --stack-cell: var(--s2);    /* between items in a column or figure */
+  --stack-list: var(--s1);    /* between list items */
+}
+
+/* Light palette. Only tokens change. Equation SVGs carry their own colour, so
+   a light deck exports them in dark ink. */
+section.invert {
+  --bg: #ffffff;
+  --ink: #111923;
+  --muted: #5b6472;
+  --accent: #2189db;
+  --rule: #d8dde5;
+  --panel: #f4f6f9;
+}
+
+/* ---------- slide ---------- */
+
+section {
+  position: relative;
+  box-sizing: border-box;
+  width: 1280px;
+  height: 720px;
+  /* bottom padding reserves one line for the footer, so the takeaway always
+     sits at the same height, just above the source line */
+  padding: var(--s4) var(--s5) var(--reserve-footer);
+  display: flex;
+  flex-direction: column;
+  gap: var(--stack-slide);
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: var(--type-body);
+  line-height: 1.24;
+}
+
+section * { box-sizing: border-box; }
+h1, h2, h3, p, ul, ol, figure, table { margin: 0; }
+
+h1, h2, h3 { font-family: var(--font-title); }
+h1 { font-size: var(--type-title); font-weight: var(--bold); line-height: 1.08; }
+h2, h3 { font-size: var(--type-body); font-weight: var(--bold); line-height: 1.2; }
+/* *word* is italic and **word** is bold, as in any Markdown. ***word*** is the
+   highlight: accent colour, bold, upright. */
+section :is(em strong, strong em) { color: var(--accent); font-style: normal; font-weight: var(--bold); }
+strong, b { font-weight: var(--bold); }
+/* No underlines anywhere, links included. */
+a, u, ins { color: inherit; text-decoration: none; }
+/* A link is marked by a small grey ↗ after it, not by underline or colour.
+   The corner label on a full slide is itself the link, so it gets none. */
+a[href]::after { content: '\2009↗'; color: var(--muted); font-weight: 400; }
+section.full a[href]::after { content: none; }
+mark { padding: 0; background: none; color: var(--accent); font-weight: var(--bold); } /* same as ***word*** */
+ul, ol { padding-left: 1.1em; }
+li + li { margin-top: var(--stack-list); }
+
+/* Page numbers, when a deck sets `paginate: true`. */
+section[data-marpit-pagination]::after {
+  content: attr(data-marpit-pagination);
+  position: absolute;
+  right: var(--s5);
+  bottom: var(--s2);
+  color: var(--muted);
+  font-size: var(--type-small);
+}
+
+/* ---------- media and math ---------- */
+
+img, video { max-width: 100%; }
+img[src*="equations/"] { height: auto; vertical-align: middle; }
+/* Equations inside small text shrink with it (22px / 28px). */
+:is(figcaption, footer) img[src*="equations/"] { zoom: calc(22 / 28); }
+/* Background images sized with `contain` (e.g. two side by side) get the
+   slide's margins, so they don't touch each other or the edge. */
+section[data-marpit-advanced-background="background"] > div[data-marpit-advanced-background-container] > figure[style*="background-size:contain"] {
+  margin: var(--s4) var(--s2);
+}
+/* A bare image directly on the slide keeps its own size instead of stretching. */
+section > img { align-self: center; }
+/* A paragraph with an equation and no other image is a display equation: centred. */
+section > p:has(> img[src*="equations/"]):not(:has(> img:not([src*="equations/"]))) { text-align: center; }
+
+/* A figure is a Markdown paragraph that holds only images (one `![alt](file)`
+   per line; equation images don't count), or an HTML <figure>. Figures take the
+   remaining height; several figures share it in proportion to their natural
+   heights, so a small strip above a large panel stays small. */
+section > :is(figure, p:has(> img:not([src*="equations/"]))) {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--stack-cell);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+section > :is(figure, p:has(> img:not([src*="equations/"]))) > :is(img, video) {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  object-fit: contain;
+}
+section > p:has(> img:not([src*="equations/"])) > br { display: none; }
+figcaption { color: var(--muted); font-size: var(--type-small); font-weight: var(--bold); }
+
+/* ---------- layouts ---------- */
+
+section.cover, section.divider { background: var(--glow); }
+
+section.cover { justify-content: flex-end; gap: var(--stack-cell); padding: 0 var(--s5) var(--s5); }
+section.cover p { color: var(--muted); font-size: var(--type-small); }
+
+section.divider { justify-content: center; padding: 0 var(--s6); }
+
+/* Full-bleed media: ![bg](...) or one <video>. An h1 becomes a corner label. */
+section.full { padding: 0; }
+section.full > :is(img, video) { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: var(--bg); }
+/* On a full slide, the title or a link (e.g. `[Play · 2:10](url)`) is a
+   white bold label in the bottom-left corner, over the image. */
+section.full > :is(h1, p) {
+  position: absolute; left: var(--s5); bottom: var(--s4); margin: 0;
+  font-weight: var(--bold); text-decoration: none;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, .75);
+}
+section.full > footer { position: absolute; left: var(--s5); bottom: var(--s2); text-shadow: 0 1px 8px rgba(0, 0, 0, .75); }
+
+/* Centre the body on the whole slide: title pinned top, takeaway pinned bottom. */
+section.center { justify-content: center; align-items: center; text-align: center; }
+section.center > h1 { position: absolute; left: var(--s5); right: var(--s5); text-align: left; }
+section.center > footer { text-align: left; }
+section.center > blockquote { position: absolute; left: var(--s5); right: var(--s5); margin-inline: auto; }
+section.center > h1 { top: var(--s4); }
+section.center > blockquote { bottom: var(--reserve-footer); }
+
+/* ---------- components ---------- */
+
+/* Equal columns, one per child. A leading <span> in a cell is its label.
+   Cells share row tracks (subgrid), so the n-th item of every cell lines up
+   with the n-th item of its neighbours. Up to 10 items per cell. */
+.cols {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  column-gap: var(--s3);
+  row-gap: 0;
+  /* rows hug their content; the last row takes any spare height, so a cell
+     that fills the slide (contrast) keeps its rows tight and its verdict low */
+  grid-template-rows: repeat(9, auto) 1fr;
+}
+.cols > div {
+  display: grid;
+  grid-row: span 10;
+  grid-template-rows: subgrid;
+  row-gap: 0;
+  align-content: start;
+  min-width: 0;
+}
+.cols > div > * + * { margin-top: var(--stack-cell); }
+.cols > div > span:first-child {
+  color: var(--muted);
+  font-size: var(--type-small);
+  font-weight: var(--bold);
+}
+.cols > div > img[src*="equations/"] { justify-self: start; }
+/* `##` in a cell is a claim; the paragraph right after it explains the claim,
+   so it steps back. `###` is a plain column title over normal text. */
+.cols > div > h2 + p { color: var(--muted); font-size: var(--type-small); }
+
+/* Cells that are figures fill the slide like a figure does. */
+section > .cols:has(> figure) { flex: 1 1 0; min-height: 0; }
+.cols > figure { grid-row: 1 / -1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--stack-cell); min-width: 0; min-height: 0; }
+.cols > figure > img { flex: 1 1 0; width: 100%; min-height: 0; max-height: 100%; object-fit: contain; }
+.cols > figure > :is(h2, h3) { align-self: stretch; }
+
+/* Flow: an arrow between consecutive columns, for steps in a process. */
+.cols.flow > * { position: relative; }
+.cols.flow > * + *::before {
+  content: '→';
+  position: absolute;
+  top: 40%;
+  left: calc(-1 * var(--s3));
+  width: var(--s3);
+  text-align: center;
+  color: var(--muted);
+}
+
+/* Two rows of cells: 5–6 cells → 3 columns, 7–8 cells → 4 columns. */
+.cols.rows-2 { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.cols.rows-2:has(> :nth-child(5)) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.cols.rows-2:has(> :nth-child(7)) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.cols.rows-2 > div { margin-bottom: var(--stack-slide); }  /* subgrid rows can't use row-gap */
+
+/* Binary contrast: neutral baseline left, focal case right. List items are
+   rows of the cell grid (the list itself drops out), so rows align across
+   columns. A paragraph after the list is the verdict, pinned to the bottom. */
+/* A contrast that ends the slide body fills the remaining height. */
+section > .cols.contrast:is(:last-child, :has(+ blockquote)) { flex: 1 1 0; min-height: 0; }
+.cols.contrast { column-gap: 0; }
+.cols.contrast > * { padding: var(--s3) var(--cell-x); }
+.cols.contrast > * + * { border-left: 1px solid var(--rule); background: var(--tint); }
+.cols.contrast > * + * > span:first-child { color: var(--accent); }
+.cols.contrast ul { display: contents; list-style: none; }
+.cols.contrast li { margin: 0; padding: var(--stack-cell) 0; }
+.cols.contrast > div > ul ~ p:last-child { grid-row-end: -1; align-self: end; font-weight: var(--bold); }
+
+/* A title made of two spans is a pair of column titles over a contrast. */
+section > h1:has(> span + span) { display: grid; grid-template-columns: 1fr 1fr; }
+section > h1:has(> span + span) > span { padding: 0 var(--cell-x); }
+
+/* Bottom of the slide: the takeaway (a Markdown blockquote, `> ...`) is the
+   last block in the flow, so it always lands at the same height, on one line.
+   The footer (source line, Marp `footer` directive) sits in the reserved line
+   below it. */
+section > blockquote {
+  align-self: center;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0;
+  padding: var(--s2) var(--s3);
+  border: 0;
+  border-left: 4px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-weight: var(--bold);
+  text-align: center;
+}
+section > blockquote > p { margin: 0; }
+section > footer {
+  position: absolute; left: var(--s5); right: var(--s5); bottom: var(--s3);
+  color: var(--muted); font-size: var(--type-small);
+}
+section > blockquote { margin-top: auto; }
+
+/* Reference lists: a list item that ends with a link is a citation
+   (`- De Silva et al. (2023). [Title](url)`), set in small grey text. */
+li:has(> a:last-child) { color: var(--muted); font-size: var(--type-small); }
+
+/* ---------- tables ---------- */
+
+/* Tables: no fill, no rules, left-aligned. Columns can opt into centring
+   with Markdown alignment (`:---:`), which Marp writes inline. */
+table { width: 100%; border-collapse: collapse; font-size: var(--type-small); line-height: 1.12; }
+th, td { padding: var(--s1) var(--s2) var(--s1) 0; border: 0; background: none !important; text-align: left; vertical-align: middle; }
+td, tbody th { color: var(--muted); }
+thead th { color: var(--muted); font-weight: var(--bold); }
+/* Bold in a table cell marks the value that matters: white, not grey. */
+td strong { color: var(--ink); }
+tbody th { font-weight: var(--bold); }
+

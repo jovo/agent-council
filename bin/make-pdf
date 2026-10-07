@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# make-pdf: build a PDF from Markdown in the house style.
+#
+# Usage: make-pdf FILE.md [MORE.md ...] [-o OUT.pdf] [--csl STYLE.csl] [-- PANDOC ARGS]
+#
+# Latin Modern body and math, General Sans headings (when installed), 1in
+# margins, 11pt, justified, two-tone links, Google Docs list markers, a rule
+# under each table row, no title page. Citations resolve when the document's
+# front matter names a bibliography (or pass --bibliography after --).
+# The default output is the first file with a .pdf extension, beside it.
+set -euo pipefail
+here=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+inputs=() out="" csl="" extra=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    -o) out=$2; shift 2 ;;
+    --csl) csl=$2; shift 2 ;;
+    --) shift; extra=("$@"); break ;;
+    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) inputs+=("$1"); shift ;;
+  esac
+done
+[ ${#inputs[@]} -ge 1 ] || { echo "make-pdf: give at least one Markdown file" >&2; exit 1; }
+first=${inputs[0]}
+out=${out:-${first%.*}.pdf}
+src_dir=$(cd "$(dirname "$first")" && pwd)
+
+# -implicit_figures: the house caption is the italic line under the image, so
+# pandoc must not also turn the alt text into a caption.
+args=(--from markdown-implicit_figures
+  -V geometry:margin=1in -V fontsize=11pt
+  -V colorlinks=true -V linkcolor=xrefblue -V citecolor=citegreen -V urlcolor=xrefblue
+  --include-in-header="$here/typeset/pdf-preamble.tex"
+  --resource-path="$src_dir:."
+  --metadata link-citations=true --metadata link-bibliography=true
+  --citeproc --lua-filter="$here/typeset/pdf-filters.lua")  # filter after citeproc
+[ -n "$csl" ] && args+=(--csl "$csl")
+
+# Bibliography. A front matter pointing at the jovo/bib URL reads the local clone
+# instead, when there is one, so the 7.6 MB file is never downloaded. Then pass
+# pandoc only the entries the document cites: parsing 12,000 entries to resolve
+# a dozen takes most of a second, the subset a few milliseconds.
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+bib=""
+for ((i = 0; i < ${#extra[@]}; i++)); do  # --bibliography passed after --
+  case ${extra[$i]} in
+    --bibliography=*) bib=${extra[$i]#--bibliography=}; unset "extra[$i]" ;;
+    --bibliography) bib=${extra[$((i + 1))]}; unset "extra[$i]" "extra[$((i + 1))]"; i=$((i + 1)) ;;
+  esac
+done
+extra=(${extra[@]+"${extra[@]}"})
+if [ -z "$bib" ]; then
+  bib=$(awk 'NR==1 && $0!="---"{exit} NR>1 && $0=="---"{exit} /^bibliography:/{sub(/^bibliography:[ ]*/, ""); print}' "$first")
+  local_bib="${BIB_DIR:-$HOME/github/bib}/references.bib"
+  case $bib in *githubusercontent.com/jovo/bib*) [ -f "$local_bib" ] && bib=$local_bib ;; esac
+  case $bib in /*|"") ;; *) [ -f "$src_dir/$bib" ] && bib="$src_dir/$bib" ;; esac
+fi
+if [ -f "$bib" ]; then
+  python3 - "$bib" "$tmp/refs.bib" "${inputs[@]}" <<'PY'
+import re, sys
+bib, out, docs = sys.argv[1], sys.argv[2], sys.argv[3:]
+keys = set()
+for d in docs:
+    text = re.sub(r"\A---\n.*?\n---\n", "", open(d).read(), flags=re.S)
+    keys |= set(re.findall(r"@([A-Za-z0-9_:.\-]+)", text))
+entries = [e.strip() for e in re.split(r"\n(?=@)", open(bib).read())
+           if (m := re.match(r"@\w+\{([^,]+),", e)) and m.group(1) in keys]
+open(out, "w").write("\n\n".join(entries) + "\n")
+PY
+  args+=(--bibliography "$tmp/refs.bib")
+elif [ -n "$bib" ]; then
+  args+=(--bibliography "$bib")  # a URL with no local copy: pandoc fetches it
+fi
+
+# XeTeX (tectonic), which can load the New Computer Modern house fonts.
+# A missing citation key only warns. If the bibliography itself cannot be read
+# (missing file, unreachable URL), build anyway with an empty one, so citations
+# show as unresolved instead of the PDF failing.
+# ${extra[@]+...}: bash 3.2 treats an empty array as unbound under set -u.
+noise="accessing absolute path\|PDF file with version"
+if ! pandoc "${inputs[@]}" "${args[@]}" ${extra[@]+"${extra[@]}"} --pdf-engine=tectonic -o "$out" 2>"$tmp/err"; then
+  if grep -q -i "bibliograph\|could not fetch\|ioError\|citeproc\|\.bib" "$tmp/err"; then
+    grep -i -m1 "could not fetch\|does not exist\|ioError\|bibliograph" "$tmp/err" >&2 || true
+    echo "make-pdf: bibliography could not be read, building without it (citations unresolved)" >&2
+    : > "$tmp/empty.bib"
+    retry=()  # the same arguments, with every bibliography replaced by the empty one
+    skip=0
+    for a in "${args[@]}"; do
+      if [ $skip = 1 ]; then skip=0; continue; fi
+      case $a in --bibliography) skip=1 ;; --bibliography=*) ;; *) retry+=("$a") ;; esac
+    done
+    # No references means no link targets, so turn citation links off too.
+    pandoc "${inputs[@]}" "${retry[@]}" ${extra[@]+"${extra[@]}"} --bibliography "$tmp/empty.bib" \
+      --metadata link-citations=false --metadata link-bibliography=false \
+      --pdf-engine=tectonic -o "$out" 2>"$tmp/err" || { grep -v "$noise" "$tmp/err" >&2; exit 1; }
+  else
+    grep -v "$noise" "$tmp/err" >&2; exit 1
+  fi
+fi
+grep -v "$noise" "$tmp/err" >&2 || true
+echo "$out"

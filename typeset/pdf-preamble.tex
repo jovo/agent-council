@@ -1,0 +1,112 @@
+% Shared PDF preamble for documents built with pandoc and tectonic (or xelatex).
+% bin/make-pdf includes it. Projects with their own build can include it too:
+%   --include-in-header=<agent-council>/typeset/pdf-preamble.tex
+% and pass the link-colour flags (see "Link colours" below).
+%
+% Fonts: New Computer Modern (see below). Engine: XeTeX via tectonic.
+
+% ---- Fonts --------------------------------------------------------------
+% New Computer Modern, the same family as the deck theme: Sans Bold headings,
+% Book body (a sturdier weight of the Computer Modern design), Book math.
+% install.sh installs the fonts from typeset/fonts. Under pdflatex, which
+% cannot load them, the document falls back to Latin Modern.
+\usepackage{iftex}
+\ifPDFTeX
+  \newcommand\headfont{\sffamily\bfseries}
+\else
+  \usepackage{fontspec}
+  \usepackage{unicode-math}
+  % PostScript names: XeTeX resolves these for installed fonts.
+  \setmainfont{NewCM10-Book}[ItalicFont=NewCM10-BookItalic, BoldFont=NewCM10-Bold,
+    BoldItalicFont=NewCM10-BoldItalic]
+  \setmathfont{NewCMMath-Book}
+  \newfontfamily\headfont{NewCMSans10-Bold}
+\fi
+% Heading scale (# 21pt, ## 14pt, ### 12pt, #### body size), with more space
+% above than below so each heading attaches to its text. LaTeX's defaults set
+% ### at body size, which reads smaller than the body in this sans.
+\usepackage{titlesec}
+\titleformat{\section}{\headfont\huge}{\thesection}{0.75em}{}
+\titleformat{\subsection}{\headfont\Large}{\thesubsection}{0.75em}{}
+\titleformat{\subsubsection}{\headfont\large}{\thesubsubsection}{0.75em}{}
+\titleformat{\paragraph}{\headfont\normalsize}{\theparagraph}{0.75em}{}
+\titlespacing*{\section}{0pt}{3.2ex plus 1ex minus .2ex}{2ex plus .2ex}
+\titlespacing*{\subsection}{0pt}{3ex plus 1ex minus .2ex}{1.1ex plus .2ex}
+\titlespacing*{\subsubsection}{0pt}{2.6ex plus 1ex minus .2ex}{0.9ex plus .2ex}
+\titlespacing*{\paragraph}{0pt}{2.2ex plus 1ex minus .2ex}{0.7ex plus .2ex}
+
+% ---- Characters Latin Modern's text font lacks ---------------------------
+% Typed directly in prose (fine in Markdown and HTML), these would print as
+% blanks. Draw them from the math font or pifont instead.
+\usepackage{iftex}  % \ifPDFTeX: pdflatex (make-pdf default) or XeTeX (fallback)
+\usepackage{amssymb}
+\usepackage{pifont}
+\usepackage{newunicodechar}
+\providecommand{\lt}{<}  % MathJax alias for <
+\ifPDFTeX
+  \newunicodechar{✓}{\ding{51}}
+  \newunicodechar{✗}{\ding{55}}
+  \newunicodechar{≤}{\ensuremath{\le}}
+  \newunicodechar{≥}{\ensuremath{\ge}}
+  \newunicodechar{≠}{\ensuremath{\ne}}
+  \newunicodechar{≈}{\ensuremath{\approx}}
+  \newunicodechar{↔}{\ensuremath{\leftrightarrow}}
+  \newunicodechar{⇒}{\ensuremath{\Rightarrow}}
+  \newunicodechar{↗}{\ensuremath{\nearrow}}
+  \newunicodechar{↘}{\ensuremath{\searrow}}
+  \newunicodechar{′}{\ensuremath{^{\prime}}}
+  \newunicodechar{″}{\ensuremath{^{\prime\prime}}}
+\else
+  % XeTeX: unicode-math makes some of these active in math, so draw them by
+  % character code from the math font instead of through math mode.
+  \newfontfamily\symfont{NewCMMath-Book}
+  \newcommand\sym[1]{{\symfont\char"#1\relax}}
+  \newunicodechar{✓}{\ding{51}}
+  \newunicodechar{✗}{\ding{55}}
+  \newunicodechar{≤}{\sym{2264}}
+  \newunicodechar{≥}{\sym{2265}}
+  \newunicodechar{≠}{\sym{2260}}
+  \newunicodechar{≈}{\sym{2248}}
+  \newunicodechar{↔}{\sym{2194}}
+  \newunicodechar{⇒}{\sym{21D2}}
+  \newunicodechar{↗}{\sym{2197}}
+  \newunicodechar{↘}{\sym{2198}}
+  % Primes (′ ″) are left to unicode-math, which handles them in math. Typed in
+  % prose they print blank on this rare fallback path.
+\fi
+\newunicodechar{⧵}{\ensuremath{\setminus}}
+% unicode-math (XeTeX) maps \setminus to U+29F5, which latinmodern-math lacks.
+\ifPDFTeX\else\AtBeginDocument{\def\setminus{\mathbin{\backslash}}}\fi
+
+% ---- Tables -------------------------------------------------------------
+% A rule under every row, without booktabs' doubled mid and bottom rules.
+\usepackage{etoolbox}
+\usepackage{longtable,booktabs,array,calc}
+\providecommand{\real}[1]{#1}
+\makeatletter
+\AtBeginEnvironment{longtable}{\footnotesize\let\LT@@cr\LT@tabularcr
+  \def\LT@tabularcr{\LT@@cr\hline}\def\midrule{}\def\bottomrule{}}
+\makeatother
+% Pandoc's columns use \raggedright, which forbids hyphenation. Allow it.
+\usepackage{ragged2e}
+\let\raggedright\RaggedRight
+
+% ---- Figures ------------------------------------------------------------
+\usepackage{graphicx}
+
+% ---- Link colours -------------------------------------------------------
+% Pandoc honours coloured links only through its command-line flags:
+%   -V colorlinks=true -V linkcolor=xrefblue -V citecolor=citegreen -V urlcolor=xrefblue
+% (a \hypersetup here would be overridden by pandoc's hidelinks). This file only
+% defines the colours: cross-references and URLs blue, citations green.
+\usepackage{xcolor}
+\definecolor{xrefblue}{HTML}{1A4D8F}
+\definecolor{citegreen}{HTML}{2E7D5B}
+
+% ---- List markers -------------------------------------------------------
+% Google Docs progression: filled disc, open circle, filled square, dot.
+\usepackage{textcomp}
+\renewcommand{\labelitemi}{\textbullet}
+\renewcommand{\labelitemii}{\textopenbullet}
+\renewcommand{\labelitemiii}{\raisebox{0.15ex}{\rule{0.5ex}{0.5ex}}}
+\renewcommand{\labelitemiv}{\textperiodcentered}

@@ -24,9 +24,9 @@ fact-check or claim verification.
 How it works: each panelist reviews without web search, then every panelist
 votes on every finding with reviewers anonymized. The script groups
 duplicates, sets aside findings most voters reject, and writes `unified.md`:
-an overview first, then findings in the order of the draft under its section
-headings, each with its votes, then findings about the focus material, then a
-short list of rejected findings. There is no cap on findings.
+findings grouped by severity (Critical, Substantive, Polish), each group in
+draft order with its section, file, and line, then a short list of rejected
+findings. There is no cap on findings.
 
 - The review takes about 40 seconds to 2 minutes, then `unified.md` opens in the
   default app for .md files (set UNIFIED_REVIEW_OPEN_APP to change). With `--verify`, a web fact-check (stronger Claude and
@@ -37,7 +37,8 @@ short list of rejected findings. There is no cap on findings.
   for the fact-check before showing the review.
 - It needs network access and writes outside the sandbox. In Codex or Cursor,
   request escalated / unsandboxed execution for this command.
-- Output goes to `feedback/<file>-<timestamp>/` in the current directory:
+- Output goes to a run folder under `~/.local/share/unified-review/runs/`, not
+  the project (the last line of stdout is the path to `unified.md`). It holds:
   `unified.md`, `factcheck.md` (with `--verify`), each panelist's raw review
   (`review-claude.md`, `review-gpt.md`, `review-gemini.md`), votes, `results.json` (findings, votes, groups,
   timings), and `*.err` logs. The last line of stdout is the path to `unified.md`.
@@ -46,6 +47,16 @@ short list of rejected findings. There is no cap on findings.
   which one failed and why. Report that line to the user. Common
   cause: the CLI is not logged in (`claude` then `/login`, `cursor-agent login`,
   `codex login`).
+
+The script opens `unified.md` where it was run from: in Cursor or VS Code it
+opens in the editor, and from a terminal in the default Markdown app. Inside an
+agent app that cannot open a file from outside (the Claude app, the Codex app),
+it prints `OPEN IN APP: <path>` instead. When you see that line, show the file
+in your own app: in the Claude app, open it in the file pane (if the run folder
+is outside the session's folders, ask to add `~/.local/share/unified-review/runs`
+first). Where you cannot show files, give the user the path as a link. The
+fact-check prints the same line for `factcheck.md` when it finishes, in its
+log (`factcheck.log` in the run folder).
 
 When it finishes, show the user the contents of `unified.md` verbatim. Do not
 re-summarize or re-order the findings. With `--verify`, say whether the
@@ -61,11 +72,11 @@ right?".
 
 1. Always start by running `unified-review --item <numbers>`, even if you saw
    the review earlier. Add `--run DIR` only if the user names an older run. It
-   works from any folder: it uses the newest run under `./feedback`, else the
-   last run made anywhere. It is local, takes about a second, and needs no
+   works from any folder: it uses the newest run that reviewed a file in the
+   current folder, else the last run made. It is local, takes about a second, and needs no
    network or sandbox escalation. Read its whole output. It prints:
    - the full path of each reviewed file (the file to edit) and the run folder;
-   - the version reviewed (content fingerprint and git commit), whether the
+   - the version reviewed (an SVN-style number, 1, 2, 3, ...), whether the
      file has changed since, and a saved copy of the reviewed text;
    - for each item, its current line in that file, the quoted text, the votes,
      and the finding with its diff;
@@ -79,10 +90,23 @@ right?".
    file), fix that in the applied text and say so.
 4. If "Location now" says the text is not in the current file, it was likely
    already edited. Say so and ask before changing anything.
-5. For overview findings, which have no single location, propose the change
+5. For whole-draft findings, which have no single location, propose the change
    and ask before making it.
 6. For a K item marked contradicted or unverifiable, propose a fix: reword,
    hedge, or a better source. Follow the sourcing and citation rules. If the
    project has a bibliography, look up citation keys there; never invent one.
-7. Afterward, list what changed by item number, with the file and line. Do not
+7. Record each decision so the next review respects it (about a tenth of a
+   second, no model calls):
+   - After applying findings: `unified-review --applied 3,4`.
+   - When the user declines findings ("ignore 5", "skip 7", "won't do 9"):
+     `unified-review --ignore 5,7 --note "<their reason, if given>"`.
+   - When the user wants a declined point back: `unified-review --unignore D2`
+     (D ids are listed under "Previously declined" in `unified.md`).
+   Every agent (Claude, Codex, Cursor) records to the same log, so decisions
+   made in one are visible in the others. `unified-review --decisions` lists
+   them for the current project, and `--item` shows whether an item was
+   already ignored or applied. Check before acting on an item.
+   The next review tells the panel about declined and applied points, and
+   holds back findings that repeat a declined point while its text is unchanged.
+8. Afterward, list what changed by item number, with the file and line. Do not
    commit.

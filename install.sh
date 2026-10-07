@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Link agent-council into place: the unified-review command on your PATH, and
-# the unified-review skill into Claude Code, Codex, and Cursor.
+# Link agent-council into place: the unified-review and make-pdf commands on your PATH, and
+# every skill in skills/ into Claude Code, Codex, and Cursor.
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")" && pwd)
@@ -16,10 +16,22 @@ link() {  # link SOURCE TARGET, refusing to replace a real file or folder
   echo "linked $2 -> $1"
 }
 
-chmod +x "$repo/bin/unified-review"
+for tool in unified-review make-pdf; do
+  chmod +x "$repo/bin/$tool"
+done
 link "$repo/bin/unified-review" "$bin_dir/unified-review"
-for agent in .claude .codex .cursor; do
-  link "$repo/skills/unified-review" "$HOME/$agent/skills/unified-review"
+link "$repo/bin/make-pdf" "$bin_dir/make-pdf"
+# House fonts (New Computer Modern, GUST Font License) for PDFs, installed for the user.
+font_dir=${FONT_DIR:-$HOME/Library/Fonts}
+mkdir -p "$font_dir"
+for f in "$repo"/typeset/fonts/*.otf; do
+  cp -n "$f" "$font_dir/" 2>/dev/null && echo "installed font $(basename "$f")"
+done
+for skill in "$repo"/skills/*/; do
+  name=$(basename "$skill")
+  for agent in .claude .codex .cursor; do
+    link "$repo/skills/$name" "$HOME/$agent/skills/$name"
+  done
 done
 
 case ":$PATH:" in

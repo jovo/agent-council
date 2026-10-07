@@ -1,6 +1,6 @@
-feedback/
 __pycache__/
 .DS_Store
 notes/.llm-council-*.json
 .obsidian/
 notes/
+node_modules/

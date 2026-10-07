@@ -1,0 +1,13 @@
+{
+  "name": "agent-council-slides",
+  "private": true,
+  "type": "module",
+  "description": "Deck theme and checks for Marp decks. A decks repository links theme/ to this folder's theme.",
+  "scripts": {
+    "check": "node scripts/check-deck.mjs"
+  },
+  "devDependencies": {
+    "@marp-team/marp-cli": "^4.5.1",
+    "puppeteer-core": "^24.0.0"
+  }
+}
