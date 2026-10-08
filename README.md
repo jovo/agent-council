@@ -31,6 +31,8 @@ A model call that times out, errors, or returns nothing gets one retry, except a
 
 The default panel is one model per lab, chosen for speed: Claude Sonnet (via `claude`), GPT-5.6 Luna at low effort (via `codex`), and Gemini 3.8 Flash Low (via `cursor-agent`). If a panelist is unavailable or fails to review or vote, Grok 4.7 Low Fast (via `cursor-agent`) stands in, so three models still vote and ties can be broken. Grok cannot stand in for Gemini when `cursor-agent` itself is down, since both run through it. The fact-check uses stronger Claude and GPT models, since it runs in the background. Edit `PANELISTS` and `FACTCHECK_PANELISTS` at the top of `bin/unified-review` to change them.
 
+The panel runs on the CLIs' subscriptions, so a review adds no per-call cost. An October 2026 test compared cheaper pay-per-token models with this panel on the same memo. None replaced it. On Together AI, DeepSeek V4 Flash and gpt-oss-120b cost about $0.004 per model per round and answered in 20 to 65 seconds, but returned 3 and 6 findings where the panel's models returned 5 to 21, and 2 of gpt-oss-120b's 6 quotes did not match the draft. Open-weight models served through `cursor-agent` (GLM 5.2, Kimi K3) took 60 to 270 seconds per review, against 13 to 22 seconds for Gemini and GPT.
+
 On one 1,300-word memo, a review took 40 to 120 seconds and the fact-check about 2 more minutes. Times depend on the models, the draft, and the providers' load.
 
 ## Output
