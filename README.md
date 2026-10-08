@@ -20,6 +20,8 @@ Before starting, the script checks that each CLI is installed and logged in, usi
 
 `--context FILE` adds supporting material that every panelist reads but does not review, such as reviewer comments, a call for proposals, or a source paper. Text files and PDFs work (PDFs through `pdftotext`). Very long material is trimmed to fit the prompt. Voters see it too, and a finding that quotes it is listed under the focus or supporting material.
 
+A file to review can be a PDF. If it is plain prose, the panel gets its text (from `pdftotext`). If it has anything the text would lose, such as figures, images, ruled tables, or equations, each panelist opens the PDF itself. Findings on a PDF cite page numbers, and edits go in its source document. The check needs Ghostscript and poppler (`brew install ghostscript poppler`).
+
 1. **Review.** Each panelist reviews the draft without web search. Findings come back in a fixed format: severity, title, the exact text targeted, then the point and an inline diff.
 2. **Vote.** Each panelist votes agree, partial, or disagree on every finding, sees reviewers only as A, B, C, and flags duplicates.
 A model call that times out, errors, or returns nothing gets one retry, except after a login error. A reply in the wrong format also gets one retry.
@@ -33,7 +35,7 @@ On one 1,300-word memo, a review took 40 to 120 seconds and the fact-check about
 
 ## Output
 
-Each run writes a folder under `~/.local/share/unified-review/runs/`, outside every project, named like SVN revisions, `<project>-<file>-v<N>`, with `-run2`, `-run3` when the same version is reviewed again, so nothing is added to the project you review. Set `UNIFIED_REVIEW_RUNS` to put runs elsewhere. Each run folder holds:
+Each run writes a folder under `~/.local/share/unified-review/runs/`, outside every project, named `<date>-<time>-<project>-<file>-v<N>`, such as `2026-10-08-1342-myproject-memo-v7`, so the folders sort by when each run was made, with `-run2` for a second run in the same minute, so nothing is added to the project you review. Set `UNIFIED_REVIEW_RUNS` to put runs elsewhere. Each run folder holds:
 
 - `unified.md`: the review. See [Reading unified.md](#reading-unifiedmd).
 - `factcheck.md` (with `--verify`): each claim in draft order, with its sentence, each checker's verdict, notes, and sources.
@@ -43,7 +45,7 @@ Each run writes a folder under `~/.local/share/unified-review/runs/`, outside ev
 
 ## Reading unified.md
 
-- The title is the reviewed file and its version number. Versions count up like SVN revisions: version 1 is the first text of that file reviewed, version 2 the next different text, and unchanged text keeps its number. `versions.json` in that runs folder maps each version to a fingerprint of the exact text. `reviewed/` in the run folder holds a copy of that text, and `results.json` records the fingerprint, git commit, and whether there were uncommitted edits.
+- The title is the reviewed file, its version number, and the date and time the run started. Versions count up like SVN revisions: version 1 is the first text of that file reviewed, version 2 the next different text, and unchanged text keeps its number. `versions.json` in that runs folder maps each version to a fingerprint of the exact text. `reviewed/` in the run folder holds a copy of that text, and `results.json` records the fingerprint, git commit, and whether there were uncommitted edits.
 - Findings are grouped by severity: Critical, then Substantive, then Polish. Within each group, findings about the whole draft come first, then findings in the order of the draft, then findings about any focus material (`-n`). Each finding shows its draft section, file, and line. Findings most voters rejected come last, with their reasons.
 - Each finding is the best-voted version among duplicates. It shows the file and line, the quoted text, the point, an inline diff (~~deleted~~ and 🟢 **added**), and a line of votes such as `Claude ✓ · **GPT** ✓ · Gemini ~`: ✓ agree, ~ partial, ✗ disagree, bold for the model that raised the point.
 - **Contested** means at least one model agreed and at least one disagreed.

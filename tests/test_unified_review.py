@@ -401,5 +401,23 @@ class FactcheckCarryOver(unittest.TestCase):
             self.assertEqual(carried, {"K1": "memo-v1", "K2": None})
 
 
+@unittest.skipUnless(shutil.which("gs") and shutil.which("pdffonts"), "needs Ghostscript and poppler")
+class PdfExtras(unittest.TestCase):
+    """A PDF goes to the panel as text unless the text would miss something."""
+
+    def pdf(self, d, name, ps):
+        out = Path(d) / name
+        subprocess.run(["gs", "-q", "-dNOPAUSE", "-dBATCH", "-dSAFER", "-sDEVICE=pdfwrite",
+                        f"-sOutputFile={out}", "-c", ps], check=True, capture_output=True)
+        return out
+
+    def test_text_only_and_graphics(self):
+        with tempfile.TemporaryDirectory() as d:
+            text = self.pdf(d, "text.pdf", "/Times-Roman findfont 12 scalefont setfont 72 700 moveto (Plain prose.) show showpage")
+            box = self.pdf(d, "box.pdf", "100 300 300 200 rectfill showpage")
+            self.assertEqual(ur.pdf_extras(text), [])
+            self.assertIn("graphics", ur.pdf_extras(box))
+
+
 if __name__ == "__main__":
     unittest.main()

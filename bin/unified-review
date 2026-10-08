@@ -155,12 +155,19 @@ def call(name, prompt, out, workdir, web=False, stage="call"):
         return None
 
 
+STARTED = time.strftime("%Y-%m-%d %H:%M")  # when this run began, shown in unified.md's title
+READ_FILES = False  # True when a reviewed file is a PDF, which the panel opens itself
+PDF_NOTE = """This file is a PDF. Open and read all of it yourself: {path}
+Read every page, including figures, tables, and equations. Quote its text
+exactly as printed."""
+
+
 def call_once(name, prompt, out, workdir, web):
     """One attempt. Returns (text, None) or (None, reason)."""
     harness, model, _ = PANELISTS[name]
     out, err = Path(out), Path(out).with_suffix(".err")
     if harness == "claude":
-        tools = ["WebSearch", "WebFetch"] if web else []
+        tools = (["Read"] if READ_FILES else []) + (["WebSearch", "WebFetch"] if web else [])
         cmd = [CLAUDE, "-p", prompt, "--tools", ",".join(tools)] + (["--model", model] if model else [])
         if tools:
             cmd += ["--allowedTools", " ".join(tools)]
@@ -244,8 +251,11 @@ def run_timed(timings, key, fn, *a):
     return r
 
 
+QUOTES = str.maketrans("‘’“”", "''\"\"")  # curly quotes, as in PDFs, match straight ones
+
+
 def norm(s):
-    return re.sub(r"\s+", " ", re.sub(r"[*_`~>#\[\]()]", "", s or "")).strip().lower()
+    return re.sub(r"\s+", " ", re.sub(r"[*_`~>#\[\]()]", "", (s or "").translate(QUOTES))).strip().lower()
 
 
 # ---------------------------------------------------------------- prompts
@@ -733,8 +743,47 @@ def fc_note(c, fc_labels):
     return out
 
 
+def is_pdf(p):
+    return Path(p).suffix.lower() == ".pdf"
+
+
+def doc_text(p):
+    """A file's text. The panel reads a PDF itself. The script uses its text,
+    pages separated by form feeds, only to place quotes and number versions."""
+    p = Path(p)
+    if not is_pdf(p):
+        return p.read_text()
+    r = subprocess.run(["pdftotext", str(p), "-"], capture_output=True, text=True)
+    return re.sub(r"(\w)-\n(?=[a-z])", r"\1", r.stdout)  # rejoin words hyphenated at line ends
+
+
+MATH_FONT = re.compile(r"Math|CMMI|CMSY|CMEX|MSAM|MSBM|STIX|Symbol", re.I)
+PGM = re.compile(rb"P5\s+(?:#[^\n]*\n\s*)*(\d+)\s+(\d+)\s+\d+\s")  # a page of gs output
+
+
+def pdf_extras(p):
+    """What pdftotext would miss in a PDF: graphics (figures, images, table
+    rules: ink left on a page rendered without its text) or equations (by their
+    fonts). Empty when the text alone carries the document."""
+    out = []
+    pages = subprocess.run(["gs", "-q", "-dNOPAUSE", "-dBATCH", "-dSAFER", "-dFILTERTEXT",
+                            "-sDEVICE=pgmraw", "-r18", "-sOutputFile=-", str(p)], capture_output=True).stdout
+    i = 0
+    while (m := PGM.match(pages, i)):
+        n = int(m.group(1)) * int(m.group(2))
+        i = m.end() + n
+        if sum(b < 200 for b in pages[m.end():i]) > 0.005 * n:
+            out.append("graphics")
+            break
+    fonts = subprocess.run(["pdffonts", str(p)], capture_output=True, text=True).stdout
+    if MATH_FONT.search(fonts):
+        out.append("equations")
+    return out
+
+
 def locate(quote, files):
-    """(full path, 1-based line) where a quote's text sits in the files now, or None."""
+    """(full path, 1-based line or page, "line" or "page") where a quote's text
+    sits in the files now, or None."""
     q = norm(quote)[:40]
     if not q:
         return None
@@ -742,15 +791,20 @@ def locate(quote, files):
         p = Path(f)
         if not p.exists():
             continue
+        if is_pdf(p):
+            for i, page in enumerate(doc_text(p).split("\f")):
+                if q in norm(page):
+                    return p, i + 1, "page"
+            continue
         lines = p.read_text().splitlines()
         for i, line in enumerate(lines):
             if q in norm(line):
-                return p, i + 1
+                return p, i + 1, "line"
         # A quote that wraps a line break: match the start of the quote on line i.
         for i in range(len(lines) - 1):
             joined = norm(lines[i] + " " + lines[i + 1])
             if q in joined and joined.find(q) < len(norm(lines[i])):
-                return p, i + 1
+                return p, i + 1, "line"
     return None
 
 
@@ -792,11 +846,22 @@ def version_number(path, fp, register=True):
     return seen.index(fp) + 1
 
 
+def project_name(folder):
+    """The git repository's name, else the folder's, so a file in build/ or docs/
+    still names its project."""
+    try:
+        top = subprocess.run(["git", "-C", str(folder), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        top = ""
+    return Path(top).name if top else folder.name
+
+
 def file_version(p, text, outdir, number=None):
     """Record which version of a file is reviewed, and keep a copy of it."""
     snap = outdir / "reviewed" / p.name
     snap.parent.mkdir(exist_ok=True)
-    snap.write_text(text)
+    shutil.copyfile(p, snap) if is_pdf(p) else snap.write_text(text)
     git = {}
     try:
         run = lambda *a: subprocess.run(["git", "-C", str(p.parent), *a], capture_output=True,
@@ -820,7 +885,7 @@ def changed_since(v):
     p = Path(v["path"])
     if not p.exists():
         return "file no longer exists"
-    now = fingerprint(p.read_text())
+    now = fingerprint(doc_text(p))
     if now == v["version"]:
         return "unchanged"
     n = version_number(p, now, register=False)
@@ -836,8 +901,9 @@ def quoted(g, files, where_label=""):
         head = "Focus or supporting material:"
     else:
         loc = locate(q, files)
-        place = f"{loc[0].name}, line {loc[1]}" if loc else "quoted text no longer in the file"
-        head = f"{where_label} · {place}:" if where_label else f"{place}:"
+        place = f"{loc[0].name}, {loc[2]} {loc[1]}" if loc else "quoted text no longer in the file"
+        dup = loc and where_label == loc[0].name  # no headings: the section is the file
+        head = f"{where_label} · {place}:" if where_label and not dup else f"{place}:"
     block = "\n".join("> " + line for line in q.splitlines())
     return f"*{head}*\n\n{block}\n\n"
 
@@ -865,7 +931,7 @@ def render(outdir):
     vers = r.get("versions") or [{"path": f} for f in r["files"]]
     parts = ["# " + ", ".join(Path(v["path"]).name + (f", version {v['number']}" if v.get("number") else
                                                       f" ({v['version']})" if "version" in v else "")
-                              for v in vers)]
+                              for v in vers) + (f", {r['started']}" if r.get("started") else "")]
     parts += participation(r.get("failures"), [("reviewed", r["reviewers_ok"]), ("voted", voters)], names,
                            "Agreement, duplicate grouping, and rejection by vote mean little in this run.")
     if r["verify"]:
@@ -942,7 +1008,7 @@ def show_items(spec, run):
                 continue
             loc = locate(c["quote"], r["files"])
             print(f"== {item}: fact-check, {c['verdict']}")
-            print(f"Location now: {f'{loc[0]}, line {loc[1]}' if loc else 'not in the current file (already edited?)'}")
+            print(f"Location now: {f'{loc[0]}, {loc[2]} {loc[1]}' if loc else 'not in the current file (already edited?)'}")
             print(f"Sentence: {c['quote']}\nClaim: {c['claim']}  Citation: {c['cite']}")
             for m, row in c["per"].items():
                 if row:
@@ -956,7 +1022,7 @@ def show_items(spec, run):
         loc = locate(g["rep"]["quote"], r["files"]) if g["rep"]["quote"] else None
         print(f"== Finding {item}: {g['rep']['title']} ({g['severity']})")
         print(f"Section: {sec}")
-        print("Location now: " + (f"{loc[0]}, line {loc[1]}" if loc else
+        print("Location now: " + (f"{loc[0]}, {loc[2]} {loc[1]}" if loc else
           "not in the current file (already edited?)" if g["rep"]["quote"] else "whole draft"))
         print(f"Quote: {g['rep']['quote'] or '(none)'}")
         print(f"Votes: {vote_line(g, r['voters']).replace('**', '')}  (bold in unified.md = raised it)")
@@ -972,11 +1038,15 @@ def show_items(spec, run):
         if not p.exists():
             print("(file no longer exists)\n")
             continue
+        if is_pdf(p):
+            print("(a PDF: read it directly. Edits go in its source document.)\n")
+            continue
         lines = p.read_text().splitlines()
         width = len(str(len(lines)))
         print("\n".join(f"{i:>{width}}| {line}" for i, line in enumerate(lines, 1)) + "\n")
 
-def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versions, context=None):
+def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versions, context=None, shown=None):
+    shown = shown or draft  # what the panel is given: the text, or a PDF's path
     timings = {}
     declines, applied = active_decisions(files, norm(draft))
     decided = decisions_block(declines, applied)
@@ -985,7 +1055,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     ctx_block, ctx_text, ctx_names = context or ("", "", [])
     if ctx_names:
         log(f"supporting material: {', '.join(ctx_names)}")
-    prompt = review_prompt(draft, focus, rules, decided, ctx_block)
+    prompt = review_prompt(shown, focus, rules, decided, ctx_block)
     (outdir / "prompt.md").write_text(prompt)
     log(f"1/3 review (no web): {', '.join(panel)}")
 
@@ -1022,7 +1092,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
 
     def vote(m):
         t = time.time()
-        prompt_v = VOTE.format(draft=draft, findings=shown, decided=decided,
+        prompt_v = VOTE.format(draft=shown, findings=shown, decided=decided,
                                context=(CONTEXT_INTRO + ctx_block) if ctx_block else "",
                                focus=f"\n<author_focus>\n{focus}\n</author_focus>\n" if focus else "")
         v = None
@@ -1062,6 +1132,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
 
     (outdir / "results.json").write_text(json.dumps({
         "files": [str(p) for p in files], "versions": versions, "context": ctx_names,
+        "started": STARTED,
         "panel": panel, "reviewers_ok": ok, "voters": voters,
         "labels": {m: label(m) for m in panel}, "verify": verify,
         "failures": FAILURES, "agreement": vote_agreement(flat, votes, owner),
@@ -1096,13 +1167,14 @@ def confirmed_before(files, outdir, dnorm):
             if c["verdict"] == "confirmed" and c.get("pos") is not None and norm(c["quote"]) and norm(c["quote"]) in dnorm}
 
 
-def background(files, draft, panel, outdir, workdir):
+def background(files, draft, panel, outdir, workdir, shown=None):
+    shown = shown or draft
     timings = {}
     t0 = time.time()
     lead = panel[0]
     claims = None
     for m in panel:  # first panelist that answers lists the claims
-        text = run_timed(timings, f"claims_{m}", call, m, CLAIMS.format(draft=draft),
+        text = run_timed(timings, f"claims_{m}", call, m, CLAIMS.format(draft=shown),
                          outdir / "claims.txt", workdir, False, "claims")
         claims = parse_rows(text, 4)
         if claims:
@@ -1118,7 +1190,7 @@ def background(files, draft, panel, outdir, workdir):
 
         def verify(m):
             t = time.time()
-            r = call(m, VERIFY.format(claims=listing, draft=draft), outdir / f"verify-{m}.txt", workdir,
+            r = call(m, VERIFY.format(claims=listing, draft=shown), outdir / f"verify-{m}.txt", workdir,
                      web=True, stage="verify")
             if r and not parse_rows(r, 4):
                 fail("verify", m, "reply had no claim lines in the expected format")
@@ -1145,7 +1217,7 @@ def background(files, draft, panel, outdir, workdir):
 
     # factcheck.md in draft order, under the draft's section headings.
     counts = {v: sum(c["verdict"] == v for c in rows) for v in VERDICTS + ["unchecked"]}
-    md = [f"# Fact-check: {', '.join(p.name for p in files)}",
+    md = [f"# Fact-check: {', '.join(p.name for p in files)}, {time.strftime('%Y-%m-%d %H:%M')}",
           f"*{len(rows)} claims listed by {labels[lead]}, checked with web search by "
           f"{', '.join(labels[m] for m in checkers) or 'nobody'}. Each verdict is the most "
           f"cautious across checkers. "
@@ -1263,15 +1335,25 @@ def main():
             sys.exit(f"error: no such file: {f}")
         files.append(p)
     workdir = files[0].parent
-    texts = [p.read_text() for p in files]  # read once: this is the version reviewed
+    texts = [doc_text(p) for p in files]  # read once: this is the version reviewed
     draft = "\n\n".join(f"===== {p.name} =====\n{t}" for p, t in zip(files, texts))
+    # A PDF goes to the panel as its text, unless the text would miss images or
+    # equations. Then the panel opens the PDF itself.
+    direct = {p for p in files if is_pdf(p) and pdf_extras(p)}
+    shown = "\n\n".join(f"===== {p.name} =====\n" + (PDF_NOTE.format(path=p) if p in direct else t)
+                        for p, t in zip(files, texts))
+    global READ_FILES
+    READ_FILES = bool(direct)
+    for p in direct:
+        log(f"{p.name}: has {' and '.join(pdf_extras(p))}, so the panel reads the PDF itself")
     numbers = [None] * len(files)
     if a.outdir:
         outdir = Path(a.outdir).resolve()
     else:
-        # Name runs like SVN revisions: <project>-<file>-v<N>, then -run2, -run3 on repeats.
+        # Name runs <date>-<time>-<project>-<file>-v<N>, with -run2, -run3 within the same minute.
         numbers = [version_number(p, fingerprint(t)) for p, t in zip(files, texts)]
-        base = RUNS_DIR / f"{workdir.name}-{files[0].stem}-v{numbers[0]}"
+        # A date-time prefix sorts runs by when they were made.
+        base = RUNS_DIR / f"{time.strftime('%Y-%m-%d-%H%M')}-{project_name(workdir)}-{files[0].stem}-v{numbers[0]}"
         outdir, k = base, 1
         while outdir.exists():
             k += 1
@@ -1280,7 +1362,7 @@ def main():
 
     if a.factcheck_only:
         PANELISTS.update(FACTCHECK_PANELISTS)
-        background(files, draft, panel, outdir, workdir)
+        background(files, draft, panel, outdir, workdir, shown)
         return
 
     rules, source = load_rules(a.rules)
@@ -1299,7 +1381,7 @@ def main():
     t = time.time()
     versions = [file_version(p, t, outdir, n) for p, t, n in zip(files, texts, numbers)]
     context = load_context(a.context) if a.context else None
-    unified = foreground(files, draft, panel, a.focus, rules, outdir, workdir, a.verify, versions, context)
+    unified = foreground(files, draft, panel, a.focus, rules, outdir, workdir, a.verify, versions, context, shown)
     log(f"review done in {round(time.time() - t)} s." + (
         " Fact-check still running; factcheck.md opens when it finishes." if a.verify else ""))
     open_file(unified)

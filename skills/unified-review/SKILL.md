@@ -22,6 +22,12 @@ comments, a call for proposals, a source paper, a style guide), pass it with
 Text files and PDFs work. An attachment that exists only in the chat must be
 saved to a temporary file first. Images are not supported yet: say so.
 
+The file to review can itself be a PDF. The script decides how the panel reads
+it: plain prose goes as text, and a PDF with figures, tables, or equations is
+opened by each panelist directly. Findings on a PDF cite pages, not lines. You
+cannot edit a PDF, so apply accepted changes to its source document, or tell
+the user where they go.
+
 The default panel is `claude,gpt,gemini` (Claude Sonnet, GPT-5.6 Luna at low
 effort, Gemini 3.8 Flash Low via cursor-agent). `grok` is also available. Pass
 `-p` only when the user names a panel. Pass `--verify` only when the user asks for a
@@ -41,6 +47,12 @@ findings. There is no cap on findings.
   macOS notification, and opens it. `unified.md` is not changed by the
   fact-check. Run the command with a timeout of at least 5 minutes. Do not wait
   for the fact-check before showing the review.
+- One model can take minutes longer than the others. The script waits for it,
+  and if a model fails it finishes with the rest and lists the failure in
+  `unified.md`. So wait for `unified.md`. If your own command times out first,
+  the run keeps going: wait until `unified.md` appears in the run folder. Never
+  read the raw `review-*.md` files and merge or summarize them yourself, and
+  never report a model as failed unless `unified.md` says so.
 - It needs network access and writes outside the sandbox. In Codex or Cursor,
   request escalated / unsandboxed execution for this command.
 - Output goes to a run folder under `~/.local/share/unified-review/runs/`, not
