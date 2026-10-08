@@ -29,7 +29,7 @@ A model call that times out, errors, or returns nothing gets one retry, except a
 3. **Render.** The script groups duplicates (two voters calling them duplicates, or one voter plus overlapping quoted text), keeps the best-voted version of each, sets aside findings a majority rejects, and writes `unified.md`. The file opens where you ran the command: in Cursor or VS Code if you ran it there, in your default Markdown app from a terminal. Inside the Claude or Codex app, the script prints `OPEN IN APP: <path>` and the skill has the agent show the file. Set `UNIFIED_REVIEW_OPEN_APP` to always use one app.
 4. **Fact-check (optional, `--verify`).** A detached background process lists the draft's checkable claims, has each panelist check them with web search, keeps the most cautious verdict per claim, writes `factcheck.md`, and opens it. A claim that the last fact-check of the same file confirmed, with its sentence unchanged, keeps that verdict and is marked as carried over instead of being checked again. Everything else is checked from scratch.
 
-The default panel is one model per lab, chosen for speed: Claude Sonnet (via `claude`), GPT-5.6 Luna at low effort (via `codex`), and Gemini 3.8 Flash Low (via `cursor-agent`). `grok` is also available. The fact-check uses stronger Claude and GPT models, since it runs in the background. Edit `PANELISTS` and `FACTCHECK_PANELISTS` at the top of `bin/unified-review` to change them.
+The default panel is one model per lab, chosen for speed: Claude Sonnet (via `claude`), GPT-5.6 Luna at low effort (via `codex`), and Gemini 3.8 Flash Low (via `cursor-agent`). If a panelist is unavailable or fails to review or vote, Grok 4.7 Low Fast (via `cursor-agent`) stands in, so three models still vote and ties can be broken. Grok cannot stand in for Gemini when `cursor-agent` itself is down, since both run through it. The fact-check uses stronger Claude and GPT models, since it runs in the background. Edit `PANELISTS` and `FACTCHECK_PANELISTS` at the top of `bin/unified-review` to change them.
 
 On one 1,300-word memo, a review took 40 to 120 seconds and the fact-check about 2 more minutes. Times depend on the models, the draft, and the providers' load.
 
@@ -59,6 +59,14 @@ unified-review --item 3,7,K2 [--run DIR]
 ```
 
 This prints the items from the newest run that reviewed a file in the current folder (else the last run made): the reviewed file's full path, whether it has changed since the review, each item's current line, the quoted text, the votes, the diff, and the whole current file with line numbers. The skill tells agents to run it before giving an opinion on an item or editing, so they work from the current text.
+
+To iterate, ask an agent to "iterate on FILE" (3 rounds by default) or "iterate 5 rounds". Each round it reviews, applies findings every voter agreed with plus Critical and Substantive findings a majority agreed with, records the rest as declined, and reviews again. It stops early when nothing qualifies, then lists the contested and whole-draft findings it skipped for you to decide. Each version is saved beside the file as `memo-v7.md`, `memo-v8.md`, and so on, with a pattern added to the repository's `.gitignore`. At the end, `memo-v7-to-v10.md` opens with every change since the start, ~~deleted~~ and 🟢 **added**, under its section heading. The two commands the loop uses also work alone:
+
+```
+unified-review --snapshot FILE
+unified-review --changes N FILE
+```
+
 
 ## Skills
 

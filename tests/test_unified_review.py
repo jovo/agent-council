@@ -1,5 +1,6 @@
 """Tests for unified-review. Run: python3 -m unittest discover tests"""
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -417,6 +418,88 @@ class PdfExtras(unittest.TestCase):
             box = self.pdf(d, "box.pdf", "100 300 300 200 rectfill showpage")
             self.assertEqual(ur.pdf_extras(text), [])
             self.assertIn("graphics", ur.pdf_extras(box))
+
+
+class Pipeline(unittest.TestCase):
+    """A whole review with fake model calls."""
+
+    def run_review(self, panel, fails=(), draft_text="The sky is green today. Grass grows slowly."):
+        prompts = {}
+
+        def fake_call(m, prompt, out, workdir, web=False, stage=""):
+            prompts.setdefault(stage, {})[m] = prompt
+            if m in fails or (stage, m) in fails:
+                ur.fail(stage, m, "fake failure")
+                return None
+            if stage == "review":
+                return (f"=== FINDING\nseverity: Substantive\ntitle: Sky color by {m}\n"
+                        "quote: The sky is green today.\n---\nThe sky is blue.")
+            ids = re.findall(r"^\[([A-H]\d+)\]", prompt, re.M)
+            return "\n".join(f"{i} | agree | Substantive | same:none | fine" for i in ids)
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            f = d / "memo.md"
+            f.write_text(draft_text)
+            out = d / "run"
+            out.mkdir()
+            draft = f"===== memo.md =====\n{draft_text}"
+            ur.FAILURES.clear()
+            with mock.patch.object(ur, "call", fake_call), mock.patch.object(ur, "RUNS_DIR", d), \
+                 mock.patch.object(ur, "LAST_RUN", d / "last-run"), \
+                 mock.patch.object(ur, "open_file", lambda p: None), mock.patch.object(ur, "log", lambda *a: None):
+                ur.foreground([f], draft, panel, "", "rules", out, d, False, [])
+            return prompts, json.loads((out / "results.json").read_text()), (out / "unified.md").read_text()
+
+    def test_voters_see_the_draft(self):
+        prompts, _, _ = self.run_review(["claude", "gpt", "gemini"])
+        for m, p in prompts["vote"].items():
+            self.assertIn("Grass grows slowly.", p.split("<draft>")[1], m)  # not in any quote
+
+    def test_grok_stands_in_for_a_failed_reviewer(self):
+        _, r, md = self.run_review(["claude", "gpt", "gemini"], fails=("claude",))
+        self.assertEqual(sorted(r["reviewers_ok"]), ["gemini", "gpt", "grok"])
+        self.assertEqual(sorted(r["voters"]), ["gemini", "gpt", "grok"])
+        self.assertIn("Failed: Claude", md)
+
+    def test_grok_stands_in_for_a_failed_voter(self):
+        _, r, _ = self.run_review(["claude", "gpt", "gemini"], fails=(("vote", "gpt"),))
+        self.assertEqual(sorted(r["reviewers_ok"]), ["claude", "gemini", "gpt"])
+        self.assertEqual(sorted(r["voters"]), ["claude", "gemini", "grok"])
+
+    def test_no_stand_in_when_all_succeed(self):
+        prompts, r, _ = self.run_review(["claude", "gpt", "gemini"])
+        self.assertNotIn("grok", r["panel"])
+        self.assertNotIn("grok", prompts["review"])
+
+
+class Iterating(unittest.TestCase):
+    def test_changes_format(self):
+        old = "# T\n\n## A\n\nField teams pair notebooks with sensors and are very useful.\n\nSame text.\n\nOld idea entirely here.\n"
+        new = "# T\n\n## A\n\nField teams pair notebooks with sensors and help.\n\nSame text.\n\nA completely different sentence now stands.\n\nAdded line.\n"
+        out = ur.changes(old, new)
+        self.assertEqual(out[0], "## A")
+        self.assertIn("Field teams pair notebooks with sensors and ~~are very useful.~~ 🟢 **help.**", out)
+        self.assertIn("~~Old idea entirely here.~~\n\n🟢 **A completely different sentence now stands.**", out)
+        self.assertIn("🟢 **Added line.**", out)
+        self.assertNotIn("Same text.", "\n".join(out))
+
+    def test_snapshot_names_and_ignores_copies(self):
+        if not shutil.which("git"):
+            self.skipTest("needs git")
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
+             mock.patch.object(ur, "log", lambda *a: None):
+            repo = Path(d) / "repo"
+            (repo / "docs").mkdir(parents=True)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            f = repo / "docs" / "memo.md"
+            f.write_text("One.\n")
+            self.assertEqual(ur.snapshot(f).name, "memo-v1.md")
+            f.write_text("Two.\n")
+            self.assertEqual(ur.snapshot(f).name, "memo-v2.md")
+            self.assertEqual((repo / ".gitignore").read_text(), "/docs/memo-v*.md\n")  # added once
+            out = ur.write_changes(f, "1")
+            self.assertEqual(out.name, "memo-v1-to-v2.md")
+            self.assertIn("~~One.~~", out.read_text())
 
 
 if __name__ == "__main__":

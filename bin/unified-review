@@ -71,8 +71,12 @@ PANELISTS = {
     "claude": ("claude", "sonnet", "Claude Sonnet"),
     "gpt": ("codex", "gpt-5.6-luna", "GPT-5.6 Luna"),
     "gemini": ("cursor", "gemini-3.8-flash-low", "Gemini 3.8 Flash Low"),
-    "grok": ("cursor", "grok-4.7-medium", "Grok 4.7"),
+    "grok": ("cursor", "grok-4.7-low-fast", "Grok 4.7 Low Fast"),
 }
+# Grok stands in when a panelist fails, so the panel keeps three voters and
+# can break ties. It runs through cursor-agent, so it cannot stand in for Gemini
+# when cursor-agent itself is down.
+STANDIN = "grok"
 # The fact-check runs in the background, so speed costs nothing there. Use the
 # stronger models for Claude and GPT (each CLI's default). Gemini stays on
 # Flash Low: Medium and High took 7-9 minutes here.
@@ -1073,6 +1077,12 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         timings[f"review_{m}"] = round(time.time() - t, 1)
         return fs
     found = {m: fs for m, fs in parallel(review, panel).items() if fs}
+    if len(found) < len(panel) and STANDIN not in panel:
+        log(f"  {STANDIN} stands in for {', '.join(m for m in panel if m not in found)}")
+        panel = panel + [STANDIN]
+        fs = review(STANDIN)
+        if fs:
+            found[STANDIN] = fs
     if not found:
         sys.exit("error: no reviewer produced findings")
     ok = [m for m in panel if m in found]
@@ -1086,13 +1096,13 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         for i, f in enumerate(fs, 1):
             flat.append({**f, "id": f"{letters[m]}{i}", "pos": position(dnorm, f["quote"])})
     flat.sort(key=lambda f: (f["pos"], f["id"]))
-    shown = "\n\n".join(
+    listed = "\n\n".join(
         f"[{f['id']}] ({f['severity']}) {f['title']}\nquote: {f['quote'] or '(none)'}\n{f['body']}" for f in flat)
     log(f"2/3 vote on {len(flat)} findings: {', '.join(ok)}")
 
     def vote(m):
         t = time.time()
-        prompt_v = VOTE.format(draft=shown, findings=shown, decided=decided,
+        prompt_v = VOTE.format(draft=shown, findings=listed, decided=decided,
                                context=(CONTEXT_INTRO + ctx_block) if ctx_block else "",
                                focus=f"\n<author_focus>\n{focus}\n</author_focus>\n" if focus else "")
         v = None
@@ -1106,6 +1116,12 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         timings[f"vote_{m}"] = round(time.time() - t, 1)
         return v or None
     votes = {m: v for m, v in parallel(vote, ok).items() if v}
+    if len(votes) < len(ok) and STANDIN not in panel:
+        log(f"  {STANDIN} stands in to vote for {', '.join(m for m in ok if m not in votes)}")
+        panel = panel + [STANDIN]
+        v = vote(STANDIN)
+        if v:
+            votes[STANDIN] = v
     if not votes:
         sys.exit("error: every voter failed")
     voters = [m for m in panel if m in votes]
@@ -1243,6 +1259,86 @@ def background(files, draft, panel, outdir, workdir, shown=None):
     open_file(outdir / "factcheck.md")
 
 
+# ---------------------------------------------------------------- iterating
+
+def snapshot(p):
+    """Save a copy of the file beside it, named by its version (memo-v8.md), and
+    make sure git ignores those copies. Returns the copy's path."""
+    p = Path(p).resolve()
+    n = version_number(p, fingerprint(doc_text(p)))
+    copy = p.with_name(f"{p.stem}-v{n}{p.suffix}")
+    shutil.copyfile(p, copy)
+    git = lambda *a: subprocess.run(["git", "-C", str(p.parent), *a], capture_output=True, text=True)
+    top = git("rev-parse", "--show-toplevel").stdout.strip()
+    if top and git("check-ignore", "-q", str(copy)).returncode != 0:
+        rel = p.parent.relative_to(top).as_posix()
+        line = f"/{rel + '/' if rel != '.' else ''}{p.stem}-v*{p.suffix}"
+        gi = Path(top) / ".gitignore"
+        old = gi.read_text() if gi.exists() else ""
+        gi.write_text(old + ("" if not old or old.endswith("\n") else "\n") + line + "\n")
+        log(f"added {line} to {gi}")
+    return copy
+
+
+def inline_diff(old, new):
+    """One paragraph's changes in the house format: ~~deleted~~ and 🟢 **added**.
+    A mostly rewritten paragraph is struck whole and followed by the new one."""
+    tok = lambda t: re.findall(r"\n|[^\s]+", t)
+    a, b = tok(old), tok(new)
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    if old and new and sm.ratio() < 0.5:
+        return f"~~{old.strip()}~~\n\n🟢 **{new.strip()}**"
+    join = lambda ts: " ".join(ts).replace(" \n ", "\n").replace("\n ", "\n").replace(" \n", "\n")
+    out = []
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == "equal":
+            out.append(join(a[i1:i2]))
+            continue
+        if i2 > i1:
+            out.append(f"~~{join(a[i1:i2]).strip()}~~")
+        if j2 > j1:
+            out.append(f"🟢 **{join(b[j1:j2]).strip()}**")
+    return join(out)
+
+
+def changes(old_text, new_text):
+    """The changed paragraphs of a document, each under its section heading."""
+    paras = lambda t: [x for x in re.split(r"\n\s*\n", t.strip()) if x.strip()]
+    a, b = paras(old_text), paras(new_text)
+    out, heading, shown = [], None, None
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op == "equal":
+            heading = next((x for x in reversed(b[j1:j2]) if x.startswith("#")), heading)
+            continue
+        if heading and heading != shown:
+            out.append(heading)
+            shown = heading
+        olds, news = a[i1:i2], b[j1:j2]
+        for k in range(max(len(olds), len(news))):
+            o = olds[k] if k < len(olds) else ""
+            n = news[k] if k < len(news) else ""
+            out.append(inline_diff(o, n) if o and n else f"~~{o.strip()}~~" if o else f"🟢 **{n.strip()}**")
+        heading = next((x for x in reversed(news) if x.startswith("#")), heading)
+    return out
+
+
+def write_changes(p, start):
+    """Write <stem>-v<start>-to-v<now> beside the file: what changed since version
+    <start>, whose copy snapshot() saved. Returns its path."""
+    p = Path(p).resolve()
+    old = p.with_name(f"{p.stem}-v{start}{p.suffix}")
+    if not old.exists():
+        sys.exit(f"error: no saved copy of version {start}: {old}")
+    now = version_number(p, fingerprint(doc_text(p)))
+    body = changes(old.read_text(), p.read_text())
+    out = p.with_name(f"{p.stem}-v{start}-to-v{now}{p.suffix}")
+    head = [f"# {p.name}: changes from version {start} to version {now}, {time.strftime('%Y-%m-%d %H:%M')}",
+            f"*{sum(not x.startswith('#') for x in body)} changed passages. ~~Struck~~ text was removed and 🟢 **bold** text was added.*"
+            if body else "*No changes.*"]
+    out.write_text("\n\n".join(head + body) + "\n")
+    return out
+
+
 # ---------------------------------------------------------------- main
 
 RULES_SECTION = "# Writing and review guidelines"
@@ -1298,6 +1394,10 @@ def main():
     ap.add_argument("--note", default="", help="your reason, stored with --ignore or --applied")
     ap.add_argument("--run", metavar="DIR",
                     help="run folder for --item (default: newest run for files in this folder)")
+    ap.add_argument("--snapshot", action="store_true",
+                    help="save a copy of FILE beside it named by its version (memo-v8.md)")
+    ap.add_argument("--changes", metavar="N",
+                    help="write and open what changed in FILE since saved version N")
     ap.add_argument("--factcheck-only", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args()
     if a.decisions:
@@ -1310,6 +1410,14 @@ def main():
             return
     if a.item:
         show_items(a.item, Path(a.run) if a.run else latest_run())
+        return
+    if a.snapshot or a.changes:
+        if len(a.files) != 1:
+            ap.error("--snapshot and --changes take one FILE")
+        out = snapshot(a.files[0]) if a.snapshot else write_changes(a.files[0], a.changes)
+        print(out)
+        if a.changes:
+            open_file(out)
         return
     if not a.files:
         ap.error("give at least one FILE to review")
@@ -1324,7 +1432,11 @@ def main():
     if not panel:
         sys.exit("error: no panelist CLIs found")
     if not a.factcheck_only:
+        wanted = len(panel)
         panel = preflight(panel)
+        if len(panel) < wanted and STANDIN not in panel and available(STANDIN) and preflight([STANDIN]):
+            log(f"{STANDIN} stands in for the panelist that is not available")
+            panel.append(STANDIN)
         if not panel:
             sys.exit("error: no panelist is logged in")
 

@@ -1,6 +1,6 @@
 ---
 name: unified-review
-description: Get independent reviews of a draft from a panel of models from different labs (Claude, GPT, Gemini), have them vote on each other's findings, and merge them into one review in draft order, with an optional web fact-check. Use when the user asks for a unified, combined, panel, tri-model, or multi-model review or feedback on a file. Also use when the user asks to address, apply, fix, accept, or skip numbered items (such as 3, 7, or K5) from a unified review or fact-check.
+description: Get independent reviews of a draft from a panel of models from different labs (Claude, GPT, Gemini), have them vote on each other's findings, and merge them into one review in draft order, with an optional web fact-check. Use when the user asks for a unified, combined, panel, tri-model, or multi-model review or feedback on a file. Also use when the user asks to address, apply, fix, accept, or skip numbered items (such as 3, 7, or K5) from a unified review or fact-check. Also use when the user asks to iterate: review, apply the changes, and review again for some number of rounds.
 ---
 
 # Unified review
@@ -29,7 +29,8 @@ cannot edit a PDF, so apply accepted changes to its source document, or tell
 the user where they go.
 
 The default panel is `claude,gpt,gemini` (Claude Sonnet, GPT-5.6 Luna at low
-effort, Gemini 3.8 Flash Low via cursor-agent). `grok` is also available. Pass
+effort, Gemini 3.8 Flash Low via cursor-agent). If one fails, Grok 4.7 Low Fast stands in automatically, so three models
+still vote. Pass
 `-p` only when the user names a panel. Pass `--verify` only when the user asks for a
 fact-check or claim verification.
 
@@ -128,3 +129,44 @@ right?".
    holds back findings that repeat a declined point while its text is unchanged.
 8. Afterward, list what changed by item number, with the file and line. Do not
    commit.
+
+## Iterating
+
+Use this when the user asks to review, apply the changes, and repeat ("iterate
+on memo.md", "iterate 5 rounds", "keep going until it's clean"). Run it without
+stopping to ask between rounds.
+
+1. Rounds: 3 unless the user gives a number. Before the first round, run
+   `unified-review --snapshot FILE`. It saves the starting text beside the file
+   as `<name>-v<N>` (for example `memo-v7.md`) and adds a pattern for these
+   copies to the repository's `.gitignore`. Note N: it is the starting version.
+2. Each round, run `unified-review FILE` (no `--verify` unless asked) and wait
+   for `unified.md`. Then run `unified-review --item` with every finding number,
+   and work from its current text, as in "Addressing items".
+3. Apply a finding only if it is in the review's main list (not rejected) and
+   either:
+   - every voter agreed (every vote is ✓), or
+   - it is Critical or Substantive and a majority of voters agreed (more ✓
+     than half the votes; ~ counts as not agreeing).
+   Skip everything else, and always skip contested findings, whole-draft
+   findings, and findings whose quoted text is no longer in the file. Do not
+   ask about skipped findings during the loop.
+4. Apply edits as in "Addressing items" (minimal, at the current line, fixed
+   to the user's writing rules). Then record every decision:
+   `unified-review --applied <numbers>` and
+   `unified-review --ignore <numbers> --note "auto-loop: skipped"`. This keeps
+   later rounds from raising them again. The user can bring one back with
+   `--unignore`. Then run `unified-review --snapshot FILE` to save the new
+   version beside the file.
+5. Stop early when a round has nothing to apply. Stop if a round's applied
+   change would undo an earlier round's change: skip that finding and say so.
+6. Do not commit.
+7. When the loop ends, run `unified-review --changes N FILE` with the starting
+   version N. It writes `<name>-v<N>-to-v<M>` beside the file: every changed
+   passage under its section heading, ~~deleted~~ and 🟢 **added**, and opens
+   it (or prints `OPEN IN APP:`, which you handle as for `unified.md`).
+8. Then give one summary: for each round, the version reviewed, the
+   finding numbers applied (with a few words each), and how many were skipped.
+   Then list the skipped findings worth the user's attention: Critical or
+   Substantive findings that were contested or whole-draft, with the run folder
+   so the user can address them by number (`--run DIR`).
