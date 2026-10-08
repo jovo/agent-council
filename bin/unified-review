@@ -135,7 +135,10 @@ def available(name):
 
 # Every failed panelist step, with its reason, for results.json and the reports.
 FAILURES = []
-AUTH_ERROR = re.compile(r"log ?in|logged out|not logged|auth|api key|unauthori[sz]ed|credential", re.I)
+# Login failures, matched only in the end of the log: CLIs echo the prompt into
+# it, and a draft can say "authorized" or "log in" anywhere.
+AUTH_ERROR = re.compile(r"not logged in|logged out|please (?:log ?in|sign in)|log ?in required|"
+                        r"unauthori[sz]ed|invalid api key|authentication (?:failed|required)|\b401\b", re.I)
 
 
 def fail(stage, name, reason):
@@ -200,7 +203,7 @@ def call_once(name, prompt, out, workdir, web):
         return text, None
     stderr = err.read_text().strip()
     first = (stderr.splitlines() or [""])[0][:120]
-    if AUTH_ERROR.search(stderr + " " + text[:300]):
+    if AUTH_ERROR.search("\n".join(stderr.splitlines()[-15:])):
         return None, f"not logged in ({first})" if first else "not logged in"
     if r.returncode != 0:
         return None, f"exit code {r.returncode}" + (f": {first}" if first else "")

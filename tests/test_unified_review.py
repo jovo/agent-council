@@ -502,5 +502,12 @@ class Iterating(unittest.TestCase):
             self.assertIn("~~One.~~", out.read_text())
 
 
+class AuthErrors(unittest.TestCase):
+    def test_draft_words_are_not_login_errors(self):
+        self.assertIsNone(ur.AUTH_ERROR.search("Records stay local unless authorized. Users log in to the app."))
+        for msg in ["Error: not logged in", "401 Unauthorized", "Please log in with codex login", "Invalid API key"]:
+            self.assertIsNotNone(ur.AUTH_ERROR.search(msg), msg)
+
+
 if __name__ == "__main__":
     unittest.main()
