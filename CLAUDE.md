@@ -152,13 +152,6 @@ For a new method, include at least one setting where it underperforms the baseli
 
 Reviewer instructions for feedback on drafts. This covers verification and how findings get reported.
 
-### Fact-checking
-
-- Claims new or changed since the last review get full verification (web search and citation check).
-- Claims carried over from a version that already passed get a spot-check (plausibility and citation format), unless something looks wrong on inspection.
-- Tag every checked claim: `[confirmed: source]`, `[plausible, unverified]`, or `[unverifiable: recommend cut or hedge]`. Do not pass a claim through silently.
-- Verify every URL resolves before citing it. Apply the same check to figure sources and text citations.
-
 ### What to flag
 
 - Logical gaps, overstated claims, unaddressed counterarguments, internal redundancy.

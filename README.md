@@ -16,16 +16,16 @@ So agent-council does not let any one model decide. Each model reviews independe
 unified-review [-n FOCUS] [-p PANEL] [--context FILE]... [--verify] [--rules FILE] [-o OUTDIR] FILE [FILE...]
 ```
 
-Before starting, the script checks that each CLI is logged in, using its status command, and drops any panelist that is not.
+Before starting, the script checks that each CLI is installed and logged in, using its status command. A panelist whose CLI is missing or logged out is dropped and listed as failed in `unified.md`, so a model never drops out silently.
 
-`--context FILE` adds supporting material that every panelist reads but does not review, such as reviewer comments, a call for proposals, or a source paper. Text files and PDFs work (PDFs through `pdftotext`). Very long material is trimmed to fit the prompt.
+`--context FILE` adds supporting material that every panelist reads but does not review, such as reviewer comments, a call for proposals, or a source paper. Text files and PDFs work (PDFs through `pdftotext`). Very long material is trimmed to fit the prompt. Voters see it too, and a finding that quotes it is listed under the focus or supporting material.
 
 1. **Review.** Each panelist reviews the draft without web search. Findings come back in a fixed format: severity, title, the exact text targeted, then the point and an inline diff.
 2. **Vote.** Each panelist votes agree, partial, or disagree on every finding, sees reviewers only as A, B, C, and flags duplicates.
 A model call that times out, errors, or returns nothing gets one retry, except after a login error. A reply in the wrong format also gets one retry.
 
 3. **Render.** The script groups duplicates (two voters calling them duplicates, or one voter plus overlapping quoted text), keeps the best-voted version of each, sets aside findings a majority rejects, and writes `unified.md`. The file opens where you ran the command: in Cursor or VS Code if you ran it there, in your default Markdown app from a terminal. Inside the Claude or Codex app, the script prints `OPEN IN APP: <path>` and the skill has the agent show the file. Set `UNIFIED_REVIEW_OPEN_APP` to always use one app.
-4. **Fact-check (optional, `--verify`).** A detached background process lists the draft's checkable claims, has each panelist check them with web search, keeps the most cautious verdict per claim, writes `factcheck.md`, and opens it.
+4. **Fact-check (optional, `--verify`).** A detached background process lists the draft's checkable claims, has each panelist check them with web search, keeps the most cautious verdict per claim, writes `factcheck.md`, and opens it. A claim that the last fact-check of the same file confirmed, with its sentence unchanged, keeps that verdict and is marked as carried over instead of being checked again. Everything else is checked from scratch.
 
 The default panel is one model per lab, chosen for speed: Claude Sonnet (via `claude`), GPT-5.6 Luna at low effort (via `codex`), and Gemini 3.8 Flash Low (via `cursor-agent`). `grok` is also available. The fact-check uses stronger Claude and GPT models, since it runs in the background. Edit `PANELISTS` and `FACTCHECK_PANELISTS` at the top of `bin/unified-review` to change them.
 
@@ -81,14 +81,14 @@ Each decision goes into `decisions.json` in the runs folder, per reviewed file. 
 
 ## PDFs
 
-`make-pdf FILE.md` builds a PDF in a consistent style: New Computer Modern (Sans Bold headings, Book body, Book math), 1 in margins, 11 pt, justified, two-tone links, a rule under each table row, and references on a new page. It passes pandoc only the cited bibliography entries. `install.sh` installs the fonts. The style lives in `typeset/pdf-preamble.tex` and `typeset/pdf-filters.lua`, which a project with its own build can include.
+`make-pdf FILE.md` builds a PDF in a consistent style: New Computer Modern (Sans Bold headings, Book body, Book math), 1 in margins, 11 pt, justified, two-tone links, a rule under each table row, and references on a new page (set `references-page-break: false` in the front matter to keep them inline). It passes pandoc only the cited bibliography entries, and builds anyway, without a reference list, when the bibliography cannot be read. SVG figures are converted on the fly. `install.sh` installs the fonts. The style lives in `typeset/pdf-preamble.tex` and `typeset/pdf-filters.lua`, which a project with its own build can include.
 
 ## Install
 
 You need Python 3.9 or later, macOS (the script uses `open` and notifications), and these CLIs, logged in:
 
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) (`claude`)
-- [Codex CLI](https://github.com/openai/codex) (`codex`, or the copy inside the ChatGPT app)
+- [Codex CLI](https://github.com/openai/codex) (`codex`, or the copy inside the ChatGPT app, which the script finds on its own)
 - [Cursor CLI](https://cursor.com/cli) (`cursor-agent`)
 
 Then:
@@ -99,7 +99,7 @@ cd agent-council
 ./install.sh
 ```
 
-`install.sh` links `unified-review` into `~/.local/bin` and the skill into `~/.claude/skills`, `~/.codex/skills`, and `~/.cursor/skills`. It does not overwrite real files.
+`install.sh` links `unified-review` and `make-pdf` into `~/.local/bin`, links every skill into `~/.claude/skills`, `~/.codex/skills`, and `~/.cursor/skills`, and installs the fonts into `~/Library/Fonts`. It does not overwrite real files. If a CLI lives somewhere unusual, set `CLAUDE_BIN`, `CODEX_BIN`, or `CURSOR_BIN` to its path.
 
 ## Review rules
 
@@ -113,6 +113,7 @@ Reviewers follow a set of review rules. The first one found wins: `--rules FILE`
 - Grouping duplicates depends on voters flagging them. Two findings that make the same point about different sentences can both survive.
 - Anonymizing reviewers reduces self-preference but does not remove it, since models can recognize their own text. Voting by all panelists limits how much any one model's bias moves the result.
 - Reviews run without web search. Factual claims are tagged unverified unless you run `--verify`.
+- A carried-over confirmation is not rechecked, so a source that later moves or changes goes unnoticed until the sentence changes.
 - The fact-check marks a claim with the most cautious verdict across checkers. A checker that fails to find a source pulls a claim down to "plausible" even when another confirmed it.
 
 ## Tests

@@ -375,6 +375,8 @@ Reply with one line per claim and nothing else:
 VERIFY = """Fact-check each claim below, taken from the draft that follows. Use web
 search. For a cited claim, check that the cited source says it. Prefer the
 published version of a paper over a preprint.
+Open every URL you report and check that it resolves. Check figure sources the
+same way.
 
 Verdicts:
 - confirmed: a source you opened supports the claim (and the citation, if any).
@@ -724,6 +726,8 @@ def fc_note(c, fc_labels):
              if r and r[0].lower() in ("contradicted", "unverifiable")]
     if notes:
         out += "\n\n" + "\n".join(notes)
+    if c.get("carried"):
+        out += f"\n\nCarried over from {c['carried']}, not rechecked."
     if c["urls"]:
         out += "\n\nSources: " + " ".join(f"[{i}]({u})" for i, u in enumerate(c["urls"], 1))
     return out
@@ -1071,6 +1075,27 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
 
 # ---------------------------------------------------------------- background
 
+def confirmed_before(files, outdir, dnorm):
+    """Claims the newest earlier fact-check of these files confirmed, whose quoted
+    text is still in the draft: {normalized quote: (claim row, run name)}."""
+    names, runs = [str(p) for p in files], []
+    for fj in RUNS_DIR.glob("*/factcheck.json"):
+        rj = fj.parent / "results.json"
+        if fj.parent == outdir or not rj.exists():
+            continue
+        try:
+            if json.loads(rj.read_text()).get("files") == names:
+                runs.append(fj)
+        except ValueError:
+            continue
+    if not runs:
+        return {}
+    last = max(runs, key=lambda p: p.stat().st_mtime)
+    rows = json.loads(last.read_text()).get("claims", [])
+    return {norm(c["quote"]): (c, c.get("carried") or last.parent.name) for c in rows
+            if c["verdict"] == "confirmed" and c.get("pos") is not None and norm(c["quote"]) and norm(c["quote"]) in dnorm}
+
+
 def background(files, draft, panel, outdir, workdir):
     timings = {}
     t0 = time.time()
@@ -1083,9 +1108,13 @@ def background(files, draft, panel, outdir, workdir):
         if claims:
             lead = m
             break
-    rows, checkers = [], []
+    rows, checkers, carried = [], [], {}
     if claims:
-        listing = "\n".join(f"{k} | {c} | {cite}" for k, (_, c, cite) in claims.items())
+        # A claim an earlier run confirmed, with its text unchanged, keeps that verdict.
+        dnorm = norm(draft)
+        before = confirmed_before(files, outdir, dnorm)
+        carried = {k: before[norm(q)] for k, (q, _, _) in claims.items() if norm(q) in before}
+        listing = "\n".join(f"{k} | {c} | {cite}" for k, (_, c, cite) in claims.items() if k not in carried)
 
         def verify(m):
             t = time.time()
@@ -1095,10 +1124,16 @@ def background(files, draft, panel, outdir, workdir):
                 fail("verify", m, "reply had no claim lines in the expected format")
             timings[f"verify_{m}"] = round(time.time() - t, 1)
             return parse_rows(r, 4) or None
-        checks = {m: c for m, c in parallel(verify, panel).items() if c}
+        checks = {m: c for m, c in parallel(verify, panel).items() if c} if listing else {}
         checkers = [m for m in panel if m in checks]
-        dnorm = norm(draft)
         for k, (quote, claim, cite) in claims.items():
+            if k in carried:
+                old, run = carried[k]
+                pos = position(dnorm, quote)
+                rows.append({"k": k, "quote": quote, "claim": claim, "cite": cite, "per": old["per"],
+                             "verdict": "confirmed", "urls": old["urls"], "carried": run,
+                             "pos": pos if pos < len(dnorm) else None})
+                continue
             per = {m: checks[m].get(k) for m in checkers}
             vs = [p[0].lower() for p in per.values() if p and p[0].lower() in VERDICTS]
             pos = position(dnorm, quote)
@@ -1113,7 +1148,9 @@ def background(files, draft, panel, outdir, workdir):
     md = [f"# Fact-check: {', '.join(p.name for p in files)}",
           f"*{len(rows)} claims listed by {labels[lead]}, checked with web search by "
           f"{', '.join(labels[m] for m in checkers) or 'nobody'}. Each verdict is the most "
-          f"cautious across checkers. Ran {round(time.time() - t0)} s. "
+          f"cautious across checkers. "
+          + (f"{len(carried)} confirmed claims with unchanged text kept their earlier verdict. " if carried else "")
+          + f"Ran {round(time.time() - t0)} s. "
           + ", ".join(f"{n} {v}" for v, n in counts.items() if n) + ".*"]
     md += participation(FAILURES, [("checked claims", checkers)],
                         lambda ms: ", ".join(labels.get(m, m) for m in ms),

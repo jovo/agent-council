@@ -357,5 +357,49 @@ class Context(unittest.TestCase):
             ur.load_context([self.tmp / "photo.png"])
 
 
+class FactcheckCarryOver(unittest.TestCase):
+    """A rerun keeps confirmed verdicts for unchanged claims and rechecks the rest."""
+
+    def run_fc(self, runs, name, draft_text, prompts):
+        run = runs / name
+        run.mkdir()
+        f = runs / "memo.md"
+        f.write_text(draft_text)
+        (run / "results.json").write_text(json.dumps({"files": [str(f)]}))
+        draft = f"===== memo.md =====\n{draft_text}"
+
+        def fake_call(m, prompt, out, workdir, web=False, stage=""):
+            if stage == "claims":
+                s1, s2 = [x.strip() + "." for x in draft_text.split(".")[:2]]
+                return f"K1 | {s1} | sky is blue | none\nK2 | {s2} | boiling point | none"
+            prompts.append(prompt)
+            return "\n".join(f"{k} | confirmed | https://x.org | ok" for k in ("K1", "K2") if k + " |" in prompt)
+        with mock.patch.object(ur, "call", fake_call), \
+             mock.patch.object(ur, "open_file", lambda p: None), \
+             mock.patch.object(ur.subprocess, "run", lambda *a, **k: None):
+            ur.background([f], draft, ["claude"], run, runs)
+        return json.loads((run / "factcheck.json").read_text()), (run / "factcheck.md").read_text()
+
+    def test_unchanged_confirmed_claim_is_carried_over(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d)):
+            runs, first, second = Path(d), [], []
+            self.run_fc(runs, "memo-v1", "The sky is blue. Water boils at 90 C.", first)
+            fc, md = self.run_fc(runs, "memo-v2", "The sky is blue. Water boils at 90 C.", second)
+            self.assertEqual(len(second), 0)  # nothing left to check
+            self.assertTrue(all(c["carried"] == "memo-v1" for c in fc["claims"]))
+            self.assertIn("Carried over from memo-v1", md)
+
+    def test_changed_claim_is_rechecked(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d)):
+            runs, first, second = Path(d), [], []
+            self.run_fc(runs, "memo-v1", "The sky is blue. Water boils at 80 C.", first)
+            fc, _ = self.run_fc(runs, "memo-v2", "The sky is blue. Water boils at 90 C.", second)
+            self.assertEqual(len(second), 1)
+            self.assertIn("K2 |", second[0])
+            self.assertNotIn("K1 |", second[0])
+            carried = {c["k"]: c.get("carried") for c in fc["claims"]}
+            self.assertEqual(carried, {"K1": "memo-v1", "K2": None})
+
+
 if __name__ == "__main__":
     unittest.main()
