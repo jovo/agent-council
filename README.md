@@ -75,6 +75,8 @@ unified-review --changes N FILE
 `install.sh` links every folder in `skills/` into Claude Code, Codex, and Cursor, which load a skill when a task matches its description:
 
 - `unified-review`: run the panel review and act on its findings by number.
+- `logic`: check the logic of an argument from the document's arc down to a single sentence: missing premises, non sequiturs, unaddressed alternatives, over- and underclaims. Reviews also check it.
+- `statistics`: experimental design and inference from data, as two halves of what a study can conclude: controls, units of replication, fair method comparisons, and the inference errors that follow from design. Reviews also check it.
 - `figures`: rules for making, styling, captioning, and sourcing figures. Reviews also check them.
 - `documents`: equations, citations, and tables in Markdown documents. Reviews also check them.
 - `papers-and-proposals`: structuring papers, grants, summaries, and rebuttals, from Mensh and Kording (2017) and the bitsandbrains.io posts.

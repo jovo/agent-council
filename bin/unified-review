@@ -1347,7 +1347,7 @@ def write_changes(p, start):
 RULES_SECTION = "# Writing and review guidelines"
 
 
-REVIEW_SKILLS = ["figures", "documents"]  # their rules apply to drafts under review
+REVIEW_SKILLS = ["logic", "statistics", "figures", "documents"]  # their rules apply to drafts under review
 
 
 def with_figure_rules(rules):

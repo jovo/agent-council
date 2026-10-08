@@ -66,7 +66,7 @@ that change.
 Default to markdown (.md) for documents. Marp markdown for slide decks.
 Don't produce .docx or .pptx unless I explicitly ask.
 
-Some tasks have their own skills in `~/github/agent-council/skills`: `figures`, `documents` (equations, citations, tables), `papers-and-proposals`, `pdf`, and `slides`. Load the matching skill for those tasks.
+Some tasks have their own skills in `~/github/agent-council/skills`: `logic` (the logic of an argument), `statistics` (experimental design and inference from data), `figures`, `documents` (equations, citations, tables), `papers-and-proposals`, `pdf`, and `slides`. Load the matching skill for those tasks.
 
 # Engineering conventions (for code work)
 
@@ -119,10 +119,9 @@ specific than these global defaults. Preserve the current source of truth rather
 than recreating it from memory.
 
 For experiments, persist results in human-readable data files and generate figures
-from them. Record training and inference time. Compare methods fairly, state the
-baseline and sample count, and show uncertainty when repetitions support it.
-
-For a new method, include at least one setting where it underperforms the baseline, and explain why. Benchmark on the settings the baseline papers used, and reproduce their published numbers before comparing. Compare methods per seed or per fold on the same splits, and report the paired differences, not only the gap between means.
+from them. Record training and inference time. Design experiments and draw
+conclusions from them with the `statistics` skill: it covers fair comparisons,
+baselines, controls, and what each design lets you conclude.
 
 # Writing and review guidelines
 
@@ -137,8 +136,8 @@ For a new method, include at least one setting where it underperforms the baseli
   - **Necessity framing:** requires, needs, necessary, must, should. State what an approach addresses, permits, or supports. Do not turn a theorem's assumptions into a broad claim of necessity.
 
   When the user's own copy uses one of these, point it out and offer a bounded alternative before applying it. Keep literal requirements, direct quotations, and technical names unchanged.
-- **Paragraphs.** Each paragraph carries one idea, stated in its first sentence. Later sentences develop it, and the last sentence leads into the next paragraph. Do not signpost ("Next, we...", "In this section..."). Let paragraph order carry the structure. Keep tense consistent within a paragraph, and use past tense only for completed work: results, experiments, prior papers.
-- **Names.** Give each concept one name and use it everywhere. Use the field's existing term and notation, or say why you depart from it. Name the referent of "this", "it", or "they" when more than one noun could fit.
+- **Logic first.** Check that each step of an argument follows before checking style, when drafting and when reviewing. The `logic` skill covers the document's arc, sections, paragraphs, sentences, names, and inferences from data.
+- **Signposts and tense.** Do not signpost ("Next, we...", "In this section..."). Let paragraph order carry the structure. Keep tense consistent within a paragraph, and use past tense only for completed work: results, experiments, prior papers.
 - Do not call work novel or first. Let the comparison to prior work show it.
 - **Knowledge, beliefs, and skills.** Knowledge includes know-that and know-how. Know-that is beliefs, including believed facts and memories. Know-how is skills. Do not write "knowledge and skills" as if skills were separate from knowledge. Use "beliefs and skills" when naming the two kinds, or "knowledge" when the distinction does not matter.
 
