@@ -7,7 +7,7 @@ alwaysApply: true
 
 These are the author's public agent instructions: `~/github/agent-council/CLAUDE.md`. Edit this file directly.
 
-
+Claude Code imports it from `~/.claude/CLAUDE.md`. Codex and Cursor read it through links: `~/.codex/AGENTS.md`, `~/.cursor/rules/agent-instructions.mdc`, and `~/.agent-instructions.md`. `~/github/agent-council/install.sh` links `unified-review`, `make-pdf`, and each skill in `skills/` for all three.
 
 Project-level `CLAUDE.md` / `AGENTS.md` files remain for repo-specific rules and override or supplement this file when more specific.
 

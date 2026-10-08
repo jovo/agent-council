@@ -121,6 +121,7 @@ Reviewers follow a set of review rules. The first one found wins: `--rules FILE`
 
 ## CLAUDE.md
 
+`CLAUDE.md` is the author's general instructions for coding agents: communication, sourcing, engineering, writing, and review. It is here as an example, not something the tool needs.
 
 ## Limits
 
