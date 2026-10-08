@@ -3,7 +3,7 @@
 #
 # Usage: make-pdf FILE.md [MORE.md ...] [-o OUT.pdf] [--csl STYLE.csl] [-- PANDOC ARGS]
 #
-# Latin Modern body and math, General Sans headings (when installed), 1in
+# New Computer Modern (Sans Bold headings, Book body and math), 1in
 # margins, 11pt, justified, two-tone links, Google Docs list markers, a rule
 # under each table row, no title page. Citations resolve when the document's
 # front matter names a bibliography (or pass --bibliography after --).

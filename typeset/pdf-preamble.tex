@@ -35,10 +35,9 @@
 \titlespacing*{\subsubsection}{0pt}{2.6ex plus 1ex minus .2ex}{0.9ex plus .2ex}
 \titlespacing*{\paragraph}{0pt}{2.2ex plus 1ex minus .2ex}{0.7ex plus .2ex}
 
-% ---- Characters Latin Modern's text font lacks ---------------------------
+% ---- Characters the text font lacks --------------------------------------
 % Typed directly in prose (fine in Markdown and HTML), these would print as
 % blanks. Draw them from the math font or pifont instead.
-\usepackage{iftex}  % \ifPDFTeX: pdflatex (make-pdf default) or XeTeX (fallback)
 \usepackage{amssymb}
 \usepackage{pifont}
 \usepackage{newunicodechar}
@@ -71,11 +70,14 @@
   \newunicodechar{⇒}{\sym{21D2}}
   \newunicodechar{↗}{\sym{2197}}
   \newunicodechar{↘}{\sym{2198}}
-  % Primes (′ ″) are left to unicode-math, which handles them in math. Typed in
-  % prose they print blank on this rare fallback path.
+  % Primes: unicode-math handles them in math, so draw them from the math
+  % font only in prose.
+  \AtBeginDocument{\newunicodechar{′}{\ifmmode\prime\else\sym{2032}\fi}%
+    \newunicodechar{″}{\ifmmode\dprime\else\sym{2033}\fi}}
 \fi
 \newunicodechar{⧵}{\ensuremath{\setminus}}
-% unicode-math (XeTeX) maps \setminus to U+29F5, which latinmodern-math lacks.
+% unicode-math (XeTeX) maps \setminus to U+29F5. Latin Modern math lacked it.
+% New Computer Modern math has it, so this is a harmless leftover.
 \ifPDFTeX\else\AtBeginDocument{\def\setminus{\mathbin{\backslash}}}\fi
 
 % ---- Tables -------------------------------------------------------------
