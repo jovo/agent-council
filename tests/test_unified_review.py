@@ -322,5 +322,40 @@ class Decisions(unittest.TestCase):
         self.assertEqual(ur.parse_votes("A1 | agree | Polish | same:D3 | repeats it")["A1"]["same"], "D3")
 
 
+class Context(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def test_text_and_pdf_reach_the_prompts(self):
+        (self.tmp / "comments.md").write_text("Reviewer 2: the bandwidth claim lacks a baseline.")
+        (self.tmp / "call.pdf").write_bytes(b"%PDF-1.4 fake")
+        fake = lambda cmd, **k: SimpleNamespace(returncode=0, stdout="Call text: aims must be testable.")
+        with mock.patch.object(ur.subprocess, "run", fake):
+            block, text, names = ur.load_context([self.tmp / "comments.md", self.tmp / "call.pdf"])
+        self.assertEqual(names, ["comments.md", "call.pdf"])
+        self.assertIn("Reviewer 2", text)
+        self.assertIn('<supporting_material file="call.pdf">', block)
+        prompt = ur.review_prompt("draft text", "", "rules", "", block)
+        self.assertIn("not under review", prompt)
+        self.assertIn("aims must be testable", prompt)
+        vote = ur.VOTE.format(draft="d", findings="f", decided="", focus="", context=ur.CONTEXT_INTRO + block)
+        self.assertIn("Reviewer 2", vote)
+
+    def test_long_material_is_trimmed(self):
+        (self.tmp / "big.txt").write_text("x" * (ur.MAX_CONTEXT + 50_000))
+        with mock.patch("builtins.print"):
+            block, text, _ = ur.load_context([self.tmp / "big.txt"])
+        self.assertLess(len(text), ur.MAX_CONTEXT + 100)
+        self.assertIn("truncated", text)
+
+    def test_binary_files_are_refused(self):
+        (self.tmp / "photo.png").write_bytes(bytes(range(256)) * 4)
+        with self.assertRaises(SystemExit):
+            ur.load_context([self.tmp / "photo.png"])
+
+
 if __name__ == "__main__":
     unittest.main()

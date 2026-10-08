@@ -13,10 +13,12 @@ So agent-council does not let any one model decide. Each model reviews independe
 ## How it works
 
 ```
-unified-review [-n FOCUS] [-p PANEL] [--verify] [--rules FILE] [-o OUTDIR] FILE [FILE...]
+unified-review [-n FOCUS] [-p PANEL] [--context FILE]... [--verify] [--rules FILE] [-o OUTDIR] FILE [FILE...]
 ```
 
 Before starting, the script checks that each CLI is logged in, using its status command, and drops any panelist that is not.
+
+`--context FILE` adds supporting material that every panelist reads but does not review, such as reviewer comments, a call for proposals, or a source paper. Text files and PDFs work (PDFs through `pdftotext`). Very long material is trimmed to fit the prompt.
 
 1. **Review.** Each panelist reviews the draft without web search. Findings come back in a fixed format: severity, title, the exact text targeted, then the point and an inline diff.
 2. **Vote.** Each panelist votes agree, partial, or disagree on every finding, sees reviewers only as A, B, C, and flags duplicates.

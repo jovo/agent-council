@@ -13,8 +13,14 @@ in the repo.
 Run the script on the file(s) the user names:
 
 ```bash
-unified-review [-n "extra focus"] [-p PANEL] [--verify] [-o OUTDIR] FILE [FILE...]
+unified-review [-n "extra focus"] [-p PANEL] [--context FILE]... [--verify] [-o OUTDIR] FILE [FILE...]
 ```
+
+If the user attaches or names supporting material with the request (reviewer
+comments, a call for proposals, a source paper, a style guide), pass it with
+`--context FILE`, once per file. The panel reads it but does not review it.
+Text files and PDFs work. An attachment that exists only in the chat must be
+saved to a temporary file first. Images are not supported yet: say so.
 
 The default panel is `claude,gpt,gemini` (Claude Sonnet, GPT-5.6 Luna at low
 effort, Gemini 3.8 Flash Low via cursor-agent). `grok` is also available. Pass
