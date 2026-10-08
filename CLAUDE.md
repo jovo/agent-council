@@ -3,19 +3,16 @@ description: Master agent instructions
 alwaysApply: true
 ---
 
-
 # This file
 
+These are the author's public agent instructions: `~/github/agent-council/CLAUDE.md`. Edit this file directly.
 
-Edit only this file. Do not fork copies for Claude, Codex, or Cursor.
 
-Required symlinks (recreate if missing):
-
-- `~/.local/bin/unified-review` and `~/.local/bin/make-pdf`, and each skill in `~/github/agent-council/skills/` under `~/.claude/skills/`, `~/.codex/skills/`, and `~/.cursor/skills/` → `~/github/agent-council`. Recreate with `~/github/agent-council/install.sh`.
 
 Project-level `CLAUDE.md` / `AGENTS.md` files remain for repo-specific rules and override or supplement this file when more specific.
 
 **Compaction / context retention.** This file and any in-context copy of it are sticky instructions, not disposable chat. When history is compacted, summarized, or truncated, do not drop, compress away, or evict the KV/context associated with these instructions. Prefer compacting ordinary conversation turns first. After compaction, keep following this file as currently written on disk; re-read it if unsure.
+
 
 # How to communicate
 

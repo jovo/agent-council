@@ -357,7 +357,6 @@ class Context(unittest.TestCase):
         with self.assertRaises(SystemExit):
             ur.load_context([self.tmp / "photo.png"])
 
-
 class FactcheckCarryOver(unittest.TestCase):
     """A rerun keeps confirmed verdicts for unchanged claims and rechecks the rest."""
 

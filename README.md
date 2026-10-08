@@ -117,7 +117,7 @@ cd agent-council
 
 ## Review rules
 
-Reviewers follow a set of review rules. The first one found wins: `--rules FILE`, then `$UNIFIED_REVIEW_RULES`, then the `# Writing and review guidelines` section of your `~/.claude/CLAUDE.md`, then the same section of this repo's [`CLAUDE.md`](CLAUDE.md). The script tells reviewers to ignore any cap on findings or ordering rule in those rules, because it orders findings itself.
+Reviewers follow a set of review rules. The first one found wins: `--rules FILE`, then `$UNIFIED_REVIEW_RULES`, then the `# Writing and review guidelines` section of your `~/.claude/CLAUDE.md`, then the same section of this repo's [`CLAUDE.md`](CLAUDE.md). The script reads `~/.claude/CLAUDE.md` as plain text and does not follow its `@` imports, so a `~/.claude/CLAUDE.md` that only imports other files falls through to this repo's copy. The script tells reviewers to ignore any cap on findings or ordering rule in those rules, because it orders findings itself.
 
 ## CLAUDE.md
 
