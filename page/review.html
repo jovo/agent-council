@@ -354,7 +354,14 @@ function editBlock(el) {
 
 function renderCard() {
   const el = document.getElementById("card"), f = S.findings.find(x => x.n === cur);
-  if (!f) { el.innerHTML = '<div class="meta">No findings match these filters.</div>'; return; }
+  if (!f) {
+    const done = S.findings.filter(x => x.status).length;
+    el.innerHTML = S.findings.length && done === S.findings.length && filt.status === "Open"
+      ? `<div class="meta">All ${done} findings are done (${S.findings.filter(x => x.status === "accepted").length} accepted, ${S.findings.filter(x => x.status === "declined").length} declined). <a id="showdone" style="cursor:pointer">Show them</a> or click Update for a new review.</div>`
+      : '<div class="meta">No findings match these filters.</div>';
+    const sd = document.getElementById("showdone"); if (sd) sd.onclick = () => { filt.status = "All"; render(); };
+    return;
+  }
   const votes = f.votes.map(v => (v.raised ? `<b>${v.model}</b>` : v.model) + " " + ({agree: "✓", partial: "~", disagree: "✗"}[v.vote] || "?")).join(" · ");
   let actions = "";
   if (!f.status) {
