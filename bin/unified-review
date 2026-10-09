@@ -1068,13 +1068,19 @@ def conversion_gaps(pdf, md):
     return sorted((a - b).elements()), sorted((b - a).elements())
 
 
+def converted_path(p, text=None):
+    """Where a PDF's Markdown copy lives, named by the PDF's text."""
+    text = doc_text(p) if text is None else text
+    return RUNS_DIR / "converted" / f"{p.stem}-{fingerprint(text)[1:]}" / f"{p.stem}.md"
+
+
 def to_markdown(p):
     """Convert a PDF to Markdown with Claude, so it can be reviewed and edited in
     place. The Markdown lives under RUNS_DIR/converted, named by the PDF's
     text, and is reused when the same PDF comes back, keeping your edits.
     Returns its path, or None if the conversion failed."""
     text = doc_text(p)
-    md = RUNS_DIR / "converted" / f"{p.stem}-{fingerprint(text)[1:]}" / f"{p.stem}.md"
+    md = converted_path(p, text)
     if md.exists():
         log(f"{p.name}: reviewing its Markdown copy {md}")
         return md
@@ -2808,6 +2814,17 @@ class PageServer:
         self.job = None  # the running Update, if any
         self.last = time.time()
 
+    def open_file(self, target):
+        """Reply for a file chosen to open: its review page if it was reviewed
+        before (Update there runs a new review), else a background review of it, in place."""
+        if target.suffix.lower() not in UPLOAD_TYPES:
+            return 400, "application/json", json.dumps({"error": f"choose a {', '.join(UPLOAD_TYPES)} file"})
+        reviewed = converted_path(target) if is_pdf(target) else target
+        if runs_for(reviewed):
+            url = page_url(reviewed)
+            return 200, "application/json", json.dumps({"page": public_url(url) if url else None, "name": target.name})
+        return 200, "application/json", json.dumps({"id": start_review(target), "name": target.name})
+
     def run_folder(self):
         runs = runs_for(self.path)
         if not runs:
@@ -2825,6 +2842,41 @@ class PageServer:
         if method == "GET" and route == "/api/markdown":
             return 200, "application/json", json.dumps(
                 {"name": f"{self.path.stem}-review.md", "markdown": review_markdown(self.run_folder())})
+        # Open: pick another file in Finder and review it in place. Its review page opens in a new tab.
+        if method == "GET" and route == "/open":
+            return 200, "text/html; charset=utf-8", (PAGE_DIR / "open.html").read_text()
+        if method == "POST" and route == "/api/open":
+            if sys.platform != "darwin":
+                return 400, "application/json", json.dumps({"error": "Open needs macOS. Run unified-review FILE in a terminal."})
+            # Start in this file's folder, unless it is a copy kept under RUNS_DIR (a converted PDF).
+            start = Path.home() if RUNS_DIR in self.path.parents else self.path.parent
+            chosen, error = choose_file(start)
+            if error:
+                return 500, "application/json", json.dumps({"error": f"The Finder dialog failed: {error}"})
+            if not chosen:
+                return 200, "application/json", json.dumps({"cancelled": True})
+            return self.open_file(Path(chosen).resolve())
+        if method == "POST" and route.startswith("/api/locate/"):
+            import urllib.parse
+            name = Path(urllib.parse.unquote(route[len("/api/locate/"):])).name
+            found = find_original(name, body)
+            if len(found) == 1:
+                return self.open_file(found[0])
+            msg = (f"Could not find {name} on this Mac (Spotlight searches indexed folders only)." if not found else
+                   f"Found {len(found)} identical copies of {name}: " + ", ".join(map(str, found)) + ".")
+            return 404, "application/json", json.dumps({"error": msg + " Use Choose in Finder instead."})
+        if method == "GET" and route.startswith("/api/job/"):
+            st = upload_job(Path(route).name, "opens")
+            if st is None:
+                return 404, "application/json", json.dumps({"error": "no such review"})
+            if st.get("unified") and not st.get("file"):
+                st["error"] = "the review finished, but its results are missing"
+            elif st.get("file"):
+                url = page_url(st["file"])
+                st["page"] = public_url(url) if url else None
+                if not url:
+                    st["error"] = "the review finished, but its page did not start"
+            return 200, "application/json", json.dumps(st)
         if method == "POST" and route in ("/api/accept", "/api/decline", "/api/done"):
             run = self.run_folder()
             st = page_state(self.path, run)
@@ -2923,6 +2975,60 @@ UPLOAD = "upload"  # the upload page's key in pages.json, and its --serve argume
 UPLOAD_TYPES = (".pdf", ".md", ".txt", ".tex")
 
 
+JOBS = {}  # upload id -> the process reviewing it, for the uploads this server started
+
+
+def start_upload(name, body):
+    """Save an uploaded file under RUNS_DIR/uploads and start reviewing the copy
+    in the background. Returns the upload id. Raises ValueError for a file
+    that cannot be reviewed."""
+    name = Path(name).name
+    if Path(name).suffix.lower() not in UPLOAD_TYPES:
+        raise ValueError(f"choose a {', '.join(UPLOAD_TYPES)} file")
+    if not body:
+        raise ValueError("the file is empty")
+    uid = time.strftime("%Y-%m-%d-%H%M%S-") + hashlib.sha1(body).hexdigest()[:6]
+    folder = RUNS_DIR / "uploads" / uid
+    doc = folder / "upload" / name  # so the run is named <date>-upload-<file>-v1
+    doc.parent.mkdir(parents=True)
+    doc.write_bytes(body)
+    env = {**os.environ, "UNIFIED_REVIEW_NO_PAGE": "1"}
+    with open(folder / "stdout.log", "w") as out, open(folder / "stderr.log", "w") as log_file:
+        JOBS[uid] = subprocess.Popen([sys.executable, os.path.abspath(__file__), str(doc)],
+                                     cwd=str(folder), env=env, stdin=subprocess.DEVNULL,
+                                     stdout=out, stderr=log_file)
+    return uid
+
+
+def upload_job(uid, kind="uploads"):
+    """Where a background review stands, for an upload or (kind "opens") a file
+    chosen with Open: {"running", "name", "log"}, and when it is done,
+    "unified" (path of unified.md) and "file" (the file reviewed), or "error".
+    None for an unknown id."""
+    folder = RUNS_DIR / kind / Path(uid).name
+    if not uid or not folder.is_dir():
+        return None
+    job = JOBS.get(uid)
+    read = lambda f: (folder / f).read_text(errors="replace") if (folder / f).exists() else ""
+    names = ([Path(read("file.txt").strip()).name] if kind == "opens"
+             else [p.name for p in (folder / "upload").glob("*")])
+    st = {"running": job is not None and job.poll() is None, "name": names[0] if names else uid,
+          "log": read("stderr.log").splitlines()[-12:]}
+    if st["running"]:
+        return st
+    # The review prints the path of unified.md as its last line.
+    lines = [l.strip() for l in read("stdout.log").splitlines() if l.strip()]
+    unified = Path(lines[-1]) if lines and lines[-1].endswith("unified.md") else None
+    if not unified or not unified.exists():
+        st["error"] = "the review did not finish" + (" (see the log below)" if st["log"] else "")
+        return st
+    st["unified"] = str(unified)
+    results = unified.parent / "results.json"
+    if results.exists():
+        st["file"] = json.loads(results.read_text())["files"][0]
+    return st
+
+
 def review_markdown(run):
     """unified.md, with the theme summary after its title when the page has written one."""
     md = (run / "unified.md").read_text()
@@ -2949,13 +3055,68 @@ def review_markdown(run):
     return f"{title}\n\n{block}\n{rest.lstrip(chr(10))}"
 
 
+def find_original(name, body):
+    """The files on this Mac named `name` whose bytes are `body`, found with
+    Spotlight. A browser gives a dropped file's contents but not its path, so
+    this is how a drop reaches the original. Unindexed folders are not searched."""
+    if not body or sys.platform != "darwin":
+        return []
+    quoted = name.replace("\\", "\\\\").replace("'", "\\'")
+    r = subprocess.run(["mdfind", f"kMDItemFSName == '{quoted}'"], capture_output=True, text=True, timeout=20)
+    digest, out = hashlib.sha256(body).digest(), []
+    for line in r.stdout.splitlines():
+        p = Path(line)
+        try:
+            if p.name == name and p.is_file() and p.stat().st_size == len(body) \
+                    and hashlib.sha256(p.read_bytes()).digest() == digest:
+                out.append(p.resolve())
+        except OSError:
+            continue
+    return sorted(set(out))
+
+
+def choose_file(start):
+    """(path, error) for a file picked in a Finder dialog: (None, None) if
+    cancelled. macOS only. The dialog belongs to the frontmost app (the browser
+    that asked), since macOS keeps a background process's window behind it."""
+    quoted = str(start).replace("\\", "\\\\").replace('"', '\\"')
+    choose = f'choose file with prompt "Choose a draft to review" default location (POSIX file "{quoted}")'
+    front = ["-e", "set frontApp to path to frontmost application as text",
+             "-e", "tell application frontApp", "-e", "activate", "-e", f"set f to {choose}", "-e", "end tell",
+             "-e", "POSIX path of f"]
+    own = ["-e", "tell me to activate", "-e", f"POSIX path of ({choose})"]
+    for script in (front, own):  # the second if macOS denies control of the browser
+        r = subprocess.run(["osascript", *script], capture_output=True, text=True)
+        if r.returncode == 0:
+            return r.stdout.strip() or None, None
+        if "-128" in r.stderr:  # the user cancelled
+            return None, None
+        if "-1743" not in r.stderr and "-10004" not in r.stderr:  # anything but "not allowed to control that app"
+            return None, r.stderr.strip()[:200] or "the Finder dialog failed"
+    return None, r.stderr.strip()[:200] or "the Finder dialog failed"
+
+
+def start_review(path):
+    """Review a file in place in the background, as `unified-review FILE` does.
+    Returns the job id, read with upload_job(id, "opens")."""
+    jid = time.strftime("%Y-%m-%d-%H%M%S-") + hashlib.sha1(str(path).encode()).hexdigest()[:6]
+    folder = RUNS_DIR / "opens" / jid
+    folder.mkdir(parents=True)
+    (folder / "file.txt").write_text(str(path))
+    env = {**os.environ, "UNIFIED_REVIEW_NO_PAGE": "1"}
+    with open(folder / "stdout.log", "w") as out, open(folder / "stderr.log", "w") as log_file:
+        JOBS[jid] = subprocess.Popen([sys.executable, os.path.abspath(__file__), str(path)],
+                                     cwd=str(path.parent), env=env, stdin=subprocess.DEVNULL,
+                                     stdout=out, stderr=log_file)
+    return jid
+
+
 class UploadServer:
     """The upload page: send a file, the server reviews a copy of it, and the
     page shows unified.md. Nothing is written back to the original."""
     path = UPLOAD
 
     def __init__(self):
-        self.jobs = {}  # upload id -> its review process
         self.last = time.time()
 
     def handle(self, method, route, body):
@@ -2966,42 +3127,19 @@ class UploadServer:
             return ok({"file": UPLOAD})
         if method == "POST" and route.startswith("/api/upload/"):
             import urllib.parse
-            name = Path(urllib.parse.unquote(route[len("/api/upload/"):])).name
-            if Path(name).suffix.lower() not in UPLOAD_TYPES:
-                return err(400, f"choose a {', '.join(UPLOAD_TYPES)} file")
-            if not body:
-                return err(400, "the file is empty")
-            uid = time.strftime("%Y-%m-%d-%H%M%S-") + hashlib.sha1(body).hexdigest()[:6]
-            folder = RUNS_DIR / "uploads" / uid
-            doc = folder / "upload" / name  # so the run is named <date>-upload-<file>-v1
-            doc.parent.mkdir(parents=True)
-            doc.write_bytes(body)
-            env = {**os.environ, "UNIFIED_REVIEW_NO_PAGE": "1"}
-            with open(folder / "stdout.log", "w") as out, open(folder / "stderr.log", "w") as log_file:
-                self.jobs[uid] = subprocess.Popen([sys.executable, os.path.abspath(__file__), str(doc)],
-                                                  cwd=str(folder), env=env, stdin=subprocess.DEVNULL,
-                                                  stdout=out, stderr=log_file)
-            return ok({"id": uid})
+            try:
+                return ok({"id": start_upload(urllib.parse.unquote(route[len("/api/upload/"):]), body)})
+            except ValueError as e:
+                return err(400, str(e))
         if method == "GET" and route.startswith("/api/job/"):
-            uid = Path(route).name
-            folder = RUNS_DIR / "uploads" / uid
-            if not uid or not folder.is_dir():
+            st = upload_job(Path(route).name)
+            if st is None:
                 return err(404, "no such upload")
-            job = self.jobs.get(uid)
-            running = job is not None and job.poll() is None
-            read = lambda f: (folder / f).read_text(errors="replace") if (folder / f).exists() else ""
-            names = [p.name for p in (folder / "upload").glob("*")]
-            st = {"running": running, "name": names[0] if names else uid,
-                  "log": read("stderr.log").splitlines()[-12:]}
-            if running:
+            unified = st.pop("unified", None)
+            st.pop("file", None)
+            if unified is None:
                 return ok(st)
-            # The review prints the path of unified.md as its last line.
-            lines = [l.strip() for l in read("stdout.log").splitlines() if l.strip()]
-            unified = Path(lines[-1]) if lines and lines[-1].endswith("unified.md") else None
-            if not unified or not unified.exists():
-                st["error"] = "the review did not finish" + (" (see the log below)" if st["log"] else "")
-                return ok(st)
-            st["markdown"] = unified.read_text()
+            st["markdown"] = Path(unified).read_text()
             st["html"] = None
             if shutil.which("pandoc"):
                 r = subprocess.run(["pandoc", "-f", "gfm", "-t", "html"], input=st["markdown"],
@@ -3027,7 +3165,7 @@ def serve(path):
             n = int(self.headers.get("Content-Length") or 0)
             try:
                 raw = self.rfile.read(n) if method == "POST" else b""
-                body = raw if self.path.startswith("/api/upload/") else json.loads(raw or b"{}")
+                body = raw if self.path.startswith(("/api/upload/", "/api/locate/")) else json.loads(raw or b"{}")
                 code, ctype, data = page.handle(method, self.path.split("?")[0], body)
             except Exception as e:  # report to the page, keep serving
                 code, ctype, data = 500, "application/json", json.dumps({"error": str(e)})

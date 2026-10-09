@@ -72,6 +72,7 @@ input.note{width:100%;border:1px solid var(--line);border-radius:6px;padding:4px
 @keyframes flash{0%{box-shadow:0 0 0 4px var(--focus)}100%{box-shadow:0 0 0 0 transparent}}
 #card{cursor:pointer}
 .menu .arrow{margin-left:auto;color:var(--faint)}
+body.dropping{outline:3px dashed var(--muted);outline-offset:-8px}
 #sumpanel{flex-shrink:0}#sumpanel>.card{max-height:60vh;overflow-y:auto;overscroll-behavior:contain}
 .themes{margin:6px 0 0;padding-left:0;list-style:none}.themes li{margin:0 0 8px}.themes summary{cursor:pointer}.themes .outline{padding-left:16px}.outline{font-size:14px;margin-top:3px}.outline .sev{text-decoration:none}
 .overview a{cursor:pointer;text-decoration:underline;text-decoration-color:var(--faint)}
@@ -95,6 +96,7 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
     <span style="position:relative"><button id="panelbtn" title="Models used for Update and Ask"></button><div id="panelmenu" class="menu" hidden></div></span>
     <span class="meta" id="tally"></span>
     <button id="mdbtn" title="Download this review as Markdown: every finding with its proposed change">Download</button>
+    <button id="openbtn" title="Choose another file in Finder and review it in a new tab">Open…</button>
     <button id="update" title="Run a new review of the current text">Update</button>
   </div>
   <div class="row meta" id="fail" style="margin-top:4px"></div>
@@ -112,8 +114,9 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
 <main>
   <div><div id="overview"></div><article id="draft"></article></div>
   <aside id="side"><div id="sumpanel"></div><div id="askpanel"></div><div class="card" id="card"></div><div class="card" id="checks" hidden></div><div class="card" id="typos" hidden></div><div class="card list" id="list"></div>
-    <div class="meta" style="font-size:13px"><kbd>j</kbd> <kbd>k</kbd> next and previous · <kbd>a</kbd> accept · <kbd>e</kbd> edit · <kbd>d</kbd> decline · <kbd>q</kbd> ask · double-click a paragraph to edit it, <kbd>⌘</kbd><kbd>Enter</kbd> saves</div></aside>
+    <div class="meta" style="font-size:13px"><kbd>j</kbd> <kbd>k</kbd> next and previous · <kbd>a</kbd> accept · <kbd>e</kbd> edit · <kbd>d</kbd> decline · <kbd>q</kbd> ask · double-click a paragraph to edit it, <kbd>⌘</kbd><kbd>Enter</kbd> saves · drop a draft from Finder to review it in a new tab</div></aside>
 </main>
+<div id="droptoast" class="card" hidden style="position:fixed;right:24px;bottom:24px;z-index:5;font-size:15px;max-width:480px"></div>
 <script>
 const SEV = ["Critical", "Substantive", "Polish"];
 const TAGS = ["Unanimous", "Majority", "Contested"];
@@ -631,6 +634,34 @@ document.getElementById("card").addEventListener("click", e => {
   if (e.target.closest("button, textarea, input, a, select")) return;
   if (cur != null) goTo(cur);
 });
+// Drop a draft from Finder anywhere on the page. The server finds the original
+// with Spotlight (same name, same bytes), and a new tab reviews it in place.
+const DROP_TYPES = [".pdf", ".md", ".txt", ".tex"];
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes("Files");
+document.addEventListener("dragover", e => { if (hasFiles(e)) { e.preventDefault(); document.body.classList.add("dropping"); } });
+document.addEventListener("dragleave", e => { if (!e.relatedTarget) document.body.classList.remove("dropping"); });
+document.addEventListener("drop", async e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();  // never let the browser open the file over this page
+  document.body.classList.remove("dropping");
+  const file = e.dataTransfer.files[0];
+  const toast = document.getElementById("droptoast");
+  const say = html => { toast.innerHTML = html + ` <a class="meta" id="closetoast" style="cursor:pointer;margin-left:8px">Close</a>`; toast.hidden = false;
+    toast.querySelectorAll("a").forEach(a => a.addEventListener("click", () => { toast.hidden = true; })); };
+  if (!file) return;
+  if (!DROP_TYPES.some(t => file.name.toLowerCase().endsWith(t))) { say(`<span class="err">Drop a ${DROP_TYPES.join(", ")} file.</span>`); return; }
+  say(`Looking for ${esc(file.name)} on this Mac…`);
+  try {
+    const r = await fetch("/api/locate/" + encodeURIComponent(file.name), {method: "POST", body: await file.arrayBuffer()});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    const url = j.page || `${location.origin}/open?id=${encodeURIComponent(j.id)}&name=${encodeURIComponent(j.name)}`;
+    // A drop may not count as a click, so the browser can block a new tab: then offer a link.
+    if (window.open(url, "_blank")) toast.hidden = true;
+    else say(`Found ${esc(file.name)}. <a href="${url}" target="_blank">Open its review in a new tab</a>`);
+  } catch (err) { say(`<span class="err">${esc(err.message)}</span>`); }
+});
+
 document.getElementById("mdbtn").onclick = async () => {
   try {
     const j = await api("/api/markdown");
@@ -641,6 +672,7 @@ document.getElementById("mdbtn").onclick = async () => {
     URL.revokeObjectURL(a.href);
   } catch (e) { alert("Could not get the Markdown: " + e.message); }
 };
+document.getElementById("openbtn").onclick = () => window.open(location.origin + "/open", "_blank");
 document.getElementById("sumbtn").onclick = () => { summaryOpen = !summaryOpen; renderSide(); if (summaryOpen) document.getElementById("side").scrollTop = 0; };
 document.getElementById("askbtn").onclick = () => { commentOpen = !commentOpen; renderSide(); const t = document.querySelector("#commentbox textarea"); if (t) { document.getElementById("side").scrollTop = 0; t.focus(); } };
 document.getElementById("update").onclick = async () => { await api("/api/update", {}); load(); };

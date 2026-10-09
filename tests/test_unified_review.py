@@ -1103,6 +1103,28 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual(st["name"], "my paper.pdf")
             self.assertEqual(page.handle("GET", "/api/job/nope", b"")[0], 404)
 
+    def test_open_reviews_the_chosen_file_in_place(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
+                mock.patch.object(ur.sys, "platform", "darwin"):
+            draft, other = Path(d) / "draft.md", Path(d) / "other.md"
+            draft.write_text("# Draft\n")
+            other.write_text("# Other\n")
+            page = ur.PageServer(draft)
+            self.assertIn("<html", page.handle("GET", "/open", b"")[2])
+            with mock.patch.object(ur, "choose_file", lambda start: (None, None)):
+                self.assertEqual(json.loads(page.handle("POST", "/api/open", {})[2]), {"cancelled": True})
+            with mock.patch.object(ur, "choose_file", lambda start: (str(Path(d) / "notes.docx"), None)):
+                self.assertEqual(page.handle("POST", "/api/open", {})[0], 400)
+            with mock.patch.object(ur, "choose_file", lambda start: (str(other), None)), \
+                    mock.patch.object(ur.subprocess, "Popen") as popen:
+                popen.return_value.poll.return_value = None
+                st = json.loads(page.handle("POST", "/api/open", {})[2])
+            self.assertEqual(popen.call_args[0][0][-1], str(other.resolve()))  # the original, not a copy
+            self.assertEqual(popen.call_args[1]["cwd"], str(other.resolve().parent))
+            job = json.loads(page.handle("GET", "/api/job/" + st["id"], b"")[2])
+            self.assertTrue(job["running"])
+            self.assertEqual(job["name"], "other.md")
+
     def test_review_markdown_puts_the_summary_under_the_title(self):
         with tempfile.TemporaryDirectory() as d:
             run = Path(d)
@@ -1128,6 +1150,27 @@ class ReviewPage(unittest.TestCase):
     def test_review_prompt_asks_for_double_brace_slots(self):
         self.assertIn("{{one-line definition of F1}}", ur.review_prompt("draft", "", "rules"))
 
+    def test_dropped_file_is_found_by_name_and_bytes(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
+                mock.patch.object(ur.sys, "platform", "darwin"):
+            a, b, c = Path(d) / "a" / "memo.md", Path(d) / "b" / "memo.md", Path(d) / "c" / "memo.md"
+            for f, text in ((a, "# Memo\n"), (b, "# Other memo\n"), (c, "# Memo\n")):
+                f.parent.mkdir()
+                f.write_text(text)
+            hits = [str(a), str(b)]
+            spotlight = lambda cmd, **k: SimpleNamespace(stdout="\n".join(hits) + "\n", returncode=0)
+            with mock.patch.object(ur.subprocess, "run", spotlight):
+                self.assertEqual(ur.find_original("memo.md", b"# Memo\n"), [a.resolve()])  # b differs
+                page = ur.PageServer(Path(d) / "draft.md")
+                with mock.patch.object(ur.subprocess, "Popen") as popen:
+                    st = json.loads(page.handle("POST", "/api/locate/memo.md", b"# Memo\n")[2])
+                self.assertEqual(popen.call_args[0][0][-1], str(a.resolve()))  # the original
+                self.assertEqual(st["name"], "memo.md")
+                self.assertEqual(page.handle("POST", "/api/locate/memo.md", b"# Nowhere\n")[0], 404)
+                hits.append(str(c))  # two identical copies: refuse rather than guess
+                code, _, data = page.handle("POST", "/api/locate/memo.md", b"# Memo\n")
+                self.assertEqual(code, 404)
+                self.assertIn("2 identical copies", json.loads(data)["error"])
 
 if __name__ == "__main__":
     unittest.main()
