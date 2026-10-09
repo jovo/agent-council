@@ -383,6 +383,11 @@ def preflight(panel):
     Returns the panelists to use. An unclear status keeps the panelist."""
     def check(m):
         harness = PANELISTS[m][0]
+        # An API key in the environment (e.g. a Codespaces secret) logs in the run itself,
+        # though `codex login status` still says "Not logged in".
+        key = {"codex": "CODEX_API_KEY", "cursor": "CURSOR_API_KEY"}.get(harness)
+        if key and CHILD_ENV.get(key):
+            return True, ""
         cmd = {"claude": [CLAUDE, "auth", "status"], "codex": [CODEX, "login", "status"],
                "cursor": [CURSOR, "status"]}[harness]
         try:

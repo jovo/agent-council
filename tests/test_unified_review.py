@@ -204,6 +204,14 @@ class Calls(unittest.TestCase):
             self.assertEqual(ur.preflight(["claude", "gpt", "gemini"]), ["claude", "gemini"])
         self.assertEqual(ur.FAILURES[0]["model"], "gpt")
 
+    def test_preflight_keeps_panelist_with_api_key(self):
+        def fake(cmd, **kw):
+            return SimpleNamespace(returncode=1, stdout="Not logged in", stderr="")
+        with mock.patch.object(ur.subprocess, "run", fake), \
+                mock.patch.dict(ur.CHILD_ENV, {"CODEX_API_KEY": "k", "CURSOR_API_KEY": "k"}):
+            self.assertEqual(ur.preflight(["gpt", "gemini"]), ["gpt", "gemini"])
+        self.assertEqual(ur.FAILURES, [])
+
 
 class Rendering(unittest.TestCase):
     def setUp(self):

@@ -20,6 +20,16 @@ unified-review example.md
 
 To review a file without the command line, run `unified-review --upload`. A page opens where you drop or choose a PDF, Markdown, text, or TeX file. The panel reviews a copy, and the page shows the unified review when it finishes, with a button to download it as Markdown. Nothing is written back to your file.
 
+### Without a terminal
+
+**Let Claude set it up.** In the Claude desktop app, open the Code tab, choose a folder, and paste:
+
+> Clone https://github.com/jovo/agent-council, run its install.sh, and put ~/.local/bin on my PATH. Install whichever of the claude, codex, and cursor-agent CLIs are missing. Then run `claude auth login`, `codex login`, and `cursor-agent login` one at a time, and wait while I finish each sign-in in my browser. Then run `unified-review --upload`.
+
+Claude runs the commands and asks before each one. You click through three sign-ins in the browser, then drop a file on the upload page. Next time, ask Claude to run `unified-review --upload`.
+
+**Run it in the cloud (untested).** [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/jovo/agent-council) The button opens GitHub's create page, which asks for three API keys: `ANTHROPIC_API_KEY` from the [Claude Console](https://console.anthropic.com/settings/keys), `CODEX_API_KEY` from [OpenAI](https://platform.openai.com/api-keys), and `CURSOR_API_KEY` from the [Cursor dashboard](https://cursor.com/dashboard). GitHub saves them as your Codespaces secrets, so you enter them once. The codespace installs everything on first start, which takes a few minutes, then opens the upload page in a new tab. Only your GitHub account can open it. Reviews bill to those API keys rather than to your Claude, ChatGPT, or Cursor subscriptions, and the codespace uses your monthly Codespaces allowance. To come back later, open [your codespaces](https://github.com/codespaces) and pick this one.
+
 ## Why a panel that votes
 
 A single model reviewing a draft misses things another model catches. A single model merging several reviews favors its own findings: LLM evaluators recognize their own outputs and rate them higher (Panickssery et al. 2024, [arXiv:2404.13076](https://arxiv.org/abs/2404.13076)). A panel of judges from different model families tracks human judgments more closely than one large judge and shows less intra-model bias (Verga et al. 2024, [arXiv:2404.18796](https://arxiv.org/abs/2404.18796)).
@@ -159,7 +169,7 @@ You need Python 3.9 or later, macOS or Linux, and these CLIs, logged in:
 
 Then run `./install.sh`. It links `unified-review` and `make-pdf` into `~/.local/bin`, links every skill into `~/.claude/skills`, `~/.codex/skills`, and `~/.cursor/skills`, and installs the fonts into `~/Library/Fonts` (`~/.local/share/fonts` on Linux). It does not overwrite real files. If a CLI lives somewhere unusual, set `CLAUDE_BIN`, `CODEX_BIN`, or `CURSOR_BIN`.
 
-**In a GitHub Codespace (untested).** To run the tool in the cloud instead of on your Mac, name this repository as your dotfiles repository in your [Codespaces settings](https://github.com/settings/codespaces). Every new codespace then runs `install.sh`, which runs `codespaces/setup.sh` to install the three CLIs, poppler, and Ghostscript, and fixes the page's port at 8737. Log in to each CLI once per codespace, or store a `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) and a `CURSOR_API_KEY` as Codespaces secrets. Codex needs `codex login`. `unified-review --page FILE` then prints the page's forwarded address, which only your GitHub account can open. Edits go to the codespace's checkout, so commit and push from there. The codespace uses your monthly Codespaces allowance and stops after its idle timeout.
+**In a GitHub Codespace (untested).** To run the tool in the cloud instead of on your Mac, name this repository as your dotfiles repository in your [Codespaces settings](https://github.com/settings/codespaces). Every new codespace then runs `install.sh`, which runs `codespaces/setup.sh` to install the three CLIs, poppler, and Ghostscript, and fixes the page's port at 8737. Log in to each CLI once per codespace, or store a `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY`, a `CODEX_API_KEY`, and a `CURSOR_API_KEY` as Codespaces secrets. `unified-review --page FILE` then prints the page's forwarded address, which only your GitHub account can open. Edits go to the codespace's checkout, so commit and push from there. The codespace uses your monthly Codespaces allowance and stops after its idle timeout.
 
 ## Limits
 
