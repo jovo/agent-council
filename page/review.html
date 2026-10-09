@@ -158,7 +158,107 @@ function chips(id, key, opts, allLabel) {
 const slug = t => t.toLowerCase().replace(/<[^>]+>|\[@[^\]]*\]|[*_`]/g, "").replace(/[^\p{L}\p{N}_\-.\s]/gu, "")
   .trim().replace(/\s+/g, "-").replace(/^[^\p{L}]+/u, "") || "section";
 
+// A slide deck is shown rendered by Marp with the deck theme (base.css), in an
+// iframe so the theme's CSS cannot touch the page. Each finding is outlined on
+// its slide. The Markdown view keeps double-click editing.
+let deckView = "rendered", SLIDES = null, slidesKey = null;
+const deckToggle = () => `<div class="row meta" style="margin-bottom:10px">View: ` +
+  ["rendered", "markdown"].map(v => v === deckView ? `<b>${v === "rendered" ? "Slides" : "Markdown"}</b>`
+    : `<a class="dv" data-v="${v}" style="cursor:pointer">${v === "rendered" ? "Slides" : "Markdown"}</a>`).join(" · ") +
+  (deckView === "rendered" ? ` <span>· double-click a slide to edit its Markdown</span>` : "") + `</div>`;
+function wireToggle(d) {
+  d.querySelectorAll("a.dv").forEach(a => a.onclick = () => { deckView = a.dataset.v; render(); });
+}
+const plain = t => (t || "").replace(/!\[[^\]]*\]\([^)]*\)/g, " ").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+  .replace(/<[^>]+>/g, " ").replace(/[*_`#>|]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+function slideFrame() { return document.getElementById("deckframe"); }
+function renderSlides() {
+  const d = document.getElementById("draft");
+  if (!SLIDES || SLIDES.text !== S.text) {
+    if (!d.querySelector("#deckframe")) d.innerHTML = deckToggle() + `<p class="meta">Rendering the slides…</p>`;
+    wireToggle(d);
+    const want = S.text;
+    api("/api/slides").then(r => { SLIDES = {...r, text: want}; if (S.text === want) renderSlides(); });
+    return;
+  }
+  if (SLIDES.error) {
+    d.innerHTML = deckToggle() + `<p class="reason">${esc(SLIDES.error)}. Showing the Markdown instead.</p>`;
+    wireToggle(d); deckView = "markdown"; return;
+  }
+  let fr = slideFrame();
+  const key = SLIDES.html.length + ":" + SLIDES.css.length + ":" + S.text.length;
+  if (!fr || slidesKey !== key) {
+    slidesKey = key;
+    d.innerHTML = deckToggle() + `<iframe id="deckframe" style="width:100%;border:0;display:block" title="Rendered slides"></iframe>`;
+    wireToggle(d);
+    fr = slideFrame();
+    fr.onload = () => { labelSlides(fr); decorate(fr); sizeFrame(fr); };
+    fr.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><base href="${SLIDES.base}"><style>${SLIDES.css}</style><style>
+      html,body{margin:0;background:transparent}
+      .marpit>svg{display:block;width:100%;height:auto;margin:0 0 22px;box-shadow:0 1px 6px rgba(0,0,0,.35)}
+      .lab{font:13px -apple-system,sans-serif;color:#888;margin:0 0 4px}
+      .hl{outline:4px solid var(--c);outline-offset:3px;cursor:pointer;border-radius:4px}
+      .hl.sel{outline-width:8px}
+      .hl.Critical{--c:#e0645a}.hl.Substantive{--c:#e3a83b}.hl.Polish{--c:#5b97d6}
+    </style></head><body>${SLIDES.html}</body></html>`;
+  } else if (fr.contentDocument && fr.contentDocument.readyState === "complete") decorate(fr);
+}
+function labelSlides(fr) {
+  fr.contentDocument.querySelectorAll(".marpit > svg").forEach((svg, i) => {
+    const lab = fr.contentDocument.createElement("div");
+    lab.className = "lab"; lab.textContent = `Slide ${i + 1}`;
+    svg.before(lab);
+    svg.ondblclick = () => editSlide(i + 1);
+  });
+}
+function sizeFrame(fr) {
+  const doc = fr.contentDocument;
+  if (doc) fr.style.height = doc.documentElement.scrollHeight + "px";
+}
+function decorate(fr) {
+  const doc = fr.contentDocument; if (!doc) return;
+  doc.querySelectorAll(".hl").forEach(e => { e.classList.remove("hl", "sel", "Critical", "Substantive", "Polish"); delete e.dataset.n; });
+  const svgs = [...doc.querySelectorAll(".marpit > svg")];
+  for (const f of S.findings) {
+    if (!f.slide || f.status === "accepted" || f.status === "declined" || !shown(f)) continue;
+    const svg = svgs[f.slide - 1]; if (!svg) continue;
+    const sec = [...svg.querySelectorAll("section")].find(x => !x.dataset.marpitAdvancedBackground || x.dataset.marpitAdvancedBackground === "content") || svg;
+    const head = plain(f.old || f.quote).slice(0, 30);
+    // The smallest element on the slide whose text holds the start of the quoted passage, else the slide.
+    const els = head ? [...sec.querySelectorAll("h1,h2,h3,h4,p,li,td,th,blockquote,figcaption,span,div")]
+      .filter(e => plain(e.textContent).includes(head)).sort((a, b) => a.textContent.length - b.textContent.length) : [];
+    const el = els[0] || svg;
+    if (el.dataset.n) continue;  // already marks a more severe or earlier finding
+    el.classList.add("hl", f.severity); if (f.n === cur) el.classList.add("sel");
+    el.dataset.n = f.n;
+    el.onclick = e => { e.stopPropagation(); select(f.n, false); };
+  }
+}
+function editSlide(n) {
+  deckView = "markdown"; render();
+  const start = (S.slide_starts || [])[n - 1];
+  if (start == null) return;
+  const el = [...document.querySelectorAll("#draft [data-a]")].find(e => +e.dataset.b > start);
+  if (el) { centerOn(el); el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash"); }
+}
+function hlEl(n) {  // a finding's highlight: in the page, or on a rendered slide
+  const fr = S.deck && deckView === "rendered" ? slideFrame() : null;
+  if (fr && fr.contentDocument) {
+    const el = fr.contentDocument.querySelector(`.hl[data-n="${n}"]`);
+    return el ? {el, top: fr.getBoundingClientRect().top + el.getBoundingClientRect().top, h: el.getBoundingClientRect().height} : null;
+  }
+  const el = document.querySelector(`.hl[data-n="${n}"]`);
+  return el ? {el, top: el.getBoundingClientRect().top, h: el.offsetHeight} : null;
+}
+function scrollToHl(n, flash) {
+  const h = hlEl(n); if (!h) return;
+  window.scrollTo({top: Math.max(0, h.top + window.scrollY - window.innerHeight / 2 + h.h / 2)});
+  if (flash) { h.el.classList.remove("flash"); void h.el.offsetWidth; h.el.classList.add("flash"); }
+}
+window.addEventListener("resize", () => { const fr = slideFrame(); if (fr) sizeFrame(fr); });
+
 function renderDraft() {
+  if (S.deck && deckView === "rendered") { renderSlides(); return; }
   const text = S.text, N = text.length, marks = new Array(N).fill(null);
   const order = f => SEV.indexOf(f.severity) * 1000 + f.n;
   for (const f of S.findings) {
@@ -318,7 +418,8 @@ function renderDraft() {
                          : `${esc(r.key)} <span class="meta">(not in the bibliography)</span>`)) + `</li>`).join("") + `</ol>`;
   }
   const d = document.getElementById("draft");
-  d.innerHTML = html;
+  d.innerHTML = (S.deck ? deckToggle() : "") + html;
+  wireToggle(d);
   d.querySelectorAll("ol.refs a[href^='http']").forEach(e => { e.target = "_blank"; e.rel = "noopener"; });
   d.querySelectorAll(".hl").forEach(e => e.onclick = () => select(+e.dataset.n, false));
   d.querySelectorAll("[data-a]").forEach(e => e.ondblclick = () => editBlock(e));
@@ -520,8 +621,7 @@ function render() {
 
 function select(n, scroll) {
   cur = n; mode = null; render();
-  const e = document.querySelector(`.hl[data-n="${n}"]`);
-  if (scroll && e) centerOn(e);
+  if (scroll) scrollToHl(n, false);
 }
 
 let polling = false;
@@ -583,12 +683,7 @@ function centerOn(el) {
   const y = el.getBoundingClientRect().top + window.scrollY - window.innerHeight / 2 + el.offsetHeight / 2;
   window.scrollTo({top: Math.max(0, y)});
 }
-function goTo(n) {
-  const e = document.querySelector(`.hl[data-n="${n}"]`);
-  if (!e) return;
-  centerOn(e);
-  e.classList.remove("flash"); void e.offsetWidth; e.classList.add("flash");
-}
+function goTo(n) { scrollToHl(n, true); }
 document.getElementById("card").addEventListener("click", e => {
   if (e.target.closest("button, textarea, input, a, select")) return;
   if (cur != null) goTo(cur);

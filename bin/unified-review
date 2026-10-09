@@ -2325,11 +2325,17 @@ def page_state(path, run):
                     a["applied"] = not a["applicable"] and find_span(text, a["new"]) is not None
                 a["model"] = labels[m] if ":" in m else labels.get(m, m).split()[0]
                 a["raised"] = m in next(g for n, _, _, g in ordered_findings(r) if n == f["n"])["raised_by"]
+    if r.get("deck"):  # which slide each finding is on, for the rendered deck
+        starts = [a for a, _, _, _, _ in slides(text)]
+        for f in out:
+            f["slide"] = sum(a <= f["span"][0] for a in starts) if f.get("span") else None
+    else:
+        starts = []
     vers = (r.get("versions") or [{}])[0]
     return {"file": str(path), "name": Path(path).name, "run": run.name, "version": vers.get("number"),
             "edited": bool(vers.get("version")) and fingerprint(text) != vers.get("version"),
             "chosen": [{"spec": m, "label": label(panelist(m))} for m in page_panel(path)],
-            "comments": comment_state(run, text), "checks": checks(text, path, r.get("deck", False)), "deck": r.get("deck", False),
+            "comments": comment_state(run, text), "checks": checks(text, path, r.get("deck", False)), "deck": r.get("deck", False), "slide_starts": starts,
             "started": r.get("started", ""), "panel": [labels.get(m, m) for m in r["reviewers_ok"]],
             "failures": r.get("failures", []), "text": text, "findings": out, "refs": cited_refs(text, path)}
 
@@ -2771,6 +2777,10 @@ class PageServer:
                                             cwd=str(self.path.parent), env=env, stdin=subprocess.DEVNULL,
                                             stdout=log_file, stderr=log_file)
             return 200, "application/json", json.dumps({"job": self.job_state()})
+        if method == "GET" and route == "/api/slides":
+            return 200, "application/json", json.dumps(render_deck(self.path))
+        if method == "GET" and route.startswith("/deckfiles/"):
+            return deck_file(self.path, route)
         if method == "GET" and route in ("/", "/index.html"):
             return 200, "text/html; charset=utf-8", (PAGE_DIR / "review.html").read_text()
         return static(method, route)
@@ -2780,6 +2790,49 @@ class PageServer:
             return None
         code = self.job.poll()
         return {"running": code is None, "ok": code == 0 if code is not None else None}
+
+
+SLIDES_DIR = Path(__file__).resolve().parent.parent / "slides"
+_RENDERED = {}
+
+
+def deck_theme(path):
+    """The deck theme: the decks repository's theme/base.css, else this repo's."""
+    local = Path(path).resolve().parent.parent / "theme" / "base.css"
+    return local if local.exists() else SLIDES_DIR / "theme" / "base.css"
+
+
+def render_deck(path):
+    """The deck rendered by Marp with its theme: {"html", "css", "base"}, or
+    {"error"}. Cached until the file changes. base is the URL the page
+    resolves the deck's relative paths (images, the theme's fonts) against."""
+    path = Path(path).resolve()
+    key = (path, path.stat().st_mtime_ns, path.stat().st_size)
+    if key not in _RENDERED:
+        script = SLIDES_DIR / "scripts" / "render-for-review.mjs"
+        if not shutil.which("node") or not (SLIDES_DIR / "node_modules" / "@marp-team" / "marp-core").exists():
+            return {"error": f"rendering needs Node and `npm install` in {SLIDES_DIR}"}
+        r = subprocess.run(["node", str(script), str(path), str(deck_theme(path))], cwd=str(SLIDES_DIR),
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode:
+            return {"error": "Marp could not render the deck: " + (r.stderr.strip().splitlines() or ["no output"])[-1]}
+        _RENDERED.clear()
+        _RENDERED[key] = {**json.loads(r.stdout), "base": f"/deckfiles/{path.parent.name}/"}
+    return _RENDERED[key]
+
+
+def deck_file(path, route):
+    """A file the rendered deck asks for, from the folder above the deck (its
+    assets and the decks repository's theme), else this repo's slides theme."""
+    import mimetypes
+    import urllib.parse
+    rel = urllib.parse.unquote(route[len("/deckfiles/"):])
+    root, theme = Path(path).resolve().parent.parent, (SLIDES_DIR / "theme").resolve()
+    allowed = lambda f: f.is_file() and (f.is_relative_to(root) or f.is_relative_to(theme))
+    for f in ((root / rel).resolve(), (SLIDES_DIR / rel).resolve() if rel.startswith("theme/") else None):
+        if f and allowed(f):  # the deck's own files, or the theme (a decks repo links theme/ here)
+            return 200, mimetypes.guess_type(f.name)[0] or "application/octet-stream", f.read_bytes()
+    return 404, "text/plain", "not found"
 
 
 def static(method, route):
