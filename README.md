@@ -1,6 +1,5 @@
 # agent-council
 
-[![Tests](https://github.com/jovo/agent-council/actions/workflows/tests.yml/badge.svg)](https://github.com/jovo/agent-council/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/github/license/jovo/agent-council)](LICENSE)
 [![Last commit](https://img.shields.io/github/last-commit/jovo/agent-council)](https://github.com/jovo/agent-council/commits/main)
 
