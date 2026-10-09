@@ -5,9 +5,31 @@
 
 agent-council has models from three labs review the same draft, vote on each other's findings, and merge them into one review. You work through the review in a local web page that shows your draft with each finding highlighted in place. **Accept** writes the change into your file.
 
-It drives the coding-agent CLIs you already use (Claude Code, Codex, and Cursor), so it runs on your existing subscriptions and needs no API keys. The command is `unified-review`. The repo also holds the writing skills its reviewers apply, and the house style for PDFs and slide decks.
+It drives the coding-agent CLIs you already use (Claude Code, Codex, and Cursor), so it runs on your existing subscriptions and needs no API keys, except in the cloud. The command is `unified-review`. The repo also holds the writing skills its reviewers apply, and the house style for PDFs and slide decks.
 
 ## Quick start
+
+Pick one of three ways in:
+
+1. [In the cloud](#in-the-cloud): click a button, paste three API keys, and drop a file on a web page. No install.
+2. [With Claude](#with-claude): the Claude desktop app installs it on your Mac and runs the commands for you.
+3. [In a terminal](#in-a-terminal): clone, install, and run it yourself.
+
+### In the cloud
+
+*Untested.* [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/jovo/agent-council)
+
+The button opens GitHub's create page, which asks for three API keys: `ANTHROPIC_API_KEY` from the [Claude Console](https://console.anthropic.com/settings/keys), `CODEX_API_KEY` from [OpenAI](https://platform.openai.com/api-keys), and `CURSOR_API_KEY` from the [Cursor dashboard](https://cursor.com/dashboard). GitHub saves them as your Codespaces secrets, so you enter them once. The codespace installs everything on first start, which takes a few minutes, then opens the upload page in a new tab. Only your GitHub account can open it. Reviews bill to those API keys rather than to your Claude, ChatGPT, or Cursor subscriptions, and the codespace uses your monthly Codespaces allowance. To come back later, open [your codespaces](https://github.com/codespaces) and pick this one.
+
+### With Claude
+
+In the Claude desktop app, open the Code tab, choose a folder, and paste:
+
+> Clone https://github.com/jovo/agent-council, run its install.sh, and put ~/.local/bin on my PATH. Install whichever of the claude, codex, and cursor-agent CLIs are missing. Then run `claude auth login`, `codex login`, and `cursor-agent login` one at a time, and wait while I finish each sign-in in my browser. Then run `unified-review --upload`.
+
+Claude runs the commands and asks before each one. You click through three sign-ins in the browser, then drop a file on the upload page. Next time, ask Claude to run `unified-review --upload`.
+
+### In a terminal
 
 ```
 git clone https://github.com/jovo/agent-council
@@ -18,17 +40,7 @@ unified-review example.md
 
 [`example.md`](example.md) is a short proposal with planted flaws: overclaims, a conclusion that does not follow from its evidence, and two typos. Its review takes about 30 seconds, and a 1,300-word memo takes 40 to 120. For a Markdown file, the review page then opens in your browser. Click a highlighted passage to see its finding, then Accept, Edit, or Decline it. Click **Re-review** to review the revised text. Accept writes into `example.md`, and `git checkout example.md` restores it. [Install](#install) lists what you need first.
 
-To review a file without the command line, run `unified-review --upload`. A page opens where you drop or choose a PDF, Markdown, text, or TeX file. The panel reviews a copy, and the page shows the unified review when it finishes, with a button to download it as Markdown. Nothing is written back to your file.
-
-### Without a terminal
-
-**Let Claude set it up.** In the Claude desktop app, open the Code tab, choose a folder, and paste:
-
-> Clone https://github.com/jovo/agent-council, run its install.sh, and put ~/.local/bin on my PATH. Install whichever of the claude, codex, and cursor-agent CLIs are missing. Then run `claude auth login`, `codex login`, and `cursor-agent login` one at a time, and wait while I finish each sign-in in my browser. Then run `unified-review --upload`.
-
-Claude runs the commands and asks before each one. You click through three sign-ins in the browser, then drop a file on the upload page. Next time, ask Claude to run `unified-review --upload`.
-
-**Run it in the cloud (untested).** [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/jovo/agent-council) The button opens GitHub's create page, which asks for three API keys: `ANTHROPIC_API_KEY` from the [Claude Console](https://console.anthropic.com/settings/keys), `CODEX_API_KEY` from [OpenAI](https://platform.openai.com/api-keys), and `CURSOR_API_KEY` from the [Cursor dashboard](https://cursor.com/dashboard). GitHub saves them as your Codespaces secrets, so you enter them once. The codespace installs everything on first start, which takes a few minutes, then opens the upload page in a new tab. Only your GitHub account can open it. Reviews bill to those API keys rather than to your Claude, ChatGPT, or Cursor subscriptions, and the codespace uses your monthly Codespaces allowance. To come back later, open [your codespaces](https://github.com/codespaces) and pick this one.
+To review a PDF, or a file you want left unchanged, run `unified-review --upload`. A page opens where you drop or choose a PDF, Markdown, text, or TeX file. The panel reviews a copy, and the page shows the unified review when it finishes, with a button to download it as Markdown. Nothing is written back to your file.
 
 ## Why a panel that votes
 
