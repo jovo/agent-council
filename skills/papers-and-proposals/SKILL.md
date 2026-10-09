@@ -15,6 +15,7 @@ Sources: Mensh and Kording, "Ten simple rules for structuring papers," *PLOS Com
 ## Context, content, conclusion
 
 - Use context, content, conclusion at every scale. The paper: introduction, results, discussion. A paragraph: a topic sentence that sets context, then the new content, then a takeaway sentence. Context answers "why am I told this?" and the conclusion answers "so what?"
+- State the question or hypothesis before the methods or results that answer it.
 - Cover each subject in one place. Do not zig-zag back to it. Express parallel points in parallel sentence structure.
 
 ## Sections

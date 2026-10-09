@@ -2689,10 +2689,19 @@ def with_figure_rules(rules):
     return rules
 
 
+def reviewer_rules():
+    """The '## Reviewer rules' section of this tool's skill: what to flag and the output format."""
+    skill = Path(__file__).resolve().parent.parent / "skills" / "unified-review" / "SKILL.md"
+    text = skill.read_text() if skill.exists() else ""
+    k = text.find("\n## Reviewer rules")
+    return text[k:].strip() if k >= 0 else ""
+
+
 def load_rules(path):
     """Review rules, first found: --rules FILE, $UNIFIED_REVIEW_RULES, the
     '# Writing and review guidelines' section of ~/.claude/CLAUDE.md (or
-    $CLAUDE_MD), else that section of the CLAUDE.md shipped with this tool."""
+    $CLAUDE_MD), else that section of the CLAUDE.md shipped with this tool.
+    The CLAUDE.md section is followed by the skill's reviewer rules."""
     for p in [path, os.environ.get("UNIFIED_REVIEW_RULES")]:
         if p:
             return Path(p).read_text(), p
@@ -2702,7 +2711,7 @@ def load_rules(path):
             text = md.read_text()
             k = text.find(RULES_SECTION)
             if k >= 0:
-                return text[k:], f"{md} ({RULES_SECTION})"
+                return text[k:].rstrip() + "\n\n" + reviewer_rules(), f"{md} ({RULES_SECTION})"
     sys.exit(f"error: no review rules found. Pass --rules FILE, or add a '{RULES_SECTION}' section to CLAUDE.md")
 
 

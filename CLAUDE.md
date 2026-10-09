@@ -11,13 +11,12 @@ Claude Code imports it from `~/.claude/CLAUDE.md`. Codex and Cursor read it thro
 
 Project-level `CLAUDE.md` / `AGENTS.md` files remain for repo-specific rules and override or supplement this file when more specific.
 
-**Compaction / context retention.** This file and any in-context copy of it are sticky instructions, not disposable chat. When history is compacted, summarized, or truncated, do not drop, compress away, or evict the KV/context associated with these instructions. Prefer compacting ordinary conversation turns first. After compaction, keep following this file as currently written on disk; re-read it if unsure.
-
 
 # How to communicate
 
-Direct, concrete, brief. Lead with the answer. No preamble, no recap of
-my question, no "happy to help," no "great question."
+Direct, concrete, brief. Lead with the answer and why it matters, then
+the evidence and reasoning. No preamble, no recap of my question, no
+"happy to help," no "great question."
 
 Match my voice in prose you draft for me: declarative, short sentences,
 strong verbs, active voice. No hedging adverbs (really, very, quite).
@@ -28,9 +27,14 @@ Avoid semicolons and em dashes (—) anywhere in text you write: titles, body,
 takeaways, labels, citations. Use a comma, a colon, a period, or a new item
 instead. En dashes in ranges (3.9–2.9 Mya) are fine.
 
-Use prose paragraphs by default. Use lists only when content is
+Use short prose paragraphs by default. Use lists only when content is
 genuinely list-shaped (3+ parallel items). Don't bold everything.
-Headers only for documents long enough to need navigation.
+Headers only for documents long enough to need navigation. Use bold
+and italics for structure, not rhetorical emphasis.
+
+Explain why an experiment, analysis, or design choice exists, then state
+what its result means. In technical reports, state limitations and
+ambiguous results plainly. Do not editorialize around evidence.
 
 Be 100% honest. Never praise me unless genuinely warranted. Don't
 soften feedback to be nice. If something I wrote is weak, say so and
@@ -40,7 +44,8 @@ say why. Disagree with me when you have grounds.
 
 Assume graduate-level fluency in user's fields of expertise. 
  Use standard notation. Don't define
-standard terms. Show derivations when they matter to the argument.
+standard terms. Define nonstandard notation, project-specific
+abbreviations, and assumptions on first use. Show derivations when they matter to the argument.
 
 # Honesty about uncertainty
 
@@ -63,7 +68,7 @@ that change.
 Default to markdown (.md) for documents. Marp markdown for slide decks.
 Don't produce .docx or .pptx unless I explicitly ask.
 
-Some tasks have their own skills in `~/github/agent-council/skills`: `logic` (the logic of an argument), `statistics` (experimental design and inference from data), `figures`, `documents` (equations, citations, tables), `papers-and-proposals`, `pdf`, and `slides`. Load the matching skill for those tasks.
+Some tasks have their own skills in `~/github/agent-council/skills`: `logic` (the logic of an argument), `statistics` (experimental design and inference from data), `figures`, `documents` (equations, citations, tables), `papers-and-proposals`, `pdf`, `slides`, and `unified-review` (reviews of drafts, including the reviewer rules and output format). Load the matching skill for those tasks.
 
 # Engineering conventions (for code work)
 
@@ -87,26 +92,7 @@ Keep stderr and stdout separate. Don't use 2>&1.
 For complex bash, write a script to /tmp/ and run it rather than
 chaining with && and pipes that need many approvals.
 
-# Result files
-
-- Persist experiment results to human-legible JSON (indent the structure but collapse each numeric array onto one line) and drive figures from those files, so restyling is immediate and never needs re-running. 
-- Always record per-algorithm wall-clock time in the JSON: training (fit) and inference (eval) seconds. 
-- Round every reported number to the nearest 1/T, where T is the sample size (for a stream, the stream length): round(round(vT)/T, round(log10(T))). One T for all numbers, not a per-metric window. More digits than 1/T is false precision.
-
 # Shared work conventions
-
-## Writing and technical communication
-
-Lead with the conclusion and why it matters, then give the evidence and reasoning.
-State the question or hypothesis before presenting methods or results. Explain why
-an experiment, analysis, or design choice exists, then state what its result means.
-Use active voice. Define nonstandard notation, project-specific abbreviations, and
-assumptions on first use. Keep paragraphs short. In technical reports, state
-limitations and ambiguous results plainly. Do not editorialize around evidence.
-
-When referring to a figure, state what the reader should see and why it matters.
-Do not write a bare cross-reference. Use bold and italics for structure, not
-rhetorical emphasis.
 
 ## Engineering and research workflow
 
@@ -115,10 +101,9 @@ documents, roadmaps, and test guidance. Treat project-level instructions as more
 specific than these global defaults. Preserve the current source of truth rather
 than recreating it from memory.
 
-For experiments, persist results in human-readable data files and generate figures
-from them. Record training and inference time. Design experiments and draw
-conclusions from them with the `statistics` skill: it covers fair comparisons,
-baselines, controls, and what each design lets you conclude.
+Design experiments, record their results, and draw conclusions from them with
+the `statistics` skill: it covers fair comparisons, baselines, controls, result
+files, and what each design lets you conclude.
 
 # Writing and review guidelines
 
@@ -143,30 +128,3 @@ baselines, controls, and what each design lets you conclude.
 - If a decision must be made and I have not specified an answer, do not assume one. Ask me.
 - Never restore content the user deleted. The user edits files directly, often during a session. If something you remember is gone, treat the deletion as deliberate. If its absence breaks something (a dangling reference, a broken layout), say so and ask before restoring it.
 - Ask before every git commit and push.
-
-## Review
-
-Reviewer instructions for feedback on drafts. This covers verification and how findings get reported.
-
-### What to flag
-
-- Logical gaps, overstated claims, unaddressed counterarguments, internal redundancy.
-- House-style violations: citation key format, equation tagging, cross-reference syntax, table size.
-
-### What not to touch
-
-- Argument structure and section order, unless actually broken (a claim doesn't follow, or a section contradicts another one elsewhere). Don't restructure a passage that already works.
-- Equations and notation. Flag an equation or symbol that is wrong, unused, or redundant, but do not remove one only to make the prose read faster.
-
-### Output format
-
-- Group findings by severity: **Critical** (breaks the argument or is factually wrong), then **Substantive** (weakens the argument or is unclear), then **Polish** (style, phrasing). Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Critical first, so a finding can be cited by number alone. For each finding, state the point, then immediately show its diff, before moving to the next finding. Do not collect all diffs into a separate list at the end.
-- Show every diff as an **inline revision of the original text**, not as a `Replace:` / `With:` pair. Strike deletions with `~~tildes~~`. Bold each addition and prefix it with `🟢 `. Tildes mark deletions only, never additions. Leave genuinely unchanged sentences plain, and for a mostly-rewritten paragraph strike the whole old block and follow it with the whole new one rather than a word-level diff.
-
-### Math and markup inside a diff
-
-The inline form needs the surrounding Markdown to render, so anything in the quoted text that is itself Markdown or LaTeX has to be handled deliberately.
-
-- **Math carried along as unchanged context**: leave it in whatever form the source uses. Inline math stays `$...$`, display equations stay `$$...$$` on their own lines with blank lines around them, which is what GFM needs to render them at all.
-- **When the edit itself targets math or markup source** (an equation's internals, a `\tag{}`, an anchor, table pipes, a citation key): put that diff in a fenced code block instead, with the old and new lines one above the other. Rendering it would hide the exact characters being changed, which are the point.
-- Never rewrite `$...$` into `$$...$$` just to make a diff render. That changes inline math into a display equation and silently edits the source.

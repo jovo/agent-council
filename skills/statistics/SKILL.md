@@ -1,11 +1,11 @@
 ---
 name: statistics
-description: Experimental design and inference from data, two halves of one question: what a study can conclude. Use whenever the task designs, runs, or benchmarks an experiment or method comparison, analyzes data, writes or reviews results, or draws a conclusion from numbers, a figure, or a table.
+description: Experimental design and inference from data, two halves of one question, what a study can conclude. Use whenever the task designs, runs, or benchmarks an experiment or method comparison, analyzes data, writes or reviews results, or draws a conclusion from numbers, a figure, or a table.
 ---
 
 # Statistics
 
-The design decides what the data can conclude. Random assignment permits causal claims, the replicated unit is the unit of analysis, and a control that differs from the treatment in more than one way leaves the result ambiguous. So check the design first, then check that each conclusion stays within what it licenses. The `logic` skill checks the argument built on top. Record-keeping (result files, timing, rounding) stays in CLAUDE.md.
+The design decides what the data can conclude. Random assignment permits causal claims, the replicated unit is the unit of analysis, and a control that differs from the treatment in more than one way leaves the result ambiguous. So check the design first, then check that each conclusion stays within what it licenses. The `logic` skill checks the argument built on top. Record-keeping (result files, timing, rounding) is under Records.
 
 ## Design
 
@@ -36,6 +36,12 @@ The design decides what the data can conclude. Random assignment permits causal 
 - Non-significance is not evidence of absence. A wide interval around zero means the data cannot tell. To claim absence, test equivalence.
 - Causal words ("causes", "leads to", "produces", "drives") need a design that manipulated the cause. Observational data, however large, support association.
 - A result holds for the population, settings, and range that were sampled. Extrapolating beyond them is a new claim that needs its own evidence.
+
+## Records
+
+- Persist experiment results to human-legible JSON (indent the structure but collapse each numeric array onto one line) and drive figures from those files, so restyling is immediate and never needs re-running.
+- Always record per-algorithm wall-clock time in the JSON: training (fit) and inference (eval) seconds.
+- Round every reported number to the nearest 1/T, where T is the sample size (for a stream, the stream length): round(round(vT)/T, round(log10(T))). One T for all numbers, not a per-metric window. More digits than 1/T is false precision.
 
 ## Reporting a statistics finding
 

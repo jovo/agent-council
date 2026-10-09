@@ -37,7 +37,7 @@ description: Rules for making, styling, captioning, and sourcing figures and plo
 
 ## Captions
 
-- Number figures with a `**Figure N.**` prefix (or `**Figure N.M.**` for multi-panel numbering within a chapter). Reference by number in prose.
+- Number figures with a `**Figure N.**` prefix (or `**Figure N.M.**` for multi-panel numbering within a chapter). Reference by number in prose, and say what the reader should see in the figure and why it matters. Do not write a bare cross-reference.
 - Captions are Markdown italic on the line beneath the image. Alt-text does not render on GitHub.
 - Do not restate axis labels or panel letters already visible on the figure.
 - Open each caption with its take-home message. For a multipanel figure, one sentence gives the collective message, then each panel gets a clause.

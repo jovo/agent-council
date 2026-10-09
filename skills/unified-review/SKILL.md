@@ -1,6 +1,6 @@
 ---
 name: unified-review
-description: Get independent reviews of a draft from a panel of models from different labs (Claude, GPT, Gemini), have them vote on each other's findings, and merge them into one review in draft order, with an optional web fact-check. Use when the user asks for a unified, combined, panel, tri-model, or multi-model review or feedback on a file. Also use when the user asks to address, apply, fix, accept, or skip numbered items (such as 3, 7, or K5) from a unified review or fact-check. Also use when the user asks to iterate: review, apply the changes, and review again for some number of rounds.
+description: Get independent reviews of a draft from a panel of models from different labs (Claude, GPT, Gemini), have them vote on each other's findings, and merge them into one review in draft order, with an optional web fact-check. Use when the user asks for a unified, combined, panel, tri-model, or multi-model review or feedback on a file. Also use when the user asks to address, apply, fix, accept, or skip numbered items (such as 3, 7, or K5) from a unified review or fact-check. Also use when the user asks to iterate (review, apply the changes, and review again) for some number of rounds. Also use for any review of or feedback on a draft, even by one model, since its Reviewer rules set what to flag and the output format.
 ---
 
 # Unified review
@@ -9,6 +9,8 @@ This skill lives in the agent-council repo (`skills/unified-review/SKILL.md`).
 `install.sh` links it into `~/.claude/skills`, `~/.codex/skills`, and
 `~/.cursor/skills`, so Claude Code, Codex, and Cursor share one copy. Edit it
 in the repo.
+
+For a review by you alone, without the panel, follow the Reviewer rules at the end of this skill. The script gives the same rules to the panel.
 
 Run the script on the file(s) the user names:
 
@@ -183,3 +185,30 @@ stopping to ask between rounds.
    Then list the skipped findings worth the user's attention: Critical or
    Substantive findings that were contested or whole-draft, with the run folder
    so the user can address them by number (`--run DIR`).
+
+## Reviewer rules
+
+Reviewer instructions for feedback on drafts. This covers verification and how findings get reported.
+
+### What to flag
+
+- Logical gaps, overstated claims, unaddressed counterarguments, internal redundancy.
+- House-style violations: citation key format, equation tagging, cross-reference syntax, table size.
+
+### What not to touch
+
+- Argument structure and section order, unless actually broken (a claim doesn't follow, or a section contradicts another one elsewhere). Don't restructure a passage that already works.
+- Equations and notation. Flag an equation or symbol that is wrong, unused, or redundant, but do not remove one only to make the prose read faster.
+
+### Output format
+
+- Group findings by severity: **Critical** (breaks the argument or is factually wrong), then **Substantive** (weakens the argument or is unclear), then **Polish** (style, phrasing). Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Critical first, so a finding can be cited by number alone. For each finding, state the point, then immediately show its diff, before moving to the next finding. Do not collect all diffs into a separate list at the end.
+- Show every diff as an **inline revision of the original text**, not as a `Replace:` / `With:` pair. Strike deletions with `~~tildes~~`. Bold each addition and prefix it with `🟢 `. Tildes mark deletions only, never additions. Leave genuinely unchanged sentences plain, and for a mostly-rewritten paragraph strike the whole old block and follow it with the whole new one rather than a word-level diff.
+
+### Math and markup inside a diff
+
+The inline form needs the surrounding Markdown to render, so anything in the quoted text that is itself Markdown or LaTeX has to be handled deliberately.
+
+- **Math carried along as unchanged context**: leave it in whatever form the source uses. Inline math stays `$...$`, display equations stay `$$...$$` on their own lines with blank lines around them, which is what GFM needs to render them at all.
+- **When the edit itself targets math or markup source** (an equation's internals, a `\tag{}`, an anchor, table pipes, a citation key): put that diff in a fenced code block instead, with the old and new lines one above the other. Rendering it would hide the exact characters being changed, which are the point.
+- Never rewrite `$...$` into `$$...$$` just to make a diff render. That changes inline math into a display equation and silently edits the source.
