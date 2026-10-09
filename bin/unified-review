@@ -498,8 +498,9 @@ follow the Review section of the house rules for each finding's content: state
 the point, then show its inline diff. The 🟢 text is literal text for the
 draft, never an instruction to the author ("add citations ..."). When the fix
 needs content you lack, such as a citation, number, or definition, write a slot
-shaped like the final text where it goes, such as "RECAP (Author, year)", and
-say in the point what fills it. To add new text, such as a sentence or a
+in double braces where it goes, shaped like the final text, such as
+"RECAP {{{{citation: Author, year}}}}" or "{{{{one-line definition of F1}}}}", and say
+in the point what fills it. Use double braces only for slots. To add new text, such as a sentence or a
 table row, include the text just before it, unchanged, so the change can be
 placed. Ignore the house rules' cap on findings
 and their ordering rule: report every finding worth making, in any order. This
@@ -2149,7 +2150,7 @@ def diff_parts(body):
     # leave a space before punctuation. The old text keeps its punctuation as is.
     spaces = lambda t: re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t]{2,}", " ", t)).strip()
     old, new = spaces(old), spaces(re.sub(r" +([.,;:])", r"\1", new))
-    if re.search(r"\[[^\]@]*(name|key|insert|N\b|M\b)[^\]]*\]", new, re.I):
+    if "{{" in new or re.search(r"\[[^\]@]*(name|key|insert|N\b|M\b)[^\]]*\]", new, re.I):
         return None, "the new text has a placeholder to fill in"
     return old, new
 
@@ -2821,6 +2822,9 @@ class PageServer:
             return 200, "application/json", json.dumps(st)
         if method == "GET" and route == "/api/ping":
             return 200, "application/json", json.dumps({"file": str(self.path)})
+        if method == "GET" and route == "/api/markdown":
+            return 200, "application/json", json.dumps(
+                {"name": f"{self.path.stem}-review.md", "markdown": review_markdown(self.run_folder())})
         if method == "POST" and route in ("/api/accept", "/api/decline", "/api/done"):
             run = self.run_folder()
             st = page_state(self.path, run)
@@ -2917,6 +2921,32 @@ def static(method, route):
 
 UPLOAD = "upload"  # the upload page's key in pages.json, and its --serve argument
 UPLOAD_TYPES = (".pdf", ".md", ".txt", ".tex")
+
+
+def review_markdown(run):
+    """unified.md, with the theme summary after its title when the page has written one."""
+    md = (run / "unified.md").read_text()
+    sf = run / "summary.json"
+    if not sf.exists():
+        return md
+    sm = json.loads(sf.read_text())
+    # Each theme ends with its finding numbers. As on the page, a finding sits under
+    # its first theme, and findings in no theme go under "Other".
+    ns = [int(m) for m in re.findall(r"^### (\d+)\.", md, re.M)]
+    used, themes = set(), []
+    for t in sm["themes"]:
+        fs = sorted(n for n in t["findings"] if n in ns and n not in used)
+        used.update(fs)
+        if fs:
+            themes.append((t["theme"], t.get("gist", ""), fs))
+    rest = [n for n in ns if n not in used]
+    if rest:
+        themes.append(("Other", "", sorted(rest)))
+    block = "## Summary\n\n" + (sm["overview"] + "\n\n" if sm.get("overview") else "") + "".join(
+        f"- **{name}**" + (f": {gist}" if gist else "") + f" ({', '.join(map(str, fs))})\n"
+        for name, gist, fs in themes)
+    title, _, rest = md.partition("\n")
+    return f"{title}\n\n{block}\n{rest.lstrip(chr(10))}"
 
 
 class UploadServer:

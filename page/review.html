@@ -53,7 +53,7 @@ main{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);gap:2
 .card .title{font-size:18px;margin:4px 0 8px;line-height:1.3}
 .point{color:var(--muted);margin:0 0 12px}
 .diff{background:var(--bg);border-radius:8px;padding:10px 12px;margin:0 0 12px;white-space:pre-wrap}
-del{color:var(--del);text-decoration:line-through}ins{color:var(--ins);text-decoration:none}
+del{color:var(--del);text-decoration:line-through}ins{color:var(--ins);text-decoration:none}.slot{background:var(--subs);color:var(--subs-ink);border-radius:3px;padding:0 3px}
 .votes{font-size:14px;color:var(--muted);margin-bottom:12px}.votes b{color:var(--ink);font-weight:700}
 .status{font-size:14px;margin-top:10px}.status.accepted{color:var(--ok-ink)}.status.declined{color:var(--muted)}
 .reason{font-size:14px;color:var(--subs-ink);margin:0 0 10px}
@@ -94,6 +94,7 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
     <span class="meta" id="meta" style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
     <span style="position:relative"><button id="panelbtn" title="Models used for Update and Ask"></button><div id="panelmenu" class="menu" hidden></div></span>
     <span class="meta" id="tally"></span>
+    <button id="mdbtn" title="Download this review as Markdown: every finding with its proposed change">Download</button>
     <button id="update" title="Run a new review of the current text">Update</button>
   </div>
   <div class="row meta" id="fail" style="margin-top:4px"></div>
@@ -124,7 +125,8 @@ let logicAuto = null;  // the logic-first view, set when a review loads and lift
 const esc = t => (t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const marks = h => h
   .replace(/\*\*~~([\s\S]+?)~~\*\*|~~([\s\S]+?)~~/g, (m, a, b) => "<del>" + (a || b) + "</del>")
-  .replace(/\*\*🟢\s*([\s\S]+?)\*\*|🟢\s*\*\*([\s\S]+?)\*\*/g, (m, a, b) => "<ins>" + (a || b) + "</ins>");
+  .replace(/\*\*🟢\s*([\s\S]+?)\*\*|🟢\s*\*\*([\s\S]+?)\*\*/g, (m, a, b) => "<ins>" + (a || b) + "</ins>")
+  .replace(/\{\{([\s\S]+?)\}\}/g, '<span class="slot" title="Fill this in before you apply the change">{{$1}}</span>');
 const inline = t => marks(esc(t)).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
 // A finding's body is its point, a blank line, then its diff. When a reviewer
 // runs the diff into the point's paragraph, split it where that sentence starts.
@@ -629,6 +631,16 @@ document.getElementById("card").addEventListener("click", e => {
   if (e.target.closest("button, textarea, input, a, select")) return;
   if (cur != null) goTo(cur);
 });
+document.getElementById("mdbtn").onclick = async () => {
+  try {
+    const j = await api("/api/markdown");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([j.markdown], {type: "text/markdown"}));
+    a.download = j.name;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) { alert("Could not get the Markdown: " + e.message); }
+};
 document.getElementById("sumbtn").onclick = () => { summaryOpen = !summaryOpen; renderSide(); if (summaryOpen) document.getElementById("side").scrollTop = 0; };
 document.getElementById("askbtn").onclick = () => { commentOpen = !commentOpen; renderSide(); const t = document.querySelector("#commentbox textarea"); if (t) { document.getElementById("side").scrollTop = 0; t.focus(); } };
 document.getElementById("update").onclick = async () => { await api("/api/update", {}); load(); };

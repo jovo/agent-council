@@ -892,6 +892,7 @@ class ReviewPage(unittest.TestCase):
         self.assertEqual(ur.diff_parts(body), ("| Pillar | A |", "| Pillar or wedge | A |"))
         self.assertIsNone(ur.diff_parts("Point only.")[0])
         self.assertIsNone(ur.diff_parts("Point.\n\nx ~~a~~ 🟢 **[name the barrier]**")[0])
+        self.assertIsNone(ur.diff_parts("Point.\n\nRECAP 🟢 **{{citation: Author, year}}** works.")[0])
 
     def test_find_span_and_fuzzy(self):
         text = "Records stay local.  The person\u2019s data stays home."
@@ -1101,6 +1102,31 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual(st["markdown"], unified.read_text())
             self.assertEqual(st["name"], "my paper.pdf")
             self.assertEqual(page.handle("GET", "/api/job/nope", b"")[0], 404)
+
+    def test_review_markdown_puts_the_summary_under_the_title(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d)
+            (run / "unified.md").write_text("# draft.md, version 1\n\n## Critical\n\n### 1. A finding\n")
+            self.assertEqual(ur.review_markdown(run), (run / "unified.md").read_text())
+            (run / "summary.json").write_text(json.dumps({"overview": "Two problems.", "themes": [
+                {"theme": "Logic", "gist": "A step fails.", "findings": [1]}]}))
+            self.assertEqual(ur.review_markdown(run), "# draft.md, version 1\n\n## Summary\n\nTwo problems.\n\n"
+                             "- **Logic**: A step fails. (1)\n\n## Critical\n\n### 1. A finding\n")
+
+    def test_review_markdown_lists_each_themes_findings_after_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d)
+            (run / "unified.md").write_text("# draft.md\n\n## Critical\n\n" + "".join(f"### {n}. F\n\n" for n in range(1, 6)))
+            (run / "summary.json").write_text(json.dumps({"overview": "", "themes": [
+                {"theme": "Logic", "gist": "Steps fail.", "findings": [3, 1, 9]},
+                {"theme": "Style", "gist": "", "findings": [1, 4]},
+                {"theme": "Gone", "gist": "Only repeats.", "findings": [3]}]}))
+            block = ur.review_markdown(run).split("## Critical")[0]
+            self.assertEqual(block, "# draft.md\n\n## Summary\n\n- **Logic**: Steps fail. (1, 3)\n"
+                             "- **Style** (4)\n- **Other** (2, 5)\n\n")
+
+    def test_review_prompt_asks_for_double_brace_slots(self):
+        self.assertIn("{{one-line definition of F1}}", ur.review_prompt("draft", "", "rules"))
 
 
 if __name__ == "__main__":
