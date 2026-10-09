@@ -421,7 +421,7 @@ function renderCard() {
     if (mode === "edit") actions = `<textarea id="edtext">${esc(f.new || "")}</textarea><div class="row" style="margin-top:8px"><button id="save">Apply edited text</button><button id="cancel">Cancel</button></div>`;
     else if (mode === "ask") actions = `<textarea id="qtext" placeholder="Why this change? Would this alternative work?" style="min-height:70px"></textarea><div class="row" style="margin-top:8px"><button id="send">Ask all panelists</button><button id="cancel">Cancel</button><span class="meta">⌘Enter sends</span></div>`;
     else actions = (f.applicable ? `<button id="acc">Accept</button> ` : "")
-      + (f.editable && !f.applicable ? `<button id="fill"${f.fill && f.fill.status === "pending" ? " disabled" : ""} title="Search the web for what goes in the blanks">${f.fill && f.fill.status === "pending" ? "Filling…" : "Fill"}</button> ` : "")
+      + (f.slot ? `<button id="fill"${f.fill && f.fill.status === "pending" ? " disabled" : ""} title="Search the web for what goes in the blanks">${f.fill && f.fill.status === "pending" ? "Filling…" : "Fill"}</button> ` : "")
       + (f.editable ? `<button id="edt">Edit</button> ` : "") + `<button id="dec">Decline</button> <button id="ask">Ask</button>` + (f.editable ? "" : ` <button id="copy" title="Copy a one-line request to paste into Claude Code or Codex, which can make this change">Copy for agent</button>`);
   }
   el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity}${f.kind ? " · " + kindOf(f) : ""} · ${esc(f.section)} · ${f.tag}</div>

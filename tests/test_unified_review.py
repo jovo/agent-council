@@ -1096,10 +1096,10 @@ class ReviewPage(unittest.TestCase):
                      mock.patch.object(ur, "load_questions", lambda run: {}), \
                      mock.patch.object(ur, "page_panel", lambda p: []):
                     f = ur.page_state(draft, run)["findings"][0]
-                    return f["applicable"], f["editable"], f["reason"], f["new"]
-            self.assertEqual(state()[:3], (False, True, ur.SLOT))
+                    return f["applicable"], f["slot"], f["reason"], f["new"]
+            self.assertEqual(state()[:3], (True, True, ur.SLOT))  # Accept writes the blank, Fill fills it
             ur.save_fill(run, 1, {"status": "done", "text": "These systems interact [@Squire04].", "sources": []})
-            self.assertEqual(state(), (True, True, None, "These systems interact [@Squire04]."))
+            self.assertEqual(state(), (True, False, None, "These systems interact [@Squire04]."))
 
     def test_end_marker_dropped(self):
         fs = ur.parse_findings("=== FINDING\nseverity: Polish\ntitle: T\nquote: a b\n---\nPoint.\n\na ~~b~~ 🟢 **c**.\n=== END FINDING\n")

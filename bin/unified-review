@@ -2373,7 +2373,7 @@ def page_state(path, run):
             "point": strip_end(rep["body"]).split("\n\n")[0], "body": strip_end(rep["body"]), "quote": rep["quote"],
             "old": old, "new": new if old is not None else None, "reason": reason,
             "span": list(span or quote_span or []) or None, "editable": span is not None,
-            "applicable": span is not None and not has_slot(new or ""),
+            "applicable": span is not None, "slot": bool(span) and has_slot(new or ""),
             "changed": old is not None and span is None,
             "mark": (change_mark(text, span, old, new) if len(edits) == 1
                      else [edits[0][0], edits[0][1]]) if span else None,
@@ -3020,8 +3020,6 @@ class PageServer:
                 new = body.get("text", f["new"])
                 if old is None:
                     return 409, "application/json", json.dumps({"error": f["reason"]})
-                if has_slot(new):
-                    return 409, "application/json", json.dumps({"error": "Fill in the {{…}} placeholder first."})
                 err = apply_change(self.path, old, new, f["quote"])
                 if err:
                     return 409, "application/json", json.dumps({"error": err})
