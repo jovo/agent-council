@@ -45,6 +45,7 @@ UNIFIED_REVIEW_TIMEOUT (seconds per model call), UNIFIED_REVIEW_OPEN_APP
 (fixed port for the review page, default: any free port)
 """
 import argparse
+import collections
 import contextlib
 import difflib
 import fcntl
@@ -63,6 +64,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 SEVERITIES = ["Critical", "Substantive", "Polish"]
 VOTE_SCORE = {"agree": 1.0, "partial": 0.5, "disagree": 0.0}
@@ -234,6 +236,97 @@ def call(name, prompt, out, workdir, web=False, stage="call"):
 
 STARTED = time.strftime("%Y-%m-%d %H:%M")  # when this run began, shown in unified.md's title
 READ_FILES = False  # True when a reviewed file is a PDF, which the panel opens itself
+DECK = False  # True when the file is a Marp slide deck (marp: true, or --slides)
+DECK_NOTE = """
+This draft is a Marp slide deck for a talk, not a document. Slides are
+separated by lines of ---, and the deck rules in the slides skill below apply.
+Review it as a talk: one point per slide, titles that state a one-line claim,
+body copy as fragments, at most three items in a plain list, one takeaway (>)
+per slide that adds an implication, footers only for sources, and figures that
+carry the evidence. Quote text from one slide only. Do not flag what the deck
+rules call for: fragments without full stops, sentence-case titles, Marp
+comments such as <!-- _class: ... -->, and the HTML wrappers the rules allow
+(cols, contrast, figure, span, video).
+"""
+
+
+def is_deck(path, text):
+    """A Markdown file whose front matter says marp: true."""
+    m = re.match(r"---\n(.*?)\n---", text, re.S)
+    return Path(path).suffix.lower() in (".md", ".markdown") and bool(
+        m and re.search(r"^marp:\s*true\s*$", m.group(1), re.M))
+
+
+def slides(text):
+    """Each slide of a deck: (start, end, number, title, class). Front matter
+    is not a slide. Slides are split at lines of --- outside code fences."""
+    pos, fence = 0, False
+    m = re.match(r"---\n.*?\n---\n", text, re.S)
+    if m:
+        pos = m.end()
+    cuts, off = [pos], pos
+    for line in text[pos:].splitlines(keepends=True):
+        if line.lstrip().startswith("```"):
+            fence = not fence
+        if not fence and line.strip() == "---":
+            cuts.append(off + len(line))
+        off += len(line)
+    out = []
+    for n, a in enumerate(cuts, 1):
+        b = cuts[n] - 4 if n < len(cuts) else len(text)  # stop before the next ---
+        body = text[a:b]
+        t = re.search(r"^#\s+(.+)$", body, re.M)
+        title = re.sub(r"<[^>]+>|\*+", "", t.group(1)).strip() if t else ""
+        if not title:
+            first = next((l.strip() for l in body.splitlines() if l.strip() and not l.strip().startswith("<!--")), "")
+            title = re.sub(r"<[^>]+>|[#*>!\[\]]", "", first).strip()[:40] or "untitled"
+        cls = re.search(r"<!--\s*_?class:\s*([\w -]+?)\s*-->", body)
+        out.append((a, b, n, title, cls.group(1) if cls else ""))
+    return out
+
+
+def slide_headings(draft):
+    """(position in normalized draft, "Slide N: title") for each slide, like
+    draft_headings, so findings are labeled by slide."""
+    marker = draft.find("\n") + 1 if draft.startswith("=====") else 0
+    dnorm, heads, start = norm(draft), [], 0
+    for a, b, n, title, _ in slides(draft[marker:]):
+        first = next((l for l in draft[marker + a:marker + b].splitlines() if l.strip()), "")
+        i = dnorm.find(norm(first), start) if norm(first) else -1
+        if i >= 0:
+            heads.append((i, f"Slide {n}: {title}"))
+            start = i + 1
+    return heads
+
+
+def deck_checks(text):
+    """Deck rules a script can check: [(position, what)]."""
+    out, run = [], []
+    for a, b, n, title, cls in slides(text):
+        body = text[a:b]
+        lines = [l for l in body.splitlines() if not l.lstrip().startswith("```")]
+        depth, items = 0, 0
+        for l in lines:
+            depth += len(re.findall(r"<div\b", l)) - len(re.findall(r"</div>", l))
+            if depth == 0 and re.match(r"([-*+]|\d+[.)])\s", l):
+                items += 1
+        if items > 3 and not re.search(r"reference|acknowledg", title, re.I):
+            out.append((a, f"Slide {n} has a plain list of {items} items. The deck rules allow three, "
+                           "and longer parallel content goes in cols."))
+        takeaways = len(re.findall(r"(?m)^>(?:[^\n]*\n>)*[^\n]*", body))
+        if takeaways > 1:
+            out.append((a, f"Slide {n} has {takeaways} takeaways. One per slide."))
+        bad = sorted({f"<{t}>" for t in re.findall(r"<(style|br|p|strong|em|mark)\b", body)}
+                     | ({"style="} if re.search(r"\sstyle=", body) else set()))
+        if bad:
+            out.append((a, f"Slide {n} uses {', '.join(bad)}, which the deck rules forbid."))
+        content = not re.search(r"\b(cover|divider|full)\b", cls)
+        figure = re.search(r"!\[|<img\b|<figure\b|<video\b", body)
+        run = run + [n] if content and not figure else []
+        if len(run) == 3:
+            out.append((a, f"Slides {run[0]}–{run[-1]} are three content slides in a row without a figure or image."))
+    return out
+
 PDF_NOTE = """This file is a PDF. Open and read all of it yourself: {path}
 Read every page, including figures, tables, and equations. Quote its text
 exactly as printed."""
@@ -907,6 +1000,110 @@ def pdf_extras(p):
     return out
 
 
+TO_MD = """Convert this PDF to GitHub-flavored Markdown: {path}
+Read every page. Copy the text exactly, word for word: do not fix, reword,
+summarize, or drop anything. Use # headings for the document's headings,
+Markdown tables for tables (join a table that continues onto the next page),
+$...$ and $$...$$ for math, and [text](url) for links. Keep each figure's
+caption as a paragraph. Separate paragraphs with blank lines. Leave out page
+numbers and running headers and footers. Output only the Markdown, with no
+note or comment of your own.
+{links}"""
+
+
+def pdf_links(p):
+    """(link text, URL) pairs for a PDF's web links, in page order. A model
+    reading the PDF sees the link text but not where it points."""
+    import html
+    r = subprocess.run(["pdftohtml", "-xml", "-i", "-stdout", "-q", str(p)], capture_output=True, text=True)
+    out = []
+    for url, text in re.findall(r'<a href="((?:https?|mailto):[^"]+)">(.*?)</a>', r.stdout, re.S):
+        url, text = html.unescape(url), " ".join(html.unescape(re.sub(r"<[^>]+>", "", text)).split())
+        if out and out[-1][1] == url:  # one link split across lines or runs of text
+            out[-1] = (out[-1][0] + " " + text, url)
+        else:
+            out.append((text, url))
+    return [(t.strip(" .,;:()"), u) for t, u in out if t.strip(" .,;:()")]
+
+
+def words(text):
+    return collections.Counter(re.findall(r"\w+", text.translate(QUOTES).lower()))
+
+
+def conversion_gaps(pdf, md):
+    """(words of the PDF missing from the Markdown, words the Markdown added),
+    counting repeats. Left out: link targets and HTML tags in the Markdown, and
+    page numbers and running headers and footers in the PDF."""
+    raw = subprocess.run(["pdftotext", str(pdf), "-"], capture_output=True, text=True).stdout
+    md = re.sub(r"<[^>]+>", " ", re.sub(r"\]\([^)\s]*\)", "]", md))
+    # A running header or footer: the same line among the first or last three of every page.
+    pages = [[l.strip() for l in pg.splitlines() if l.strip()] for pg in raw.split("\f") if pg.strip()]
+    edges = [set(pg[:3] + pg[-3:]) for pg in pages]
+    running = set.intersection(*edges) if len(edges) > 1 else set()
+    page_number = lambda l: l.strip().isdigit() and int(l) <= len(pages)
+    raw = "\n".join(l for l in raw.splitlines() if l.strip() not in running and not page_number(l))
+    # A word hyphenated at a line end is one word if the Markdown has it joined.
+    joined = set(words(md))
+    raw = re.sub(r"(\w+)-\n\s*(\w+)", lambda m: m[1] + m[2] if (m[1] + m[2]).lower() in joined
+                 else f"{m[1]}-{m[2]}", raw)
+    a = words(raw)
+    # pdftotext can drop a hyphen the page shows ("fine-tuning" reads "finetuning").
+    # Join as many of the Markdown's compounds as the PDF text has joined.
+    left = collections.Counter(a)
+    def join(m):
+        w = m[0].replace("-", "")
+        if left[w.lower()] > 0:
+            left[w.lower()] -= 1
+            return w
+        return m[0]
+    b = words(re.sub(r"\w+(?:-\w+)+", join, md))
+    return sorted((a - b).elements()), sorted((b - a).elements())
+
+
+def to_markdown(p):
+    """Convert a PDF to Markdown with Claude, so it can be reviewed and edited in
+    place. The Markdown lives under RUNS_DIR/converted, named by the PDF's
+    text, and is reused when the same PDF comes back, keeping your edits.
+    Returns its path, or None if the conversion failed."""
+    text = doc_text(p)
+    md = RUNS_DIR / "converted" / f"{p.stem}-{fingerprint(text)[1:]}" / f"{p.stem}.md"
+    if md.exists():
+        log(f"{p.name}: reviewing its Markdown copy {md}")
+        return md
+    if not CLAUDE:
+        log(f"{p.name}: claude not found, so the panel reads the PDF itself")
+        return None
+    links = pdf_links(p)
+    links = ("Its links (link text -> URL). Use these URLs exactly:\n"
+             + "\n".join(f"{t} -> {u}" for t, u in links)) if links else ""
+    log(f"{p.name}: converting to Markdown")
+    try:
+        r = subprocess.run([CLAUDE, "-p", TO_MD.format(path=p, links=links), "--tools", "Read",
+                            "--allowedTools", "Read", "--model", "sonnet"], stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, env=CHILD_ENV, timeout=TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        r = SimpleNamespace(returncode=1, stdout="", stderr=str(e))
+    out = re.sub(r"\A\s*```(?:markdown|md)?\n(.*)\n```\s*\Z", r"\1", r.stdout, flags=re.S).strip()
+    if r.returncode != 0 or not out:
+        log(f"{p.name}: conversion failed ({(r.stderr.strip().splitlines() or ['no output'])[0][:120]}), "
+            "so the panel reads the PDF itself")
+        return None
+    md.parent.mkdir(parents=True, exist_ok=True)
+    md.write_text(out + "\n")
+    missing, added = conversion_gaps(p, out)
+    report = (f"Words of {p.name} missing from {md.name} ({len(missing)}):\n{' '.join(missing)}\n\n"
+              f"Words {md.name} added ({len(added)}):\n{' '.join(added)}\n")
+    (md.parent / "conversion-check.txt").write_text(report)
+    log(f"{p.name}: Markdown copy at {md}")
+    if missing or added:
+        show = lambda ws: " ".join(ws[:15]) + (" ..." if len(ws) > 15 else "")
+        log(f"  check: {len(missing)} words missing ({show(missing)}), {len(added)} added ({show(added)}). "
+            f"Full list: {md.parent / 'conversion-check.txt'}")
+    else:
+        log("  check: every word of the PDF is in the Markdown, and nothing was added")
+    return md
+
+
 def locate(quote, files):
     """(full path, 1-based line or page, "line" or "page") where a quote's text
     sits in the files now, or None."""
@@ -1255,7 +1452,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     shown = shown or draft  # what the panel is given: the text, or a PDF's path
     timings = {}
     declines, applied = active_decisions(files, norm(draft))
-    decided = decisions_block(declines, applied)
+    decided = (DECK_NOTE if DECK else "") + decisions_block(declines, applied)
     if declines or applied:
         log(f"using {len(declines)} declined and {len(applied)} applied points from past rounds")
     ctx_block, ctx_text, ctx_names = context or ("", "", [])
@@ -1357,7 +1554,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     mech, since = [], carry_over(groups, prev, dnorm)
     if len(files) == 1 and not is_pdf(files[0]):
         text = files[0].read_text()
-        mech = checks(text, files[0])
+        mech = checks(text, files[0], DECK)
         history = reviewed_history(files[0], text)
         for g in groups:
             if not g["rejected"] and not g.get("declined"):
@@ -1377,7 +1574,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         "panel": panel, "reviewers_ok": ok, "voters": voters,
         "labels": {m: label(m) for m in panel}, "verify": verify,
         "failures": FAILURES, "agreement": vote_agreement(flat, votes, owner),
-        "anonymization": letters, "timings_s": timings, "headings": draft_headings(draft),
+        "anonymization": letters, "timings_s": timings, "headings": slide_headings(draft) if DECK else draft_headings(draft), "deck": DECK,
         "findings": flat, "votes": votes, "groups": groups, "checks": mech, "since_last": since}, indent=1, ensure_ascii=False) + "\n")
     render(outdir)
     LAST_RUN.parent.mkdir(parents=True, exist_ok=True)
@@ -1702,7 +1899,7 @@ def fix_double_spaces(text):
     return text
 
 
-def checks(text, path):
+def checks(text, path, deck=False):
     """Problems a script can find without a model: [{"id", "line", "what"}],
     in draft order."""
     found = []
@@ -1764,6 +1961,8 @@ def checks(text, path):
             first = re.search(rf"\b{closed}\b", lower).start()
             n_hyph = len(re.findall(rf"\b{re.escape(hyph)}\b", lower))
             add(first, f'"{hyph}" ({n_hyph}×) and "{closed}" ({n_closed}×) are both used.')
+    if deck:
+        found += deck_checks(text)
     spaces = double_spaces(text)
     if spaces:
         lines = sorted({line(a) for a, _ in spaces})
@@ -2125,7 +2324,7 @@ def page_state(path, run):
     return {"file": str(path), "name": Path(path).name, "run": run.name, "version": vers.get("number"),
             "edited": bool(vers.get("version")) and fingerprint(text) != vers.get("version"),
             "chosen": [{"spec": m, "label": label(panelist(m))} for m in page_panel(path)],
-            "comments": comment_state(run, text), "checks": checks(text, path),
+            "comments": comment_state(run, text), "checks": checks(text, path, r.get("deck", False)), "deck": r.get("deck", False),
             "started": r.get("started", ""), "panel": [labels.get(m, m) for m in r["reviewers_ok"]],
             "failures": r.get("failures", []), "text": text, "findings": out, "refs": cited_refs(text, path)}
 
@@ -2807,6 +3006,8 @@ def main():
                     help="supporting material the panel reads but does not review (text or PDF, repeatable)")
     ap.add_argument("-p", dest="panel", default="claude,gpt,gemini")
     ap.add_argument("--verify", action="store_true")
+    ap.add_argument("--no-md", action="store_true",
+                    help="review a PDF as is, instead of converting it to Markdown first")
     ap.add_argument("--rules", metavar="FILE", help="review rules to give the panel (see README)")
     ap.add_argument("--item", metavar="N[,N,K..]",
                     help="print findings or fact-check claims from a run, to act on them")
@@ -2822,6 +3023,8 @@ def main():
                     help="save a copy of FILE beside it named by its version (memo-v8.md)")
     ap.add_argument("--changes", metavar="N",
                     help="write and open what changed in FILE since saved version N")
+    ap.add_argument("--slides", action="store_true",
+                    help="review FILE as a Marp slide deck (automatic when its front matter says marp: true)")
     ap.add_argument("--page", action="store_true",
                     help="open the review page for FILE's newest review (or the newest review here)")
     ap.add_argument("--upload", action="store_true",
@@ -2893,6 +3096,10 @@ def main():
             sys.exit(f"error: no such file: {f}")
         files.append(p)
     workdir = files[0].parent
+    # A PDF is converted to Markdown and the Markdown is reviewed, so findings
+    # cite lines and the review page can apply them.
+    if not a.no_md and not a.factcheck_only:
+        files = [(to_markdown(p) or p) if is_pdf(p) else p for p in files]
     texts = [doc_text(p) for p in files]  # read once: this is the version reviewed
     draft = "\n\n".join(f"===== {p.name} =====\n{t}" for p, t in zip(files, texts))
     # A PDF goes to the panel as its text, unless the text would miss images or
@@ -2925,6 +3132,11 @@ def main():
 
     rules, source = load_rules(a.rules)
     rules = with_figure_rules(rules)
+    global DECK
+    DECK = a.slides or (len(files) == 1 and is_deck(files[0], texts[0]))
+    if DECK:
+        log("reviewing as a slide deck, with the slides skill's rules")
+        rules += "\n\n" + re.sub(r"\A---\n.*?\n---\n", "", (Path(__file__).resolve().parent.parent / "skills" / "slides" / "SKILL.md").read_text(), flags=re.S)
     log(f"review rules: {source}")
     log(f"output -> {outdir}")
 

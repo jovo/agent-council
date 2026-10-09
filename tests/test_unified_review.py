@@ -256,6 +256,16 @@ class Rendering(unittest.TestCase):
                              (pdf, 2, "page"))
             self.assertIsNone(ur.locate("GeCo-SRT          reaches 99% success", [pdf]))
 
+    def test_conversion_gaps(self):
+        raw = ("Title\nWe fine-tune at 56.7% on the furni-\nture task, then finetuning again.\nAcme Confidential\n1\n\f"
+               "Table\n2026\nRows here.\nAcme Confidential\n2\n\f")
+        md = "# Title\n\nWe fine-tune at 56.7% on the furniture task, then fine-tuning again.\n\nTable\n\n2026<br>Rows here.\n"
+        run = lambda cmd, **k: SimpleNamespace(stdout=raw, returncode=0)
+        with mock.patch.object(ur.subprocess, "run", run):
+            self.assertEqual(ur.conversion_gaps("x.pdf", md), ([], []))
+            self.assertEqual(ur.conversion_gaps("x.pdf", md.replace("56.7", "57.6").replace("Rows here.", "")),
+                             (["56", "7", "here", "rows"], ["57", "6"]))
+
     def test_failures_and_warning(self):
         self.results([], reviewers=("claude",), voters=("claude", "gpt"),
                      failures=[{"stage": "review", "model": "gpt", "reason": "timed out after 900 s after one retry"}])
