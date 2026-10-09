@@ -3,12 +3,6 @@
 [![Tests](https://github.com/jovo/agent-council/actions/workflows/tests.yml/badge.svg)](https://github.com/jovo/agent-council/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/github/license/jovo/agent-council)](LICENSE)
 [![Last commit](https://img.shields.io/github/last-commit/jovo/agent-council)](https://github.com/jovo/agent-council/commits/main)
-![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
-![macOS | Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
-![Dependencies: standard library](https://img.shields.io/badge/dependencies-standard%20library-brightgreen)
-![Panel: Claude, GPT, Gemini](https://img.shields.io/badge/panel-Claude%20%C2%B7%20GPT%20%C2%B7%20Gemini-8A2BE2)
-![Runs through Claude Code, Codex, Cursor](https://img.shields.io/badge/runs%20through-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Cursor-blue)
-![API keys: none](https://img.shields.io/badge/API%20keys-none-success)
 
 agent-council has models from three labs review the same draft, vote on each other's findings, and merge them into one review. You work through the review in a local web page that shows your draft with each finding highlighted in place. **Accept** writes the change into your file.
 
