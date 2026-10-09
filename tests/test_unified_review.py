@@ -1079,6 +1079,28 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual(state(earlier), [done_earlier, done_earlier])
             self.assertEqual(state([]), [(None, ""), ("accepted", "Done: the change is already in the file")])
 
+    def test_a_filled_slot_becomes_the_proposed_text(self):
+        quote = "These systems interact."
+        g = {"rep": {"title": "Cite it", "quote": quote, "body": f"Point.\n\n~~{quote}~~ 🟢 **These systems interact {{{{citation: Author, year}}}}.**"},
+             "votes": {}, "raised_by": [], "where": "", "kind": "evidence"}
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "2026-10-09-1000-x-v1"
+            (run / "reviewed").mkdir(parents=True)
+            (run / "results.json").write_text('{"labels": {}, "reviewers_ok": []}')
+            draft = Path(d) / "m.md"
+            draft.write_text(quote + "\n")
+
+            def state():
+                with mock.patch.object(ur, "ordered_findings", lambda r: [(1, "Substantive", "", g)]), \
+                     mock.patch.object(ur, "load_decisions", lambda: {}), \
+                     mock.patch.object(ur, "load_questions", lambda run: {}), \
+                     mock.patch.object(ur, "page_panel", lambda p: []):
+                    f = ur.page_state(draft, run)["findings"][0]
+                    return f["applicable"], f["editable"], f["reason"], f["new"]
+            self.assertEqual(state()[:3], (False, True, ur.SLOT))
+            ur.save_fill(run, 1, {"status": "done", "text": "These systems interact [@Squire04].", "sources": []})
+            self.assertEqual(state(), (True, True, None, "These systems interact [@Squire04]."))
+
     def test_end_marker_dropped(self):
         fs = ur.parse_findings("=== FINDING\nseverity: Polish\ntitle: T\nquote: a b\n---\nPoint.\n\na ~~b~~ 🟢 **c**.\n=== END FINDING\n")
         self.assertNotIn("END FINDING", fs[0]["body"])

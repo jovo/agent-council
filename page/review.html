@@ -420,13 +420,17 @@ function renderCard() {
   if (!f.status) {
     if (mode === "edit") actions = `<textarea id="edtext">${esc(f.new || "")}</textarea><div class="row" style="margin-top:8px"><button id="save">Apply edited text</button><button id="cancel">Cancel</button></div>`;
     else if (mode === "ask") actions = `<textarea id="qtext" placeholder="Why this change? Would this alternative work?" style="min-height:70px"></textarea><div class="row" style="margin-top:8px"><button id="send">Ask all panelists</button><button id="cancel">Cancel</button><span class="meta">⌘Enter sends</span></div>`;
-    else actions = (f.applicable ? `<button id="acc">Accept</button> ` : "") + (f.editable ? `<button id="edt">Edit</button> ` : "") + `<button id="dec">Decline</button> <button id="ask">Ask</button>` + (f.editable ? "" : ` <button id="copy" title="Copy a one-line request to paste into Claude Code or Codex, which can make this change">Copy for agent</button>`);
+    else actions = (f.applicable ? `<button id="acc">Accept</button> ` : "")
+      + (f.editable && !f.applicable ? `<button id="fill"${f.fill && f.fill.status === "pending" ? " disabled" : ""} title="Search the web for what goes in the blanks">${f.fill && f.fill.status === "pending" ? "Filling…" : "Fill"}</button> ` : "")
+      + (f.editable ? `<button id="edt">Edit</button> ` : "") + `<button id="dec">Decline</button> <button id="ask">Ask</button>` + (f.editable ? "" : ` <button id="copy" title="Copy a one-line request to paste into Claude Code or Codex, which can make this change">Copy for agent</button>`);
   }
   el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity}${f.kind ? " · " + kindOf(f) : ""} · ${esc(f.section)} · ${f.tag}</div>
     <div class="title">${esc(f.title)}</div><p class="point">${inline(pointOf(f))}</p>
     ${f.body.includes("~~") || f.body.includes("🟢") ? `<div class="diff">${f.old != null && f.new != null ? revHtml(f) : diffHtml(f.body)}</div>` : ""}
     <div class="votes">${votes}</div>
-    ${!f.status && !f.applicable ? `<p class="reason">${f.editable ? "Fill in the {{…}} with Edit, then apply it." : `Cannot apply here: ${esc(f.reason || "it is about the whole draft")}.`}</p>` : ""}
+    ${!f.status && !f.applicable && !f.editable ? `<p class="reason">Cannot apply here: ${esc(f.reason || "it is about the whole draft")}.</p>` : ""}
+    ${!f.status && f.fill && f.fill.status === "failed" ? `<p class="reason">Fill found nothing: ${esc(f.fill.reason)}</p>` : ""}
+    ${!f.status && f.fill && f.fill.status === "done" && f.fill.sources && f.fill.sources.length ? `<p class="meta">Filled from ${f.fill.sources.map(u => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u.replace(/^https?:\/\/(www\.)?/, "").slice(0, 50))}</a>`).join(" · ")}</p>` : ""}
     ${!f.status && f.changed ? `<div class="row" style="margin-bottom:6px"><button id="done">Mark done</button></div>` : ""}
     <div class="row">${actions}</div>
     ${f.status ? `<div class="status ${f.status}">${f.note.startsWith("Done: ") ? esc(f.note) : f.status === "accepted" ? (f.note === "fixed by hand" ? "Done: fixed by hand" : "Accepted and written to the file") : "Declined" + (f.note ? ": " + esc(f.note) : "")}</div>` : ""}
@@ -434,6 +438,7 @@ function renderCard() {
     <div class="err" id="err"></div>`;
   const on = (id, fn) => { const b = document.getElementById(id); if (b) b.onclick = fn; };
   on("acc", () => act("/api/accept", {n: f.n}));
+  on("fill", async () => { try { await api("/api/fill", {n: f.n}); await load(); } catch (e) { document.getElementById("err").textContent = e.message; } });
   on("done", () => act("/api/done", {n: f.n}));
   on("edt", () => { mode = "edit"; renderCard(); document.getElementById("edtext").focus(); });
   on("dec", () => act("/api/decline", {n: f.n, note: ""}));
@@ -631,7 +636,7 @@ async function load() {
   if (mode) { renderSide(); } else render();
   const pending = S.findings.some(f => (f.questions || []).some(q => Object.values(q.answers).some(a => a.status === "pending")))
     || (S.comments || []).some(c => Object.values(c.answers).some(a => a.status === "pending"))
-    || (S.summary && S.summary.status === "pending");
+    || (S.summary && S.summary.status === "pending") || S.findings.some(f => f.fill && f.fill.status === "pending");
   if ((S.comments || []).some(c => Object.values(c.answers).some(a => a.status === "pending"))) commentOpen = true;
   if ((S.job && S.job.running) || pending) { if (!polling) { polling = true; setTimeout(() => { polling = false; load(); }, pending ? 2000 : 3000); } }
 }

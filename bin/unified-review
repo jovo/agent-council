@@ -2339,7 +2339,7 @@ def page_state(path, run):
             decided[d["title"]] = d
         elif d.get("quote") and d.get("decision") in ("applied", "ignore"):
             earlier[" ".join(d["quote"].split())] = d  # newest decision on a sentence wins
-    out = []
+    out, fills = [], load_fills(run)
     for n, sev, where_label, g in ordered_findings(r):
         rep = g["rep"]
         # A {{…}} slot is placed like any change, so Edit can fill it in, but it cannot be accepted as is.
@@ -2350,7 +2350,11 @@ def page_state(path, run):
         if old is not None and span is None:
             reason = unplaced_reason(text, reviewed_text(run, path), old, new, rep["quote"])
         elif span and has_slot(new):
-            reason = SLOT
+            fill = fills.get(str(n)) or {}
+            if fill.get("status") == "done":  # filled from the web: propose the filled text
+                new = fill["text"]
+            else:
+                reason = SLOT
         d = decided.get(rep["title"])
         if d is None and span is None and rep["quote"]:
             # The same sentence was accepted or declined from an earlier review: that settles it.
@@ -2377,7 +2381,7 @@ def page_state(path, run):
             "votes": [{"model": labels.get(m, m).split()[0], "vote": v["vote"], "raised": m in g["raised_by"]}
                       for m, v in g["votes"].items()],
             "status": {"applied": "accepted", "ignore": "declined"}.get(d["decision"]) if d else None,
-            "note": d.get("note", "") if d else ""})
+            "note": d.get("note", "") if d else "", "fill": fills.get(str(n))})
     qs = load_questions(run)
     for f in out:
         f["questions"] = qs.get(str(f["n"]), [])
@@ -2575,6 +2579,103 @@ def ask_panel(path, run, f, question):
         save_question(run, f["n"], k, m, {"status": "done", "text": answer, "old": old, "new": new,
                                           "applicable": ok, "seconds": round(time.time() - t)})
     threading.Thread(target=lambda: parallel(one, panel), daemon=True).start()
+
+
+FILL = """A reviewer proposed the change below to a draft, with blanks in double braces
+for content the reviewer could not supply, such as a citation or a value.
+
+<finding>
+{finding}
+</finding>
+
+<proposed>
+{new}
+</proposed>
+
+Fill every blank in the proposed text using web search. Find the actual source
+or value, and check that it supports what the sentence says. {cite_rule} Keep
+every other character of the proposed text unchanged.
+
+Reply with only this JSON:
+{{"text": "<the proposed text with every blank filled>", "sources": ["<URL you relied on>"]}}
+
+If you cannot find trustworthy content for a blank, reply instead with only:
+{{"missing": "<one sentence: what you could not find>"}}
+
+<draft>
+{draft}
+</draft>"""
+FILL_MODEL = "claude:opus"  # web search, and the strongest Claude: a wrong citation costs more than time
+FILL_LOCK = threading.Lock()
+CITE_SLOT = re.compile(r"@(doi|url):([^\s;\]]+)")
+
+
+def load_fills(run):
+    f = run / "fills.json"
+    return json.loads(f.read_text()) if f.exists() else {}
+
+
+def save_fill(run, n, fill):
+    with FILL_LOCK:
+        fs = load_fills(run)
+        fs[str(n)] = fill
+        write_atomic(run / "fills.json", json.dumps(fs, indent=1, ensure_ascii=False) + "\n")
+
+
+def bib_key(ref):
+    """The bibliography key for a DOI or URL: addref finds it in Zotero or adds the
+    paper there. Without Zotero, a DOI already in references.bib still resolves."""
+    addref = BIB.parent / "bin" / "addref"
+    if addref.exists():
+        r = subprocess.run([str(addref), ref], capture_output=True, text=True, timeout=120)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.split("\t")[0].strip(), None
+        err = r.stderr.strip().removeprefix("addref: ")
+    else:
+        err = "addref is not installed"
+    if BIB.exists() and ref.startswith("10."):
+        for m in re.finditer(r"^@\w+\{([^,\s]+),(.*?)^\}", BIB.read_text(), re.M | re.S):
+            if bib_field(m.group(2), "doi").lower() == ref.lower():
+                return m.group(1), None
+    return None, err or "addref found no key"
+
+
+def fill_slots(path, run, f):
+    """Fill finding f's {{…}} slots with web search, in the background. The filled
+    text lands in fills.json, where page_state takes it as the finding's new text."""
+    save_fill(run, f["n"], {"status": "pending"})
+    draft = Path(path).read_text()
+    keys = bool(cited_keys(draft))
+    cite_rule = ("The draft cites with pandoc keys. Write each citation you add as "
+                 "[@doi:DOI], such as [@doi:10.1126/science.7414331], or as [@url:URL] for a "
+                 "paper with no DOI. These are turned into bibliography keys." if keys else
+                 "Write each citation in the format the draft already uses.")
+
+    def work():
+        try:
+            prompt = FILL.format(finding=f"{f['title']}\n{f['body']}", new=f["new"], cite_rule=cite_rule, draft=draft)
+            text = call(panelist(FILL_MODEL), prompt, run / f"fill-{f['n']}.txt", Path(path).parent, web=True, stage="fill")
+            if text is None:
+                return save_fill(run, f["n"], {"status": "failed", "reason": failure_reason(run, f"fill-{f['n']}")})
+            m = re.search(r"\{.*\}", text, re.S)
+            try:
+                d = json.loads(m[0]) if m else {}
+            except json.JSONDecodeError:
+                d = {}
+            if d.get("missing") or not d.get("text"):
+                return save_fill(run, f["n"], {"status": "failed", "reason": d.get("missing") or "the reply was not the fill JSON"})
+            filled = d["text"]
+            for kind, ref in set(CITE_SLOT.findall(filled)):
+                key, err = bib_key(ref)
+                if not key:
+                    return save_fill(run, f["n"], {"status": "failed", "reason": f"found {ref}, but could not add it to the bibliography: {err}"})
+                filled = filled.replace(f"@{kind}:{ref}", "@" + key)
+            if has_slot(filled):
+                return save_fill(run, f["n"], {"status": "failed", "reason": "a blank is still unfilled"})
+            save_fill(run, f["n"], {"status": "done", "text": filled, "sources": d.get("sources", [])})
+        except Exception as e:  # a background thread: record the failure instead of losing it
+            save_fill(run, f["n"], {"status": "failed", "reason": str(e)})
+    threading.Thread(target=work, daemon=True).start()
 
 
 SUMMARY = """Below is a unified review of a draft: findings from a panel of reviewers,
@@ -2938,6 +3039,13 @@ class PageServer:
                 return 400, "application/json", json.dumps({"error": "no such fix"})
             text = self.path.read_text()
             self.path.write_text(fix_double_spaces(text))
+            return 200, "application/json", json.dumps({"ok": True})
+        if method == "POST" and route == "/api/fill":
+            run = self.run_folder()
+            f = next((f for f in page_state(self.path, run)["findings"] if f["n"] == body.get("n")), None)
+            if not f or f["reason"] != SLOT:
+                return 400, "application/json", json.dumps({"error": "this finding has no blank to fill"})
+            fill_slots(self.path, run, f)
             return 200, "application/json", json.dumps({"ok": True})
         if method == "POST" and route == "/api/ask":
             run = self.run_folder()
