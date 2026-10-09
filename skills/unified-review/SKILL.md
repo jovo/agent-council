@@ -42,11 +42,13 @@ still vote. Pass
 fact-check or claim verification.
 
 How it works: each panelist reviews without web search, then every panelist
-votes on every finding with reviewers anonymized. The script groups
-duplicates, sets aside findings most voters reject, and writes `unified.md`:
+votes on the other models' findings, never its own, with reviewers anonymized.
+The script groups duplicates, reports a finding only when two models stand
+behind it (a second model raised it, or another voted agree or partial), and
+writes `unified.md`:
 findings grouped by severity (Critical, Substantive, Polish), each group in
-draft order with its section, file, and line, then a short list of rejected
-findings. There is no cap on findings.
+draft order with its section, file, and line, then a short list of findings not
+reported. There is no cap on findings.
 
 - The review takes about 40 seconds to 2 minutes, then `unified.md` opens in the
   default app for .md files (set UNIFIED_REVIEW_OPEN_APP to change). With `--verify`, a web fact-check (stronger Claude and

@@ -46,7 +46,7 @@ To review a PDF, or a file you want left unchanged, run `unified-review --upload
 
 A single model reviewing a draft misses things another model catches. A single model merging several reviews favors its own findings: LLM evaluators recognize their own outputs and rate them higher (Panickssery et al. 2024, [arXiv:2404.13076](https://arxiv.org/abs/2404.13076)). A panel of judges from different model families tracks human judgments more closely than one large judge and shows less intra-model bias (Verga et al. 2024, [arXiv:2404.18796](https://arxiv.org/abs/2404.18796)).
 
-So no single model decides. Each model reviews independently. Every model then votes on every finding, with reviewers anonymized, and a model's vote on its own finding is shown but not counted. The script, not a model, groups duplicates and sets aside findings most voters reject. Andrej Karpathy's [llm-council](https://github.com/karpathy/llm-council) is a precursor.
+So no single model decides. Each model reviews independently. Every model then votes on the other models' findings, never its own, with reviewers anonymized. The script, not a model, groups duplicates and reports a finding only when two models stand behind it. Andrej Karpathy's [llm-council](https://github.com/karpathy/llm-council) is a precursor.
 
 That design follows the evidence above, but it has not been tested on its own output yet. No benchmark shows how many real errors the panel catches, or whether majority rejection sets aside real ones.
 
@@ -94,8 +94,8 @@ unified-review [-n FOCUS] [-p PANEL] [--context FILE]... [--verify] [--rules FIL
 
 1. **Preflight.** The script checks that each CLI is installed and logged in. A panelist that is missing or logged out is dropped and listed as failed, never silently.
 2. **Review.** Each panelist reviews the draft without web search and returns findings in a fixed format: severity (Critical, Substantive, Polish), kind (logic, evidence, clarity, style), title, the exact text targeted, the point, and an inline diff. A reviewer that finds nothing worth changing says so. Each review also receives the last review's open findings, so a point that still applies comes back in the same words, and the points you declined or applied.
-3. **Vote.** Each panelist votes agree, partial, or disagree on every finding, sees reviewers only as A, B, and C, flags duplicates, and votes on severity and kind.
-4. **Merge.** The script groups duplicates (two voters calling them duplicates, or one voter plus overlapping quoted text) and keeps the best-voted version of each. It sets aside findings a majority rejects, and takes the median severity and majority kind, leaving out the raiser's own vote. It holds back findings that would restore earlier wording, or change a passage that keeps changing: after one change, only Critical and Substantive findings on that passage show, and after two changes in the last three versions, only Critical ones. It then runs the checks and writes `unified.md`.
+3. **Vote.** Each panelist votes agree, partial, or disagree on every other model's finding, sees reviewers only as A, B, and C, flags duplicates, and votes on severity and kind. It does not vote on its own findings, which it sees only to name duplicates.
+4. **Merge.** The script groups duplicates (two voters calling them duplicates, or one voter plus overlapping quoted text) and keeps the best-voted version of each. It reports a finding only when two models stand behind it: a second model raised the same point, or another model voted agree or partial. It takes the median severity and majority kind of the other models' votes. It holds back findings that would restore earlier wording, or change a passage that keeps changing: after one change, only Critical and Substantive findings on that passage show, and after two changes in the last three versions, only Critical ones. It then runs the checks and writes `unified.md`.
 5. **Fact-check (optional, `--verify`).** A background process lists the draft's checkable claims, has each panelist check them with web search, keeps the most cautious verdict per claim, and writes `factcheck.md`. A claim the last fact-check confirmed keeps that verdict while its sentence is unchanged.
 
 A model call that times out, errors, or returns nothing gets one retry, except after a login error, and so does a reply in the wrong format.
@@ -123,13 +123,13 @@ Each run writes a folder under `~/.local/share/unified-review/runs/` (or `$UNIFI
 - `results.json`, `factcheck.json`: findings, votes, groups, verdicts, checks, the text's fingerprint and git commit, and per-stage timings.
 - `review-<model>.md`, `votes-<model>.txt`, `*.err`: raw panel output and logs.
 
-`unified.md` gives findings by severity. Within each severity, findings about the whole draft come first, then findings in draft order, then findings about the focus material. Each shows its section, file, and line, the quoted text, the point, an inline diff (~~deleted~~ and 🟢 **added**), and the votes, as in `Claude ✓ · **GPT** ✓ · Gemini ~` (✓ agree, ~ partial, ✗ disagree, bold for the model that raised it). **Contested** means at least one model other than the raiser agreed and at least one disagreed. Then come these sections, each only when it has entries:
+`unified.md` gives findings by severity. Within each severity, findings about the whole draft come first, then findings in draft order, then findings about the focus material. Each shows its section, file, and line, the point, an inline diff (~~deleted~~ and 🟢 **added**), and the votes, as in `Claude ✓ · **GPT** raised · Gemini ~` (✓ agree, ~ partial, ✗ disagree). The text being changed appears once, in the diff. A finding without a diff quotes the text it is about. **Contested** means at least one model other than the raiser agreed and at least one disagreed. Then come these sections, each only when it has entries:
 
 - **Since the last review:** earlier findings this review did not repeat, resolved if their passage changed.
 - **Checks** and **Typos**, as on the page.
 - **Previously declined:** new findings that match a point you declined.
 - **Held back to stop churn**, with the reason for each.
-- **Rejected by vote**, with each disagreeing voter's reason.
+- **Not reported**: findings no second model backed, one line each with the model that raised it.
 - **Agreement:** ordinal Krippendorff's alpha over the votes, with a bootstrap 95% confidence interval over findings, leaving out each model's votes on its own findings. Most votes are "agree", and that imbalance pulls alpha down even when raw agreement is high.
 
 For one Markdown file the page opens. Otherwise `unified.md` opens in Cursor or VS Code if you ran the command there, or in your default Markdown app. Inside the Claude or Codex app, the script prints `OPEN IN APP: <path>`. Set `UNIFIED_REVIEW_OPEN_APP` to always use one app.

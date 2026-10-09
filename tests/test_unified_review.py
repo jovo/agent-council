@@ -116,8 +116,21 @@ class GroupingAndScoring(unittest.TestCase):
                            voters, owner)
         self.assertTrue(g["rejected"])
         self.assertEqual(g["severity"], "Polish")
-        self.assertIn("claude", g["votes"])  # still shown
+        self.assertNotIn("claude", g["votes"])  # a model's vote on its own finding is ignored
         self.assertEqual(ur.vote_tag(g), "No majority")
+
+    def test_two_models_must_back_a_finding(self):
+        owner = {"A": "claude", "B": "gpt", "C": "gemini"}
+        voters = ["claude", "gpt", "gemini"]
+        backed = ur.score_group([finding("A1")], {"gpt": {"A1": vote("partial")}, "gemini": {"A1": vote("disagree")}},
+                                voters, owner)
+        self.assertFalse(backed["rejected"])  # gpt's partial is a second backer, despite gemini
+        alone = ur.score_group([finding("A1")], {"gpt": {"A1": vote("disagree")}, "gemini": {"A1": vote("disagree")}},
+                               voters, owner)
+        self.assertTrue(alone["rejected"])
+        pair = ur.score_group([finding("A1"), finding("B1")], {"gemini": {"A1": vote("disagree"), "B1": vote("disagree")}},
+                              voters, owner)
+        self.assertFalse(pair["rejected"])  # two models raised the same point
 
     def test_score_group_takes_median_severity_and_raisers(self):
         owner = {"A": "claude", "B": "gpt"}
@@ -540,6 +553,15 @@ class Pipeline(unittest.TestCase):
                  mock.patch.object(ur, "open_file", lambda p: None), mock.patch.object(ur, "log", lambda *a: None):
                 ur.foreground([f], draft, panel, "", "rules", out, d, False, [])
             return prompts, json.loads((out / "results.json").read_text()), (out / "unified.md").read_text()
+
+    def test_voters_do_not_vote_on_their_own_findings(self):
+        prompts, _, _ = self.run_review(["claude", "gpt", "gemini"])
+        r = None
+        for m, p in prompts["vote"].items():
+            mine = [l for l in p.split("<your_own_findings>")[1].splitlines() if l.startswith("[")]
+            voted = [l for l in p.split("<your_own_findings>")[0].split("<draft>")[0].splitlines() if l.startswith("[")]
+            self.assertEqual(len(mine), 1, m)
+            self.assertNotIn(mine[0].split("]")[0], " ".join(voted), m)
 
     def test_voters_see_the_draft(self):
         prompts, _, _ = self.run_review(["claude", "gpt", "gemini"])

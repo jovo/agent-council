@@ -526,7 +526,8 @@ quote: <the exact text this finding targets, copied verbatim from the draft or
   the author's focus material. For a finding about one section, its heading
   line. Empty for a finding about the whole draft or its overall structure.>
 ---
-<the point in 1-4 sentences, then the inline diff per the house rules.
+<the point in one or two sentences, then the inline diff per the house rules.
+Do not repeat the quoted text outside the diff.
 No heading and no number.>
 
 Kinds: logic, a step that does not follow (missing premise, non sequitur,
@@ -811,14 +812,20 @@ def score_group(members, votes, voters, owner):
     """Score a group of duplicate findings. A model's vote on a finding its own
     review raised is shown but not counted, since models favor their own text."""
     for f in members:
-        cast = [votes[m][f["id"]] for m in voters if f["id"] in votes[m] and m != owner.get(f["id"][0])]
+        cast = [votes[m][f["id"]] for m in voters if f["id"] in votes.get(m, {}) and m != owner.get(f["id"][0])]
         f["score"] = sum(VOTE_SCORE[v["vote"]] for v in cast)
         f["n_votes"] = len(cast)
         f["frac"] = f["score"] / len(cast) if cast else 0
     rep = max(members, key=lambda f: (f["frac"], -SEVERITIES.index(f["severity"]), -f["pos"]))
-    rep_votes = {m: votes[m][rep["id"]] for m in voters if rep["id"] in votes[m]}
+    raised_by = {owner[f["id"][0]] for f in members}
+    rep_votes = {m: votes[m][rep["id"]] for m in voters if rep["id"] in votes.get(m, {}) and m not in raised_by}
     raiser = owner.get(rep["id"][0])
-    judged = {m: v for m, v in rep_votes.items() if m != raiser}
+    judged = rep_votes
+    # Reported only when two models stand behind it: a second model raised the
+    # same point, or another model voted agree or partial on any version of it.
+    backers = raised_by | {m for f in members for m in voters if m not in raised_by
+                           and votes.get(m, {}).get(f["id"], {}).get("vote") in ("agree", "partial")}
+    others = set(voters) | raised_by
     n_dis = sum(v["vote"] == "disagree" for v in judged.values())
     n_agree = sum(v["vote"] == "agree" for v in judged.values())
     return {
@@ -828,7 +835,7 @@ def score_group(members, votes, voters, owner):
         "score": rep["score"], "n_votes": rep["n_votes"], "frac": rep["frac"],
         "severity": median_severity([v["severity"] for v in judged.values()] or [rep["severity"]]),
         "kind": majority_kind([v.get("kind", "") for v in judged.values()], rep.get("kind", "")),
-        "rejected": bool(judged) and n_dis > len(judged) / 2,
+        "rejected": len(others) >= 2 and len(backers) < 2,
         # Split vote: at least one model agreed and at least one disagreed.
         "contested": n_agree > 0 and n_dis > 0,
         "pos": min(f["pos"] for f in members),
@@ -954,8 +961,10 @@ def vote_line(g, voters):
     cells = []
     for m in voters:
         v = g["votes"].get(m)
-        name = f"**{short(m)}**" if m in g["raised_by"] else short(m)
-        cells.append(f"{name} {SYMBOL[v['vote']] if v else '?'}")
+        if m in g["raised_by"]:
+            cells.append(f"**{short(m)}** raised")  # a model does not vote on its own finding
+        else:
+            cells.append(f"{short(m)} {SYMBOL[v['vote']] if v else '?'}")
     return " · ".join(cells)
 
 
@@ -1310,6 +1319,8 @@ def quoted(g, files, where_label=""):
         place = f"{loc[0].name}, {loc[2]} {loc[1]}" if loc else "quoted text not found in the file"
         dup = loc and where_label == loc[0].name  # no headings: the section is the file
         head = f"{where_label} · {place}:" if where_label and not dup else f"{place}:"
+    if "~~" in g["rep"]["body"] or "🟢" in g["rep"]["body"]:
+        return f"*{head.rstrip(':')}*\n\n"  # the diff shows the text, so do not quote it twice
     block = "\n".join("> " + line for line in q.splitlines())
     return f"*{head}*\n\n{block}\n\n"
 
@@ -1381,11 +1392,8 @@ def render(outdir):
                      "or restore wording from an earlier version.\n\n" + "\n".join(
                          f"- {g['rep']['title']} ({g['severity']}: {g['held']})" for g in settled))
     if rejected:
-        parts.append("## Rejected by vote\n\n" + "\n".join(
-            f"- **{g['rep']['title']}** [{names(g['raised_by'])}]" + (" (contested)" if g.get("contested") else "")
-            + ". " + " ".join(
-                f"{labels.get(m, m)}: {v['reason']}" for m, v in g["votes"].items() if v["vote"] == "disagree")
-            for g in rejected))
+        parts.append("## Not reported\n\nNo second model backed these.\n\n" + "\n".join(
+            f"- {g['rep']['title']} ({names(g['raised_by'])})" for g in rejected))
     ag = r.get("agreement") or {}
     if ag.get("alpha") is not None:
         ci = f", 95% CI {ag['ci95'][0]} to {ag['ci95'][1]}" if ag.get("ci95") else ""
@@ -1527,12 +1535,20 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         for i, f in enumerate(fs, 1):
             flat.append({**f, "id": f"{letters[m]}{i}", "pos": position(dnorm, f["quote"])})
     flat.sort(key=lambda f: (f["pos"], f["id"]))
-    listed = "\n\n".join(
-        f"[{f['id']}] ({f['severity']}) {f['title']}\nquote: {f['quote'] or '(none)'}\n{f['body']}" for f in flat)
+    fmt = lambda f: f"[{f['id']}] ({f['severity']}) {f['title']}\nquote: {f['quote'] or '(none)'}\n{f['body']}"
     log(f"2/3 vote on {len(flat)} findings: {', '.join(ok)}")
 
     def vote(m):
+        """A model votes only on other models' findings. Its own are listed for
+        reference, so it can still name one in same:, but it does not vote on them."""
         t = time.time()
+        mine = letters.get(m)
+        listed = "\n\n".join(fmt(f) for f in flat if f["id"][0] != mine)
+        own = [f for f in flat if f["id"][0] == mine]
+        if own:
+            listed += ("\n\n<your_own_findings>\nYou raised these. Do not vote on them. You may name one in same:"
+                       " when a finding above makes the same point.\n"
+                       + "\n".join(f"[{f['id']}] {f['title']}" for f in own) + "\n</your_own_findings>")
         prompt_v = VOTE.format(draft=shown, findings=listed, decided=decided,
                                context=(CONTEXT_INTRO + ctx_block) if ctx_block else "",
                                focus=f"\n<author_focus>\n{focus}\n</author_focus>\n" if focus else "")
