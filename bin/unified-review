@@ -2123,25 +2123,75 @@ DEFAULT_PANEL = ["claude", "gpt", "gemini"]
 LABS = [("Anthropic", r"claude"), ("OpenAI", r"gpt|o\d|codex"), ("Google", r"gemini|gemma"),
         ("xAI", r"grok|cursor-grok"), ("Moonshot", r"kimi"), ("Z.ai", r"glm"), ("DeepSeek", r"deepseek"),
         ("Alibaba", r"qwen"), ("Meta", r"muse|llama"), ("Cursor", r"composer|auto")]
-VARIANT = re.compile(r"(-(minimal|low|medium|high|xhigh|max))?(-fast)?$")
+EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "extra-high", "max"]
+EFFORT_LABEL = {"xhigh": "Extra high", "extra-high": "Extra high"}
+MODEL_ORDER = ["Opus", "Fable", "Sonnet", "Haiku", "Luna", "Sol", "Terra", "GPT", "Codex", "Pro", "Flash"]
+
+
+def parse_model_id(mid):
+    """(model, version, setting) for a cursor-agent model id, e.g.
+    claude-opus-5-5-thinking-high-fast -> ("Opus", "5.5", "High, thinking, fast")."""
+    t = mid.split("-")
+    if t[0] == "cursor":
+        t = t[1:]
+    fast, thinking = "fast" in t, "thinking" in t
+    t = [x for x in t if x not in ("fast", "thinking")]
+    effort = ""
+    if len(t) > 2 and "-".join(t[-2:]) == "extra-high":
+        effort, t = "extra-high", t[:-2]
+    elif len(t) > 1 and t[-1] in EFFORTS:
+        effort, t = t[-1], t[:-1]
+    head = t[0]
+    if head == "claude" and len(t) > 1:  # claude-opus-5-5 or the older claude-4.6-opus
+        words = [x for x in t[1:] if not re.fullmatch(r"\d+(\.\d+)?", x)]
+        nums = [x for x in t[1:] if re.fullmatch(r"\d+(\.\d+)?", x)]
+        model, version = (words[0].capitalize() if words else "Claude"), ".".join(nums)
+    elif head == "gpt" and len(t) > 1:
+        model, version = (t[2].capitalize() if len(t) > 2 else "GPT"), t[1]
+    elif head == "gemini" and len(t) > 1:
+        model, version = " ".join(x.capitalize() for x in t[2:]) or "Gemini", t[1]
+    elif head == "grok":
+        model, version = "Grok", ".".join(t[1:])
+    elif head == "kimi":
+        model, version = "Kimi", " ".join(x.upper() if x[0] == "k" else x for x in t[1:])
+    elif head == "glm":
+        model, version = "GLM", ".".join(t[1:])
+    else:
+        model, version = head.capitalize(), " ".join(t[1:])
+    setting = EFFORT_LABEL.get(effort, effort.capitalize()) if effort else "Default"
+    setting += ", thinking" if thinking else ""
+    setting += ", fast" if fast else ""
+    key = (EFFORTS.index(effort) if effort else -1, thinking, fast)
+    return model, version or "Default", setting, key
+
+
+def version_key(v):
+    nums = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", v)]
+    return [-n for n in nums] or [0]
 
 
 def model_menu():
-    """The Add menu: [{lab, families: [{family, items: [{spec, label}]}]}]. The
-    CLIs' own models come first in each lab, then what cursor-agent offers."""
-    labs = {name: {} for name, _ in LABS + [("Other", "")]}
-    labs["Anthropic"]["Claude Code"] = [{"spec": "claude:" + m, "label": n} for m, n in CLAUDE_MODELS.items()]
-    labs["OpenAI"]["Codex"] = [{"spec": f"codex:{m}@{e}", "label": f"{n} {e}"}
-                               for m, n in CODEX_MODELS.items() for e in ("low", "medium", "high")]
-    for mid, name in cursor_models().items():
+    """The Add menu: lab > model > version > setting. [{lab, models: [{model,
+    versions: [{version, items: [{spec, label}]}]}]}]. The models Claude Code and
+    Codex run directly come first, as the top version of their model."""
+    tree = {name: {} for name, _ in LABS + [("Other", "")]}
+    for m, n in CLAUDE_MODELS.items():
+        tree["Anthropic"].setdefault(n, {})["Latest, via Claude Code"] = [((-2, 0, 0), {"spec": "claude:" + m, "label": "Default"})]
+    for m, n in CODEX_MODELS.items():
+        model = n.split()[-1]
+        tree["OpenAI"].setdefault(model, {})[m.split("-")[1] + ", via Codex"] = [
+            ((EFFORTS.index(e), 0, 0), {"spec": f"codex:{m}@{e}", "label": e.capitalize()}) for e in ("low", "medium", "high")]
+    for mid in cursor_models():
         lab = next((n for n, pat in LABS if re.match(pat, mid)), "Other")
-        fam_id = VARIANT.sub("", mid) or mid
-        fam = re.sub(r"\s+(Minimal|Low|Medium|High|Extra High|Max|Fast)\b", "", name).strip() or name
-        rest = name[len(fam):].strip() if name.startswith(fam) else name
-        labs[lab].setdefault(fam + " (Cursor)", []).append({"spec": "cursor:" + mid, "label": rest or "Default",
-                                                           "family_id": fam_id})
-    return [{"lab": lab, "families": [{"family": f, "items": items} for f, items in fams.items()]}
-            for lab, fams in labs.items() if fams]
+        model, version, setting, key = parse_model_id(mid)
+        tree[lab].setdefault(model, {}).setdefault(version, []).append((key, {"spec": "cursor:" + mid, "label": setting}))
+    order = lambda m: (MODEL_ORDER.index(m) if m in MODEL_ORDER else len(MODEL_ORDER), m)
+    vorder = lambda v: (0 if "via" in v else 1, version_key(v))
+    return [{"lab": lab, "models": [
+                {"model": m, "versions": [{"version": v, "items": [i for _, i in sorted(items, key=lambda x: x[0])]}
+                                          for v, items in sorted(tree[lab][m].items(), key=lambda kv: vorder(kv[0]))]}
+                for m in sorted(tree[lab], key=order)]}
+            for lab in tree if tree[lab]]
 
 
 def page_panel(path):

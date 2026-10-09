@@ -807,6 +807,16 @@ class ReviewPage(unittest.TestCase):
         self.assertNotIn("END FINDING", fs[0]["body"])
         self.assertEqual(ur.diff_parts("Point.\n\na ~~b~~ 🟢 **c**.\n=== END FINDING"), ("a b.", "a c."))
 
+    def test_parse_model_id(self):
+        p = lambda m: ur.parse_model_id(m)[:3]
+        self.assertEqual(p("claude-opus-5-5-thinking-high-fast"), ("Opus", "5.5", "High, thinking, fast"))
+        self.assertEqual(p("claude-4.6-opus-high-thinking"), ("Opus", "4.6", "High, thinking"))
+        self.assertEqual(p("gpt-5.6-luna-xhigh"), ("Luna", "5.6", "Extra high"))
+        self.assertEqual(p("gpt-5.5-extra-high-fast"), ("GPT", "5.5", "Extra high, fast"))
+        self.assertEqual(p("gemini-3.8-flash-low"), ("Flash", "3.8", "Low"))
+        self.assertEqual(p("cursor-grok-4.6-medium"), ("Grok", "4.6", "Medium"))
+        self.assertEqual(p("kimi-k3-low"), ("Kimi", "K3", "Low"))
+
     def test_edit_block(self):
         with tempfile.TemporaryDirectory() as d:
             doc = Path(d) / "memo.md"

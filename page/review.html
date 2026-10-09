@@ -374,8 +374,8 @@ function renderSide() {
 
 function render() {
   document.getElementById("name").textContent = S.name;
-  document.getElementById("meta").textContent = `Reviewed ${S.started}${S.edited ? " · edited since" : ""} by ${S.panel.join(", ")}`;
-  document.getElementById("panelbtn").textContent = `Panel: ${S.chosen.map(c => c.label).join(", ")} ▾`;
+  document.getElementById("meta").textContent = `Reviewed ${S.started}${S.edited ? ", edited since" : ""}`;
+  document.getElementById("panelbtn").textContent = "Panel ▾";
   document.getElementById("fail").textContent = S.failures.length ? "Failed: " + S.failures.map(x => `${x.model} ${x.stage} (${x.reason})`).join("; ") : "";
   const acc = S.findings.filter(f => f.status === "accepted").length, dec = S.findings.filter(f => f.status === "declined").length;
   document.getElementById("tally").textContent = `${acc} accepted · ${dec} declined · ${S.findings.length - acc - dec} open`;
@@ -425,13 +425,16 @@ let MODELS = null, openKeys = new Set();
 async function savePanel(list) { await api("/api/panel", {panel: list}); await load(); drawPanelMenu(); }
 function drawPanelMenu() {
   const el = document.getElementById("panelmenu"), chosen = S.chosen.map(c => c.spec);
+  const node = (key, depth, label) => `<div class="mi tog" data-k="${key}" style="padding-left:${14 + 16 * depth}px">${openKeys.has(key) ? "▾" : "▸"} ${esc(label)}</div>`;
   const add = !MODELS ? `<div class="mi meta">Loading models…</div>` :
-    `<div class="mi meta" style="cursor:default">Add a model</div>` + MODELS.map((l, li) =>
-      `<div class="mi tog" data-k="L${li}" style="padding-left:14px">${openKeys.has("L" + li) ? "▾" : "▸"} ${esc(l.lab)}</div>` +
-      (!openKeys.has("L" + li) ? "" : l.families.map((f, fi) =>
-        `<div class="mi tog" data-k="L${li}F${fi}" style="padding-left:28px">${openKeys.has("L" + li + "F" + fi) ? "▾" : "▸"} ${esc(f.family)}</div>` +
-        (!openKeys.has("L" + li + "F" + fi) ? "" : f.items.map(i =>
-          `<div class="mi pick" data-spec="${esc(i.spec)}" style="padding-left:46px">${chosen.includes(i.spec) ? "✓ " : ""}${esc(i.label)}</div>`).join(""))).join(""))).join("");
+    `<div class="mi meta" style="cursor:default">Add a model</div>` + MODELS.map((l, a) => { const ka = "L" + a;
+      return node(ka, 0, l.lab) + (!openKeys.has(ka) ? "" : l.models.map((m, b) => { const kb = ka + "M" + b;
+        return node(kb, 1, m.model) + (!openKeys.has(kb) ? "" : m.versions.map((v, c) => { const kc = kb + "V" + c;
+          return node(kc, 2, v.version) + (!openKeys.has(kc) ? "" : v.items.map(i =>
+            `<div class="mi pick" data-spec="${esc(i.spec)}" style="padding-left:${14 + 16 * 3 + 4}px">${chosen.includes(i.spec) ? "✓ " : ""}${esc(i.label)}</div>`).join(""));
+        }).join(""));
+      }).join(""));
+    }).join("");
   el.innerHTML = `<div class="mi meta" style="cursor:default">Used for Update and Ask</div>` +
     S.chosen.map(c => `<div class="mi">${esc(c.label)}<span class="arrow rm" data-spec="${esc(c.spec)}" title="Remove">✕</span></div>`).join("") +
     `<div class="sep"></div>${add}<div class="mi" id="resetpanel">Reset to default</div>`;
