@@ -587,6 +587,16 @@ class ReviewPage(unittest.TestCase):
         self.assertTrue(all(c["applicable"] for c in ch))
         self.assertEqual(ur.parse_changes("Fine.\nCHANGES: none", cur)[1], [])
 
+    def test_panelist_specs(self):
+        with mock.patch.object(ur, "cursor_models", lambda: {"kimi-k3-low": "Kimi K3 Low"}):
+            k = ur.panelist("cursor:kimi-k3-low")
+            self.assertEqual(ur.PANELISTS[k], ("cursor", "kimi-k3-low", "Kimi K3 Low"))
+            k = ur.panelist("codex:gpt-5.6-luna@medium")
+            self.assertEqual((ur.PANELISTS[k][1], ur.EFFORT[k]), ("gpt-5.6-luna", "medium"))
+            self.assertEqual(ur.panelist("claude"), "claude")
+            with self.assertRaises(ValueError):
+                ur.panelist("nonsense")
+
     def test_edit_block(self):
         with tempfile.TemporaryDirectory() as d:
             doc = Path(d) / "memo.md"

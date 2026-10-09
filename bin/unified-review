@@ -131,6 +131,53 @@ def log(msg):
     print(msg, file=sys.stderr, flush=True)
 
 
+EFFORT = {}  # Codex reasoning effort per panelist; "low" when not given
+CLAUDE_MODELS = {"sonnet": "Sonnet", "opus": "Opus", "fable": "Fable", "haiku": "Haiku"}
+CODEX_MODELS = {"gpt-5.6-luna": "GPT-5.6 Luna", "gpt-5.6-sol": "GPT-5.6 Sol"}
+
+
+def panelist(spec):
+    """Register a panelist given as harness:model[@effort] (claude:opus,
+    codex:gpt-5.6-luna@medium, cursor:kimi-k3-low) and return its key. Short
+    names already in PANELISTS (claude, gpt, gemini, grok) pass through."""
+    spec = spec.strip()
+    if spec in PANELISTS:
+        return spec
+    harness, _, model = spec.partition(":")
+    if harness not in HARNESS_BIN or not model:
+        raise ValueError(f"unknown panelist {spec!r}: use a short name ({', '.join(PANELISTS)}) or harness:model")
+    model, _, effort = model.partition("@")
+    if harness == "claude":
+        name = "Claude " + CLAUDE_MODELS.get(model, model)
+    elif harness == "codex":
+        name = CODEX_MODELS.get(model, model) + (f" {effort}" if effort else " low")
+        EFFORT[spec] = effort or "low"
+    else:
+        name = cursor_models().get(model, model)
+    PANELISTS[spec] = (harness, model, name)
+    return spec
+
+
+_CURSOR_MODELS = None
+
+
+def cursor_models():
+    """{id: display name} of the models cursor-agent offers, cached."""
+    global _CURSOR_MODELS
+    if _CURSOR_MODELS is None:
+        _CURSOR_MODELS = {}
+        try:
+            out = subprocess.run([CURSOR, "models"], capture_output=True, text=True, timeout=30,
+                                 stdin=subprocess.DEVNULL, env=CHILD_ENV).stdout if CURSOR else ""
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        for line in out.splitlines():
+            mid, sep, name = line.strip().partition(" - ")
+            if sep and mid and " " not in mid:
+                _CURSOR_MODELS[mid] = re.sub(r"[\u200b\s]+", " ", name).strip()
+    return _CURSOR_MODELS
+
+
 def available(name):
     b = HARNESS_BIN[PANELISTS[name][0]]
     return bool(b) and os.access(b, os.X_OK)
@@ -183,7 +230,7 @@ def call_once(name, prompt, out, workdir, web):
             cmd += ["--allowedTools", " ".join(tools)]
     elif harness == "codex":
         cmd = [CODEX] + (["--search"] if web else []) + (
-            ["-m", model, "-c", 'model_reasoning_effort="low"'] if model else []) + [
+            ["-m", model, "-c", f'model_reasoning_effort="{EFFORT.get(name, "low")}"'] if model else []) + [
             "exec", "-s", "read-only", "--skip-git-repo-check", "--ephemeral",
             "--color", "never", "-C", str(workdir), "-o", str(out), prompt]
     else:
@@ -742,7 +789,10 @@ SYMBOL = {"agree": "✓", "partial": "~", "disagree": "✗"}
 
 
 def short(name):
-    """Panel key without model version, e.g. gpt -> GPT."""
+    """Panel key without model version, e.g. gpt -> GPT. A harness:model
+    panelist goes by its model's display name."""
+    if ":" in name:
+        return PANELISTS[name][2] if name in PANELISTS else name.partition(":")[2]
     return {"gpt": "GPT"}.get(name, name.capitalize())
 
 
@@ -1468,7 +1518,7 @@ def page_state(path, run):
         if d.get("run") == run.name:
             decided[d["title"]] = d
     out = []
-    for n, sev, label, g in ordered_findings(r):
+    for n, sev, where_label, g in ordered_findings(r):
         rep = g["rep"]
         old, new = diff_parts(rep["body"])
         reason = None if old is not None else new
@@ -1479,7 +1529,7 @@ def page_state(path, run):
             reason = "the text this diff changes is no longer in the file"
         d = decided.get(rep["title"])
         out.append({
-            "n": n, "severity": sev, "kind": g.get("kind", ""), "section": label, "title": rep["title"], "where": g["where"],
+            "n": n, "severity": sev, "kind": g.get("kind", ""), "section": where_label, "title": rep["title"], "where": g["where"],
             "point": rep["body"].split("\n\n")[0], "body": rep["body"], "quote": rep["quote"],
             "old": old, "new": new if old is not None else None, "reason": reason,
             "span": list(span or quote_span or []) or None, "applicable": span is not None,
@@ -1493,15 +1543,18 @@ def page_state(path, run):
         f["questions"] = qs.get(str(f["n"]), [])
         for q in f["questions"]:
             for m, a in q["answers"].items():
+                if m not in labels:
+                    labels[m] = label(panelist(m))
                 if a.get("old"):  # re-check against the text as it is now
                     a["applicable"] = (find_span(text, a["old"]) is not None or fuzzy_span(
                         text, a["old"], find_span(text, a["old"][:40])) is not None)
                     a["applied"] = not a["applicable"] and find_span(text, a["new"]) is not None
-                a["model"] = labels.get(m, m).split()[0]
+                a["model"] = labels[m] if ":" in m else labels.get(m, m).split()[0]
                 a["raised"] = m in next(g for n, _, _, g in ordered_findings(r) if n == f["n"])["raised_by"]
     vers = (r.get("versions") or [{}])[0]
     return {"file": str(path), "name": Path(path).name, "run": run.name, "version": vers.get("number"),
             "edited": bool(vers.get("version")) and fingerprint(text) != vers.get("version"),
+            "chosen": [{"spec": m, "label": label(panelist(m))} for m in page_panel(path)],
             "comments": comment_state(run, text),
             "started": r.get("started", ""), "panel": [labels.get(m, m) for m in r["reviewers_ok"]],
             "failures": r.get("failures", []), "text": text, "findings": out}
@@ -1546,6 +1599,13 @@ current text: strike deletions with ~~tildes~~ and mark additions as
 ASK_LOCK = threading.Lock()
 
 
+def failure_reason(run, stem):
+    """The last line of a failed call's error log, which usually names the cause."""
+    err = run / f"{stem}.err"
+    lines = [l.strip() for l in err.read_text().splitlines() if l.strip()] if err.exists() else []
+    return lines[-1][:200] if lines else "no reply"
+
+
 def load_questions(run):
     f = run / "questions.json"
     return json.loads(f.read_text()) if f.exists() else {}
@@ -1576,7 +1636,7 @@ def ask_panel(path, run, f, question):
     """Ask every panelist from the run about finding f, in parallel, in the
     background. Answers land in questions.json as each model finishes."""
     r = json.loads((run / "results.json").read_text())
-    panel = [m for m in r["reviewers_ok"] if m in PANELISTS]
+    panel = [panelist(m) for m in page_panel(path)]
     with ASK_LOCK:
         qs = load_questions(run)
         thread = qs.setdefault(str(f["n"]), [])
@@ -1597,7 +1657,8 @@ def ask_panel(path, run, f, question):
         t = time.time()
         text = call(m, prompt, run / f"ask-{f['n']}-{k}-{m}.txt", Path(path).parent, stage="ask")
         if text is None:
-            save_question(run, f["n"], k, m, {"status": "failed", "seconds": round(time.time() - t)})
+            save_question(run, f["n"], k, m, {"status": "failed", "seconds": round(time.time() - t),
+                                              "reason": failure_reason(run, f"ask-{f['n']}-{k}-{m}")})
             return
         answer, old, new, ok = parse_answer(text, Path(path).read_text())
         save_question(run, f["n"], k, m, {"status": "done", "text": answer, "old": old, "new": new,
@@ -1655,7 +1716,7 @@ def comment_state(run, text):
     out = load_comments(run)
     for c in out:
         for m, a in c["answers"].items():
-            a["model"] = labels.get(m, m).split()[0]
+            a["model"] = labels[m].split()[0] if m in labels else label(panelist(m))
             for ch in a.get("changes", []):
                 ch["applicable"] = (find_span(text, ch["old"]) is not None or fuzzy_span(
                     text, ch["old"], find_span(text, ch["old"][:40])) is not None)
@@ -1665,8 +1726,7 @@ def comment_state(run, text):
 
 def comment_panel(path, run, comment, focus):
     """Send a general comment to every panelist in parallel, in the background."""
-    r = json.loads((run / "results.json").read_text())
-    panel = [m for m in r["reviewers_ok"] if m in PANELISTS]
+    panel = [panelist(m) for m in page_panel(path)]
     with ASK_LOCK:
         cs = load_comments(run)
         k = len(cs)
@@ -1683,7 +1743,7 @@ def comment_panel(path, run, comment, focus):
         t = time.time()
         text = call(m, prompt, run / f"comment-{k}-{m}.txt", Path(path).parent, stage="comment")
         if text is None:
-            ans = {"status": "failed", "seconds": round(time.time() - t)}
+            ans = {"status": "failed", "seconds": round(time.time() - t), "reason": failure_reason(run, f"comment-{k}-{m}")}
         else:
             answer, changes = parse_changes(text, Path(path).read_text())
             ans = {"status": "done", "text": answer, "changes": changes, "seconds": round(time.time() - t)}
@@ -1692,6 +1752,38 @@ def comment_panel(path, run, comment, focus):
             cs2[k]["answers"][m] = ans
             write_atomic(run / "comments.json", json.dumps(cs2, indent=1, ensure_ascii=False) + "\n")
     threading.Thread(target=lambda: parallel(one, panel), daemon=True).start()
+
+
+DEFAULT_PANEL = ["claude", "gpt", "gemini"]
+LABS = [("Anthropic", r"claude"), ("OpenAI", r"gpt|o\d|codex"), ("Google", r"gemini|gemma"),
+        ("xAI", r"grok|cursor-grok"), ("Moonshot", r"kimi"), ("Z.ai", r"glm"), ("DeepSeek", r"deepseek"),
+        ("Alibaba", r"qwen"), ("Meta", r"muse|llama"), ("Cursor", r"composer|auto")]
+VARIANT = re.compile(r"(-(minimal|low|medium|high|xhigh|max))?(-fast)?$")
+
+
+def model_menu():
+    """The Add menu: [{lab, families: [{family, items: [{spec, label}]}]}]. The
+    CLIs' own models come first in each lab, then what cursor-agent offers."""
+    labs = {name: {} for name, _ in LABS + [("Other", "")]}
+    labs["Anthropic"]["Claude Code"] = [{"spec": "claude:" + m, "label": n} for m, n in CLAUDE_MODELS.items()]
+    labs["OpenAI"]["Codex"] = [{"spec": f"codex:{m}@{e}", "label": f"{n} {e}"}
+                               for m, n in CODEX_MODELS.items() for e in ("low", "medium", "high")]
+    for mid, name in cursor_models().items():
+        lab = next((n for n, pat in LABS if re.match(pat, mid)), "Other")
+        fam_id = VARIANT.sub("", mid) or mid
+        fam = re.sub(r"\s+(Minimal|Low|Medium|High|Extra High|Max|Fast)\b", "", name).strip() or name
+        rest = name[len(fam):].strip() if name.startswith(fam) else name
+        labs[lab].setdefault(fam + " (Cursor)", []).append({"spec": "cursor:" + mid, "label": rest or "Default",
+                                                           "family_id": fam_id})
+    return [{"lab": lab, "families": [{"family": f, "items": items} for f, items in fams.items()]}
+            for lab, fams in labs.items() if fams]
+
+
+def page_panel(path):
+    """The panel chosen on the page for this file, else the default."""
+    f = RUNS_DIR / "page-panels.json"
+    chosen = json.loads(f.read_text()).get(str(path)) if f.exists() else None
+    return chosen or list(DEFAULT_PANEL)
 
 
 def edit_block(path, old, new, start=None):
@@ -1757,6 +1849,18 @@ class PageServer:
                 return 400, "application/json", json.dumps({"error": "no finding or no question"})
             ask_panel(self.path, run, f, body["question"].strip())
             return 200, "application/json", json.dumps({"ok": True})
+        if method == "GET" and route == "/api/models":
+            return 200, "application/json", json.dumps(model_menu())
+        if method == "POST" and route == "/api/panel":
+            try:
+                chosen = [panelist(m) for m in body.get("panel", [])] or list(DEFAULT_PANEL)
+            except ValueError as e:
+                return 400, "application/json", json.dumps({"error": str(e)})
+            f = RUNS_DIR / "page-panels.json"
+            pages = json.loads(f.read_text()) if f.exists() else {}
+            pages[str(self.path)] = chosen
+            write_atomic(f, json.dumps(pages, indent=1) + "\n")
+            return 200, "application/json", json.dumps({"ok": True})
         if method == "POST" and route == "/api/comment":
             if not body.get("text", "").strip():
                 return 400, "application/json", json.dumps({"error": "empty comment"})
@@ -1777,7 +1881,8 @@ class PageServer:
                 env = {**os.environ, "UNIFIED_REVIEW_NO_PAGE": "1"}
                 log_file = open(RUNS_DIR / "page-update.log", "w")
                 focus = "\n".join(c["comment"] for c in load_comments(self.run_folder()) if c.get("focus"))
-                self.job = subprocess.Popen([sys.executable, os.path.abspath(__file__), str(self.path)]
+                self.job = subprocess.Popen([sys.executable, os.path.abspath(__file__), str(self.path),
+                                             "-p", ",".join(page_panel(self.path))]
                                             + (["-n", focus] if focus else []),
                                             cwd=str(self.path.parent), env=env, stdin=subprocess.DEVNULL,
                                             stdout=log_file, stderr=log_file)
@@ -1971,6 +2076,10 @@ def main():
         ap.error("give at least one FILE to review")
 
     panel = [m.strip() for m in a.panel.split(",") if m.strip()]
+    try:
+        panel = [panelist(m) for m in panel]
+    except ValueError as e:
+        sys.exit(f"error: {e}")
     bad = [m for m in panel if m not in PANELISTS]
     if bad:
         sys.exit(f"error: unknown panelist(s) {bad}; known: {', '.join(PANELISTS)}")

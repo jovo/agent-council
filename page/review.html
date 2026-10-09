@@ -55,6 +55,16 @@ textarea{width:100%;min-height:110px;border:1px solid var(--line);border-radius:
 input.note{width:100%;border:1px solid var(--line);border-radius:6px;padding:4px 8px;background:var(--bg);margin:8px 0}
 .overview{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:15px}
 .banner{border-color:var(--subs-ink)}
+.menu{position:absolute;top:30px;right:0;z-index:5;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 0;min-width:280px;font-size:14px;box-shadow:0 6px 20px rgba(0,0,0,.18)}
+.menu .mi{padding:4px 14px;display:flex;gap:8px;align-items:center;cursor:pointer;white-space:nowrap;position:relative}
+.menu .mi:hover{background:var(--bg)}
+.menu .sep{border-top:1px solid var(--line);margin:5px 0}
+.menu .sub>.menu{display:none;position:absolute;top:-7px;right:100%;max-height:70vh;overflow-y:auto}
+.menu .sub:hover>.menu{display:block}
+.hl.flash{animation:flash 1.2s ease-out}
+@keyframes flash{0%{box-shadow:0 0 0 4px var(--focus)}100%{box-shadow:0 0 0 0 transparent}}
+#card{cursor:pointer}
+.menu .arrow{margin-left:auto;color:var(--faint)}
 .overview a{cursor:pointer;text-decoration:underline;text-decoration-color:var(--faint)}
 .list{font-size:14px}.list div{padding:3px 0;cursor:pointer;color:var(--muted)}.list div.cur{color:var(--ink)}
 .err{color:var(--crit-ink);font-size:14px;margin-top:8px}
@@ -70,6 +80,7 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
   <div class="row">
     <h1 id="name" style="font-size:20px;margin:0">Unified review</h1>
     <span class="meta" id="meta" style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
+    <span style="position:relative"><button id="panelbtn" title="Models used for Update and Ask"></button><div id="panelmenu" class="menu" hidden></div></span>
     <span class="meta" id="tally"></span>
     <button id="update" title="Run a new review of the current text">Update</button>
   </div>
@@ -80,6 +91,7 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
     <label class="meta">Agreement <select id="f-tag"></select></label>
     <label class="meta">Status <select id="f-status"></select></label>
     <span class="spacer"></span>
+    <button id="askbtn" title="Ask the panel about the whole draft">Ask</button>
     <button id="acceptall">Accept all shown</button>
   </div>
 </header>
@@ -143,7 +155,7 @@ function renderDraft() {
   const links = h => h.replace(/\[([^\]<@][^\]<]*)\]\((https?:\/\/[^)<\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
   let html = "", pos = 0;
   const fm = text.match(/^---\n[\s\S]*?\n---\n/);
-  if (fm) { html += '<div class="fm">' + esc(fm[0].trim()) + "</div>"; pos = fm[0].length; }
+  if (fm) pos = fm[0].length;  // front matter stays in the file, not on the page
   const re = /\n\s*\n/g; let m, start = pos;
   const blocks = [];
   re.lastIndex = pos;
@@ -153,6 +165,7 @@ function renderDraft() {
     while (a < b && text[a] === "\n") a++;
     if (a >= b) continue;
     const raw = text.slice(a, b), h = raw.match(/^(#{1,4}) /);
+    if (/^(\s*<[^>]+>\s*)+$/.test(raw)) continue;  // HTML-only lines, such as a table anchor
     if (/^\s*\|/.test(raw) && raw.split("\n").filter(l => l.trim()).every(l => /^\s*\|/.test(l))) {
       let rows = "", off = a, first = true;
       for (const line of raw.split("\n")) {
@@ -261,7 +274,7 @@ function thread(f) {
   if (!f.questions || !f.questions.length) return "";
   return f.questions.map((q, k) => `<div class="qa"><div class="q">You asked: ${esc(q.question)}</div>` +
     Object.entries(q.answers).map(([m, a]) => `<div class="ans"><div class="who">${esc(a.model)}${a.raised ? " (raised it)" : ""}${a.seconds ? ` · ${a.seconds} s` : ""}</div>` +
-      (a.status === "pending" ? `<div class="meta">Thinking…</div>` : a.status === "failed" ? `<div class="err">No answer. The model call failed.</div>` :
+      (a.status === "pending" ? `<div class="meta">Thinking…</div>` : a.status === "failed" ? `<div class="err">No answer: ${esc(a.reason || "the model call failed")}</div>` :
         `<div>${inline(a.text)}</div>` + (a.old ? `<div class="diff" style="margin-top:6px">${revHtml(a)}</div>` +
           (a.applied ? `<div class="status accepted">Applied</div>` : f.status ? "" : a.applicable ? `<button class="accrev" data-q="${k}" data-m="${m}">Accept this version</button>` : `<div class="reason">This version edits text that is not in the draft now (often the panel's proposal rather than your text), so it cannot be applied.</div>`) : "")) +
       `</div>`).join("") + `</div>`).join("");
@@ -270,7 +283,7 @@ function thread(f) {
 function commentThreads() {
   return (S.comments || []).map((c, k) => `<div class="qa"><div class="q">You: ${esc(c.comment)}${c.focus ? " <span class='meta'>(focus for the next Update)</span>" : ""}</div>` +
     Object.entries(c.answers).map(([m, a]) => `<div class="ans"><div class="who">${esc(a.model || m)}${a.seconds ? ` · ${a.seconds} s` : ""}</div>` +
-      (a.status === "pending" ? `<div class="meta">Thinking…</div>` : a.status === "failed" ? `<div class="err">No answer. The model call failed.</div>` :
+      (a.status === "pending" ? `<div class="meta">Thinking…</div>` : a.status === "failed" ? `<div class="err">No answer: ${esc(a.reason || "the model call failed")}</div>` :
         `<div>${inline(a.text)}</div>` + (a.changes || []).map((ch, i) => `<div class="diff" style="margin-top:6px">${revHtml(ch)}</div>` +
           (ch.applied ? `<div class="status accepted">Applied</div>` : ch.applicable ? `<button class="acccha" data-c="${k}" data-m="${m}" data-i="${i}">Accept this change</button>` : `<div class="reason">This change does not match the current text.</div>`)).join("")) +
       `</div>`).join("") + `</div>`).join("");
@@ -290,8 +303,8 @@ function renderSide() {
   const keep = box ? {text: box.querySelector("textarea").value, focus: box.querySelector("input").checked, active: document.activeElement === box.querySelector("textarea")} : null;
   document.getElementById("overview").innerHTML = banner +
     (ov.length ? `<div class="overview" style="margin-bottom:12px">Whole draft: ${ov.map(f => `<a data-n="${f.n}">${f.n}. ${esc(f.title)}</a>`).join(" · ")}</div>` : "") +
-    (!commentOpen ? `<div class="overview" style="margin-bottom:12px"><a id="opencomment">Ask the panel about the whole draft</a>${(S.comments || []).length ? ` <span class="meta">· ${S.comments.length} earlier</span>` : ""}</div>` :
-    `<div class="overview" id="commentbox" style="margin-bottom:12px"><div class="row" style="margin-bottom:6px"><span class="title" style="font-size:15px">Ask the panel about the whole draft</span><span class="spacer"></span><a id="closecomment" class="meta">Close</a></div>
+    (!commentOpen ? "" :
+    `<div class="overview" id="commentbox" style="margin-bottom:12px"><div class="row" style="margin-bottom:6px"><span class="title" style="font-size:15px">Ask the panel about the whole draft</span><span class="meta">${S.chosen.map(c => c.label).join(", ")}</span><span class="spacer"></span><a id="closecomment" class="meta">Close</a></div>
       <textarea placeholder="A question, a comment, or a request: Is the hypothesis falsifiable as written? Tighten the wedge section." style="min-height:60px"></textarea>
       <div class="row" style="margin-top:6px"><button id="sendc">Ask all panelists</button>
       <label class="meta"><input type="checkbox"> Use as focus for the next Update</label><span class="err" id="cerr"></span></div>
@@ -324,7 +337,8 @@ function renderSide() {
 
 function render() {
   document.getElementById("name").textContent = S.name;
-  document.getElementById("meta").textContent = `Reviewed ${S.started}${S.edited ? " · edited since" : ""} · ${S.panel.join(", ")}`;
+  document.getElementById("meta").textContent = `Reviewed ${S.started}${S.edited ? " · edited since" : ""} by ${S.panel.join(", ")}`;
+  document.getElementById("panelbtn").textContent = `Panel: ${S.chosen.map(c => c.label).join(", ")} ▾`;
   document.getElementById("fail").textContent = S.failures.length ? "Failed: " + S.failures.map(x => `${x.model} ${x.stage} (${x.reason})`).join("; ") : "";
   const acc = S.findings.filter(f => f.status === "accepted").length, dec = S.findings.filter(f => f.status === "declined").length;
   document.getElementById("tally").textContent = `${acc} accepted · ${dec} declined · ${S.findings.length - acc - dec} open`;
@@ -346,7 +360,7 @@ function render() {
 function select(n, scroll) {
   cur = n; mode = null; render();
   const e = document.querySelector(`.hl[data-n="${n}"]`);
-  if (scroll && e) e.scrollIntoView({block: "center", behavior: "smooth"});
+  if (scroll && e) centerOn(e);
 }
 
 let polling = false;
@@ -370,6 +384,45 @@ async function act(route, body) {
   } catch (e) { document.getElementById("err").textContent = e.message; }
 }
 
+let MODELS = null;
+async function savePanel(list) { await api("/api/panel", {panel: list}); await load(); drawPanelMenu(); }
+function drawPanelMenu() {
+  const el = document.getElementById("panelmenu"), chosen = S.chosen.map(c => c.spec);
+  const add = MODELS ? `<div class="mi sub">Add<span class="arrow">◂</span><div class="menu">` + MODELS.map(l =>
+      `<div class="mi sub">${esc(l.lab)}<span class="arrow">◂</span><div class="menu">` + l.families.map(f =>
+        `<div class="mi sub">${esc(f.family)}<span class="arrow">◂</span><div class="menu">` + f.items.map(i =>
+          `<div class="mi pick" data-spec="${esc(i.spec)}">${chosen.includes(i.spec) ? "✓ " : ""}${esc(i.label)}</div>`).join("") + `</div></div>`).join("") +
+      `</div></div>`).join("") + `</div></div>` : `<div class="mi meta">Loading models…</div>`;
+  el.innerHTML = `<div class="mi meta" style="cursor:default">Used for Update and Ask</div>` +
+    S.chosen.map(c => `<div class="mi">${esc(c.label)}<span class="arrow rm" data-spec="${esc(c.spec)}" title="Remove">✕</span></div>`).join("") +
+    `<div class="sep"></div>${add}<div class="mi" id="resetpanel">Reset to default</div>`;
+  el.querySelectorAll(".rm").forEach(x => x.onclick = e => { e.stopPropagation(); savePanel(chosen.filter(s => s !== x.dataset.spec)); });
+  el.querySelectorAll(".pick").forEach(x => x.onclick = e => { e.stopPropagation(); const sp = x.dataset.spec;
+    savePanel(chosen.includes(sp) ? chosen.filter(s => s !== sp) : [...chosen, sp]); });
+  document.getElementById("resetpanel").onclick = e => { e.stopPropagation(); savePanel([]); };
+}
+document.getElementById("panelbtn").onclick = async e => {
+  e.stopPropagation();
+  const el = document.getElementById("panelmenu");
+  el.hidden = !el.hidden;
+  if (!el.hidden) { drawPanelMenu(); if (!MODELS) { MODELS = await api("/api/models"); drawPanelMenu(); } }
+};
+document.addEventListener("click", e => { const el = document.getElementById("panelmenu"); if (!el.contains(e.target)) el.hidden = true; });
+function centerOn(el) {
+  const y = el.getBoundingClientRect().top + window.scrollY - window.innerHeight / 2 + el.offsetHeight / 2;
+  window.scrollTo({top: Math.max(0, y)});
+}
+function goTo(n) {
+  const e = document.querySelector(`.hl[data-n="${n}"]`);
+  if (!e) return;
+  centerOn(e);
+  e.classList.remove("flash"); void e.offsetWidth; e.classList.add("flash");
+}
+document.getElementById("card").addEventListener("click", e => {
+  if (e.target.closest("button, textarea, input, a, select")) return;
+  if (cur != null) goTo(cur);
+});
+document.getElementById("askbtn").onclick = () => { commentOpen = !commentOpen; renderSide(); const t = document.querySelector("#commentbox textarea"); if (t) { t.focus(); window.scrollTo({top: 0}); } };
 document.getElementById("update").onclick = async () => { await api("/api/update", {}); load(); };
 document.getElementById("acceptall").onclick = async () => {
   const todo = S.findings.filter(f => shown(f) && !f.status && f.applicable);
