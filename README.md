@@ -13,10 +13,10 @@ It drives the coding-agent CLIs you already use (Claude Code, Codex, and Cursor)
 git clone https://github.com/jovo/agent-council
 cd agent-council
 ./install.sh
-unified-review memo.md
+unified-review example.md
 ```
 
-A review of a 1,300-word memo takes 40 to 120 seconds. For a Markdown file, the review page then opens in your browser. Click a highlighted passage to see its finding, then Accept, Edit, or Decline it. Click **Update** to review the revised text. [Install](#install) lists what you need first.
+[`example.md`](example.md) is a short proposal with planted flaws: overclaims, a conclusion that does not follow from its evidence, and two typos. Its review takes about 30 seconds, and a 1,300-word memo takes 40 to 120. For a Markdown file, the review page then opens in your browser. Click a highlighted passage to see its finding, then Accept, Edit, or Decline it. Click **Update** to review the revised text. Accept writes into `example.md`, and `git checkout example.md` restores it. [Install](#install) lists what you need first.
 
 To review a file without the command line, run `unified-review --upload`. A page opens where you drop or choose a PDF, Markdown, text, or TeX file. The panel reviews a copy, and the page shows the unified review when it finishes, with a button to download it as Markdown. Nothing is written back to your file.
 
