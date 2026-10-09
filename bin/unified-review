@@ -532,7 +532,8 @@ quote: <the exact text this finding targets, copied verbatim from the draft or
   line. Empty for a finding about the whole draft or its overall structure.>
 ---
 <the point in one or two sentences, then the inline diff per the house rules.
-Do not repeat the quoted text outside the diff. For a Nitpick, the point is a
+Do not repeat the quoted text outside the diff, and do not put the diff in a
+code block. For a Nitpick, the point is a
 few words and the diff covers only the words that change.
 No heading and no number.>
 
@@ -620,9 +621,13 @@ Reply with exactly one line per claim, in order, and nothing else:
 END_MARK = re.compile(r"^\s*=+\s*(?:END\s*(?:OF\s*)?FINDING\s*=*)?\s*$", re.M | re.I)  # a stray end marker
 
 
+FENCED_DIFF = re.compile(r"```[a-z]*\n(.*?(?:~~|🟢).*?)\n```", re.S)
+
+
 def strip_end(body):
-    """Drop an '=== END FINDING' line a reviewer added though the format has none."""
-    return END_MARK.sub("", body or "").strip()
+    """Drop an '=== END FINDING' line a reviewer added though the format has none,
+    and unwrap a diff a reviewer put in a code block, so it renders and applies."""
+    return FENCED_DIFF.sub(lambda m: m.group(1), END_MARK.sub("", body or "")).strip()
 
 
 NO_FINDINGS = re.compile(r"^\s*NO FINDINGS\s*$", re.M)
@@ -963,6 +968,19 @@ def short(name):
     return {"gpt": "GPT"}.get(name, name.capitalize())
 
 
+GLYPH = {"claude": "✳", "openai": "֍", "googlegemini": "✦", "x": "𝕏", "meta": "∞"}  # text stand-ins for the lab icons
+
+
+def marks(g, voters):
+    """Beside a finding's title: the labs that flagged it, then each other model's
+    vote as ✓, ~, or ✗ before its lab's mark."""
+    glyph = lambda m: GLYPH.get(lab_icon(m), lab_icon(m))
+    out = [glyph(m) for m in g["raised_by"]]
+    out += [SYMBOL[v["vote"]] + glyph(m) for m in voters
+            if m not in g["raised_by"] and (v := g["votes"].get(m))]
+    return " ".join(out)
+
+
 def vote_line(g, voters):
     """One compact line: a symbol per voter, bold if its own review raised it."""
     cells = []
@@ -970,10 +988,7 @@ def vote_line(g, voters):
         v = g["votes"].get(m)
         if m not in g["raised_by"] and v:  # who raised it, and who voted, does not matter here
             cells.append(SYMBOL[v["vote"]])
-    if cells:
-        return "Votes: " + " ".join(cells)
-    n = len(g["raised_by"])
-    return f"Raised by {n} models" if n > 1 else "No votes"
+    return "Votes: " + " ".join(cells) if cells else ""
 
 
 def section_of(pos, heads):
@@ -1242,7 +1257,9 @@ def ordered_findings(r):
             spot, label = (2, g.get("fpos", 0)), "Focus or supporting material"
         sev = "Typo" if is_typo(g) else canon_sev(g["severity"])
         # Findings added later by a review of an edit go last, so earlier numbers stay put.
-        key = (len(ORDER), g["added"]) + spot if g.get("added") else (ORDER.index(sev),) + spot
+        logic = g.get("kind") == "logic" and sev != "Typo"  # logic flaws come first, by severity
+        key = ((len(ORDER), g["added"]) + spot if g.get("added")
+               else (-1, ORDER.index(sev)) + spot if logic else (ORDER.index(sev), 0) + spot)
         out.append((key, sev, label, g))
     out.sort(key=lambda x: x[0])
     return [(n, sev, label, g) for n, (_, sev, label, g) in enumerate(out, 1)]
@@ -1328,9 +1345,9 @@ def quoted(g, files, where_label=""):
         dup = loc and where_label == loc[0].name  # no headings: the section is the file
         head = f"{where_label} · {place}:" if where_label and not dup else f"{place}:"
     if "~~" in g["rep"]["body"] or "🟢" in g["rep"]["body"]:
-        return f"*{head.rstrip(':')}*\n\n"  # the diff shows the text, so do not quote it twice
+        return ""  # the diff shows the text, so do not quote it twice
     block = "\n".join("> " + line for line in q.splitlines())
-    return f"*{head}*\n\n{block}\n\n"
+    return f"{block}\n\n"
 
 
 def participation(fails, roles, names, consequence):
@@ -1363,23 +1380,25 @@ def render(outdir):
         parts.append("*Fact-check running. Results go to factcheck.md.*")
     current, typos = None, []
     for n, sev, where_label, g in ordered_findings(r):
+        group = "Logic" if g.get("kind") == "logic" and sev != "Typo" else sev
         if sev == "Typo":
             before, after = typo_change(*diff_parts(g["rep"]["body"]))
             typos.append(f"- **{n}.** ~~{before}~~ → {after} ({where_label})")
             continue
-        if sev != current:
-            current = sev
-            parts.append("## Nitpicks" if sev == "Nitpick" else f"## {sev}")
-        if sev == "Nitpick":  # one line: where, the diff, the votes
+        if group != current:
+            current = group
+            parts.append({"Nitpick": "## Nitpicks", "Logic": "## Logical flaws"}.get(group, f"## {group}"))
+        if group == "Nitpick":  # one line: the diff and the votes
             diff = " ".join(p for p in strip_end(g["rep"]["body"]).split("\n\n")[1:] if "~~" in p or "🟢" in p)
-            parts.append(f"**{n}.** *{where_label}.* {diff or g['rep']['title']} ({vote_line(g, voters)})")
+            parts.append(f"**{n}.** {marks(g, voters)} {diff or g['rep']['title']}".replace("  ", " "))
             continue
         # Escape headings inside a reviewer's diff so they do not become sections here.
-        body = re.sub(r"^(\s*(?:🟢\s*)?(?:\*\*)?)#", r"\1\\#", g["rep"]["body"], flags=re.M)
-        tag = ((f" ({g['kind']})" if g.get("kind") else "") + (" (contested)" if g.get("contested") else "")
-               + (f" (in {g['seen']} reviews)" if g.get("seen", 1) > 1 else ""))
-        parts.append(f"### {n}. {g['rep']['title']}{tag}\n\n"
-                     f"{quoted(g, r['files'], where_label)}{body}\n\n{vote_line(g, voters)}")
+        body = re.sub(r"^(\s*(?:🟢\s*)?(?:\*\*)?)#", r"\1\\#", strip_end(g["rep"]["body"]), flags=re.M)
+        tag = ((f" ({sev})" if group == "Logic" else f" ({g['kind']})" if g.get("kind") else "")
+               + (" (contested)" if g.get("contested") else "")
+               )
+        parts.append(f"### {n}. {g['rep']['title']}{tag} {marks(g, voters)}".rstrip() + "\n\n"
+                     f"{quoted(g, r['files'], where_label)}{body}")
     since = r.get("since_last") or {}
     if since.get("resolved") or since.get("dropped"):
         parts.append("## Since the last review\n\n" + "\n".join(
@@ -1409,7 +1428,9 @@ def render(outdir):
     ag = r.get("agreement") or {}
     if ag.get("alpha") is not None:
         ci = f", 95% CI {ag['ci95'][0]} to {ag['ci95'][1]}" if ag.get("ci95") else ""
-        parts.append(f"*Agreement: Krippendorff's alpha {ag['alpha']}{ci}, {ag['units']} findings.*")
+        key = " · ".join(sorted({f"{GLYPH.get(lab_icon(m), lab_icon(m))} {short(m)}" for m in voters}))
+        parts.append(f"## Agreement\n\nBeside each title: the labs that flagged it ({key}), then each other "
+                     "model's vote, ✓ agree, ~ partial, ✗ disagree.\n\n*Krippendorff's alpha {ag['alpha']}{ci}, {ag['units']} findings.*")
     write_atomic(outdir / "unified.md", "\n\n".join(parts) + "\n")
 
 
@@ -2361,7 +2382,7 @@ def closest_sentence(text, old):
 def page_state(path, run):
     """Everything the page shows: the current text and each finding in place."""
     r = json.loads((run / "results.json").read_text())
-    text = Path(path).read_text()
+    text = doc_text(path)
     labels = r["labels"]
     decided, earlier = {}, {}
     for d in load_decisions().get(str(path), []):
@@ -2430,6 +2451,7 @@ def page_state(path, run):
     vers = (r.get("versions") or [{}])[0]
     return {"file": str(path), "name": Path(path).name, "run": run.name, "version": vers.get("number"),
             "edited": bool(vers.get("version")) and fingerprint(text) != vers.get("version"),
+            "readonly": read_only(path), "pdf": is_pdf(path),
             "chosen": [{"spec": m, "label": label(panelist(m)), "icon": lab_icon(m)} for m in page_panel(path)],
             "panel_icons": [{"icon": lab_icon(m), "label": labels.get(m, m)} for m in r["reviewers_ok"]],
             "comments": comment_state(run, text), "summary": summary_state(run), "checks": checks(text, path, r.get("deck", False)), "deck": r.get("deck", False),
@@ -2511,7 +2533,7 @@ def clean_markup(text):
 def apply_change(path, old, new, quote=""):
     """Replace old with new in the file. Re-reads the file first, so edits made
     since the page loaded are kept. Returns an error message or None."""
-    text = Path(path).read_text()
+    text = doc_text(path)
     edits = locate_edits(text, old, new, quote)
     if not edits:
         return "the text this change targets is no longer in the file"
@@ -2600,7 +2622,7 @@ def ask_panel(path, run, f, question):
     finding = f"{f['severity']}: {f['title']}\n{f['body']}\nVotes: {votes}"
     rules, _ = load_rules(None)
     prompt = ASK.format(finding=finding, thread=earlier, question=question,
-                        draft=Path(path).read_text(), rules=rules)
+                        draft=doc_text(path), rules=rules)
 
     def one(m):
         t = time.time()
@@ -2609,7 +2631,7 @@ def ask_panel(path, run, f, question):
             save_question(run, f["n"], k, m, {"status": "failed", "seconds": round(time.time() - t),
                                               "reason": failure_reason(run, f"ask-{f['n']}-{k}-{m}")})
             return
-        answer, old, new, ok = parse_answer(text, Path(path).read_text())
+        answer, old, new, ok = parse_answer(text, doc_text(path))
         save_question(run, f["n"], k, m, {"status": "done", "text": answer, "old": old, "new": new,
                                           "applicable": ok, "seconds": round(time.time() - t)})
     threading.Thread(target=lambda: parallel(one, panel), daemon=True).start()
@@ -2635,7 +2657,7 @@ def review_passage(path, run, passage):
 
     def work():
         try:
-            draft = Path(path).read_text()
+            draft = doc_text(path)
             panel = [panelist(m) for m in page_panel(path)]
             declines, applied = active_decisions([Path(path)], norm(draft))
             decided = decisions_block(declines, applied)
@@ -2755,7 +2777,7 @@ def fill_slots(path, run, f):
     """Fill finding f's {{…}} slots with web search, in the background. The filled
     text lands in fills.json, where page_state takes it as the finding's new text."""
     save_fill(run, f["n"], {"status": "pending"})
-    draft = Path(path).read_text()
+    draft = doc_text(path)
     keys = bool(cited_keys(draft))
     cite_rule = ("The draft cites with pandoc keys. Write each citation you add as "
                  "[@doi:DOI], such as [@doi:10.1126/science.7414331], or as [@url:URL] for a "
@@ -2935,7 +2957,7 @@ def comment_panel(path, run, comment, focus, passage=""):
     rules, _ = load_rules(None)
     about = (f"\nThe comment is about this passage, which the author selected in the rendered draft:\n"
              f"<passage>\n{passage}\n</passage>\n") if passage else ""
-    prompt = COMMENT.format(thread=thread, passage=about, comment=comment, draft=Path(path).read_text(), rules=rules)
+    prompt = COMMENT.format(thread=thread, passage=about, comment=comment, draft=doc_text(path), rules=rules)
 
     def one(m):
         t = time.time()
@@ -2943,7 +2965,7 @@ def comment_panel(path, run, comment, focus, passage=""):
         if text is None:
             ans = {"status": "failed", "seconds": round(time.time() - t), "reason": failure_reason(run, f"comment-{k}-{m}")}
         else:
-            answer, changes = parse_changes(text, Path(path).read_text())
+            answer, changes = parse_changes(text, doc_text(path))
             ans = {"status": "done", "text": answer, "changes": changes, "seconds": round(time.time() - t)}
         with ASK_LOCK:
             cs2 = load_comments(run)
@@ -3055,7 +3077,7 @@ def page_panel(path):
 def edit_block(path, old, new, start=None):
     """Replace one paragraph the user edited on the page. The paragraph must
     still read as it did when the page loaded. Returns an error or None."""
-    text = Path(path).read_text()
+    text = doc_text(path)
     if not old.strip():
         return "nothing to replace"
     if start is not None and text[start:start + len(old)] == old:
@@ -3066,6 +3088,16 @@ def edit_block(path, old, new, start=None):
         return "this paragraph changed in the file since the page loaded. Reload the page and edit again"
     Path(path).write_text(text[:at] + clean_markup(new.rstrip("\n")) + text[at + len(old):])
     return None
+
+
+WRITE_ROUTES = ("/api/accept", "/api/fix", "/api/fill", "/api/change", "/api/edit")
+
+
+def read_only(path):
+    """A PDF, or an uploaded copy, cannot be edited from the page: there is no
+    source to write to, or the author's file is elsewhere."""
+    p = Path(path)
+    return is_pdf(p) or (RUNS_DIR / "uploads") in p.resolve().parents
 
 
 class PageServer:
@@ -3098,6 +3130,10 @@ class PageServer:
 
     def handle(self, method, route, body):
         self.last = time.time()
+        if method == "POST" and route in WRITE_ROUTES and read_only(self.path) and not (
+                route == "/api/accept" and body.get("record_only")):
+            return 409, "application/json", json.dumps(
+                {"error": "this review is read-only: apply changes in the source document"})
         if method == "GET" and route == "/api/state":
             st = page_state(self.path, self.run_folder())
             st["job"] = self.job_state()
@@ -3173,7 +3209,7 @@ class PageServer:
         if method == "POST" and route == "/api/fix":  # a mechanical fix from Checks
             if body.get("fix") != "spaces":
                 return 400, "application/json", json.dumps({"error": "no such fix"})
-            text = self.path.read_text()
+            text = doc_text(self.path)
             self.path.write_text(fix_double_spaces(text))
             return 200, "application/json", json.dumps({"ok": True})
         if method == "POST" and route == "/api/fill":
@@ -3342,34 +3378,38 @@ def upload_job(uid, kind="uploads"):
 
 
 def review_markdown(run):
-    """unified.md, with the theme summary after its title when the page has written one."""
+    """unified.md, with the theme summary after its title when the page has written one.
+    It is rebuilt from results.json first, so a review made before a format
+    change reads in the current format."""
+    if (run / "results.json").exists():
+        render(run)
     md = (run / "unified.md").read_text()
     sf = run / "summary.json"
     if not sf.exists():
         return md
     sm = json.loads(sf.read_text())
-    # Each theme ends with its finding numbers. As on the page, a finding sits under
-    # its first theme, and findings in no theme go under "Other".
-    ns = [int(m) for m in re.findall(r"^### (\d+)\.", md, re.M)]
-    heads = dict((int(n), t) for n, t in re.findall(r"^### (\d+)\. (.+)$", md, re.M))
-    logic = [n for n in ns if "(logic)" in heads.get(n, "")]
-    typed = not heads or any(re.search(r"\((logic|evidence|clarity|style)\)", t) for t in heads.values())
+    # Titles and kinds come from the results, not from the headings. A finding sits
+    # under its first theme, findings in no theme go under "Other", and nitpicks
+    # stay out of the summary.
+    r = json.loads((run / "results.json").read_text())
+    found = {n: g for n, sev, _, g in ordered_findings(r) if sev not in ("Nitpick", "Typo")}
+    ns = list(found)
+    logic = [n for n in ns if found[n].get("kind") == "logic"]
+    typed = not ns or any(found[n].get("kind") for n in ns)
     used, themes = set(logic), []
     for t in sm["themes"]:
-        fs = sorted(n for n in t["findings"] if n in ns and n not in used)
+        fs = sorted(n for n in t["findings"] if n in found and n not in used)
         used.update(fs)
         if fs:
-            themes.append((t["theme"], t.get("gist", ""), fs))
+            themes.append((t["theme"], fs))
     rest = [n for n in ns if n not in used]
     if rest:
-        themes.append(("Other", "", sorted(rest)))
+        themes.append(("Other", sorted(rest)))
+    titles = lambda fs: "".join(f"  - {found[n]['rep']['title']} ({n})\n" for n in fs)
     # The first bullet is always the logic flaws, or that there are none.
-    title_of = lambda n: re.sub(r"\s*\((logic|evidence|clarity|style|contested|in \d+ reviews)\)", "", heads.get(n, "")).strip()
-    first = ("- **Logical flaws:** " + ("; ".join(f"{title_of(n)} ({n})" for n in logic) if logic else "none found.")
-             if typed else "- **Logical flaws:** this review has no type labels.") + "\n"
-    block = "## Summary\n\n" + first + "".join(
-        f"- **{name}**" + (f": {gist}" if gist else "") + f" ({', '.join(map(str, fs))})\n"
-        for name, gist, fs in themes)
+    first = (("- **Logical flaws:**\n" + titles(logic)) if logic else "- **Logical flaws:** none found.\n"
+             ) if typed else "- **Logical flaws:** this review has no type labels.\n"
+    block = "## Summary\n\n" + first + "".join(f"- **{name}:**\n{titles(fs)}" for name, fs in themes)
     title, _, rest = md.partition("\n")
     return f"{title}\n\n{block}\n{rest.lstrip(chr(10))}"
 
@@ -3455,9 +3495,10 @@ class UploadServer:
             if st is None:
                 return err(404, "no such upload")
             unified = st.pop("unified", None)
-            st.pop("file", None)
+            reviewed = st.pop("file", None)
             if unified is None:
                 return ok(st)
+            st["page"] = page_url(reviewed) if reviewed else None
             st["markdown"] = Path(unified).read_text()
             st["html"] = None
             if shutil.which("pandoc"):
@@ -3804,7 +3845,7 @@ def main():
         " Fact-check still running; factcheck.md opens when it finishes." if a.verify else ""))
     # One Markdown file opens its review page; a PDF, several files, or an
     # Re-review from the page itself keep to unified.md.
-    page = (len(files) == 1 and not is_pdf(files[0]) and not os.environ.get("UNIFIED_REVIEW_NO_PAGE")
+    page = (len(files) == 1 and not os.environ.get("UNIFIED_REVIEW_NO_PAGE")
             and open_page(files[0]))
     if not page and not os.environ.get("UNIFIED_REVIEW_NO_PAGE"):
         open_file(unified)

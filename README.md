@@ -40,7 +40,7 @@ unified-review example.md
 
 [`example.md`](example.md) is a short proposal with planted flaws: overclaims, a conclusion that does not follow from its evidence, and two typos. Its review takes about 30 seconds, and a 1,300-word memo takes 40 to 120. For a Markdown file, the review page then opens in your browser. Click a highlighted passage to see its finding, then Accept, Edit, or Decline it. Click **Re-review** to review the revised text. Accept writes into `example.md`, and `git checkout example.md` restores it. [Install](#install) lists what you need first.
 
-To review a PDF, or a file you want left unchanged, run `unified-review --upload`. A page opens where you drop or choose a PDF, Markdown, text, or TeX file. The panel reviews a copy, and the page shows the unified review when it finishes, with a button to download it as Markdown. Nothing is written back to your file.
+To review a PDF, or a file you want left unchanged, run `unified-review --upload`. A page opens where you drop or choose a PDF, Markdown, text, or TeX file. A PDF is converted to Markdown, the panel reviews that copy, and the full review page opens on it when it finishes, with Download for the review as Markdown. Nothing is written back to your file.
 
 ## Why a panel that votes
 
@@ -70,12 +70,12 @@ The page shows the current draft, set in New Computer Modern like the PDFs and d
 **Choosing what to see**
 
 - When a review has open logic findings, the page shows only those at first, since a passage whose argument fails may be rewritten anyway. A banner says so and links to everything.
-- Dropdowns filter by type (logic, evidence, clarity, style), severity, agreement (unanimous, majority, contested), and status. **Accept all shown** applies every open finding the filters select.
+- A menu bar filters by type (logic, evidence, clarity, style), severity, agreement (unanimous, majority, contested), and status. Each menu shows its choice, or its name when nothing is chosen, and drops its options on a click. **Accept all shown** applies every open finding the filters select.
 - A finding the panel has raised before shows "in N reviews".
 
 **Working on the whole draft**
 
-- **Summary**, shown by default at the top right, summarizes the reviews. Its first bullet is always **Logical flaws**: every logic finding, or "none found", since a draft whose argument fails is not worth polishing yet. Claude Sonnet then groups the other findings into themes. Each theme is a bullet with a one-sentence gist, and its findings are listed beneath it by title, linked to the finding. Until the themes arrive, the card lists the Critical and Substantive findings. The summary is written the first time the page opens a review and kept as `summary.json` in the run folder. The **Summary** button shows or hides it.
+- **Summary**, shown by default at the top right, summarizes the reviews. Its first bullet is always **Logical flaws**: every logic finding, or "none found", since a draft whose argument fails is not worth polishing yet. Claude Sonnet then groups the other findings into themes. Each theme is a bullet, closed until you click it, that opens to its findings' titles, each linked to its finding. The box scrolls when it runs past about a paragraph. Until the themes arrive, the card lists the Critical and Substantive findings. The summary is written the first time the page opens a review and kept as `summary.json` in the run folder. The **Summary** button shows or hides it.
 - **Open…** opens a new tab where you drop a draft from Finder, or click **Choose in Finder…** (macOS). A draft dropped anywhere on the review page works the same way. Obsidian gives a dragged note to no other app, so drag it from Finder (Reveal in Finder in Obsidian). A browser does not tell a page where a dropped file lives, so the server finds the original with Spotlight: the one file with the same name and the same bytes. If it finds none (an unindexed folder) or several identical copies, it says so and reviews nothing. It never reviews a copy. The chosen file is reviewed in place, as `unified-review FILE` would, and the tab becomes its review page, so several reviews can be open at once. A file reviewed before opens straight to its page, where **Re-review** runs a new review.
 - **Download** saves the review as Markdown: the theme summary, then every finding with its proposed change and votes. It is the run's `unified.md`, so it takes no model calls.
 - **Ask** beside **Accept all shown** sends a question, comment, or request about the whole draft ("tighten the wedge section") to every panelist. Edits they propose appear with their own Accept. Tick "Use as focus for the next Re-review" to pass the comment to the next review.

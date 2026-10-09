@@ -19,6 +19,15 @@
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "NewCM Body",Georgia,serif}
 h1,h2,h3,.title{font-family:"NewCM Title","Helvetica Neue",Arial,sans-serif;font-weight:700}
 button,textarea,input{font:inherit;color:inherit}
+.menubar{display:inline-flex;gap:2px;align-items:center}
+.mb{position:relative;font-size:14px}
+.mb .mbname{padding:3px 9px;border-radius:5px;cursor:pointer;user-select:none;color:var(--ink)}
+.mb .mbname b{font-weight:700}.mbarrow{color:var(--faint);font-size:11px}
+.mb:hover .mbname,.mb.open .mbname{background:var(--line)}
+.mbmenu{position:absolute;top:26px;left:0;z-index:6;min-width:170px;background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:4px 0;box-shadow:0 6px 20px rgba(0,0,0,.2)}
+.mbitem{padding:3px 14px 3px 8px;cursor:pointer;white-space:nowrap;display:flex;gap:6px}
+.mbitem:hover{background:var(--focus);color:var(--bg)}
+.mbcheck{width:14px;display:inline-block;text-align:center}
 select{-webkit-appearance:none;appearance:none;background-color:var(--panel);border:1px solid var(--line);border-radius:6px;padding:3px 30px 3px 9px;font:inherit;font-size:14px;color:inherit;margin-right:10px;cursor:pointer;
 background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
 background-position:calc(100% - 15px) 55%,calc(100% - 10px) 55%;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
@@ -33,6 +42,7 @@ header{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px so
 main{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);gap:24px;padding:16px 24px 80px;max-width:1400px;margin:0 auto}
 #draft{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:24px 32px}
 #draft p{margin:0 0 .9em;white-space:pre-wrap}
+#draft.pdf p{white-space:normal}  /* a PDF's text breaks at its old line ends; let it flow */
 #draft h1{font-size:26px;margin:.2em 0 .6em}#draft h2{font-size:21px;margin:1.2em 0 .5em}#draft h3,#draft h4{font-size:17px;margin:1em 0 .4em}
 #draft a{color:var(--xref);text-decoration:none}#draft a:hover{text-decoration:underline}#draft a.cite{color:var(--cite)}#draft a.xref{cursor:help}
 #draft ul{list-style-type:disc;padding-left:1.6em;margin:0 0 .9em}#draft ul ul{list-style-type:circle;margin:0}#draft ul ul ul{list-style-type:square}#draft ul ul ul ul{list-style-type:"·  "}
@@ -75,10 +85,12 @@ input.note{width:100%;border:1px solid var(--line);border-radius:6px;padding:4px
 @keyframes flash{0%{box-shadow:0 0 0 4px var(--focus)}100%{box-shadow:0 0 0 0 transparent}}
 #card{cursor:pointer}
 .ico{display:inline-block;width:15px;height:15px;vertical-align:-2px;background-color:currentColor;-webkit-mask-size:contain;mask-size:contain;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-position:center;mask-position:center}
+.flagged .ico{width:13px;height:13px;opacity:.75}.flagged .vm{white-space:nowrap;font-size:13px;color:var(--muted)}
 .ico.badge{background:none;border:1px solid currentColor;border-radius:4px;font:700 10px/13px "NewCM Title",Arial,sans-serif;text-align:center;width:15px;height:15px}
 .menu .arrow{margin-left:auto;color:var(--faint)}
 body.dropping{outline:3px dashed var(--muted);outline-offset:-8px}
 #sumpanel{flex-shrink:0}#sumpanel>.card{max-height:60vh;overflow-y:auto;overscroll-behavior:contain}
+.sumscroll{max-height:9.5em;overflow-y:auto}  /* about a paragraph; scroll for more */
 .themes{margin:6px 0 0;padding-left:0;list-style:none}.themes li{margin:0 0 8px}.themes summary{cursor:pointer}.themes .outline{padding-left:16px}.outline{font-size:14px;margin-top:3px}.outline .sev{text-decoration:none}
 .overview a{cursor:pointer;text-decoration:underline;text-decoration-color:var(--faint)}
 .list{font-size:14px}
@@ -106,10 +118,7 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
   </div>
   <div class="row meta" id="fail" style="margin-top:4px"></div>
   <div class="row" style="margin-top:8px">
-    <label class="meta">Type <select id="f-kind"></select></label>
-    <label class="meta">Severity <select id="f-sev"></select></label>
-    <label class="meta">Agreement <select id="f-tag"></select></label>
-    <label class="meta">Status <select id="f-status"></select></label>
+    <span class="menubar"><span class="mb" id="f-kind"></span><span class="mb" id="f-sev"></span><span class="mb" id="f-tag"></span><span class="mb" id="f-status"></span></span>
     <span class="spacer"></span>
     <button id="sumbtn" class="on" title="Show or hide the summary of the main findings">Summary</button>
     <button id="askbtn" title="Ask the panel about the whole draft">Ask</button>
@@ -217,12 +226,23 @@ async function toggleMic(ta) {
   document.querySelectorAll(".mic").forEach(micLabel);
 }
 
-function chips(id, key, opts, allLabel) {
-  const el = document.getElementById(id);
-  el.innerHTML = [[allLabel, "All"], ...opts.map(o => [o, o])]
-    .map(([label, v]) => `<option value="${v}"${filt[key] === v ? " selected" : ""}>${label}</option>`).join("");
-  el.onchange = () => { filt[key] = el.value; if (key === "kind") logicAuto = false; render(); };
+// A menu-bar filter, like a macOS menu: its name, and the current choice when
+// it is not the default; a click drops the options, with a check by the choice.
+const MENU_NAME = {kind: "Type", sev: "Severity", tag: "Agreement", status: "Status"};
+let openMenu = null;
+function chips(id, key, opts, allLabel, dflt = "All") {
+  const el = document.getElementById(id), values = [[allLabel, "All"], ...opts.map(o => [o, o])];
+  const cur = values.find(([, v]) => v === filt[key]);
+  // Closed, a menu shows its choice, or its name when the choice is the default.
+  el.innerHTML = `<span class="mbname" title="${MENU_NAME[key]}">${filt[key] !== dflt && cur ? `<b>${esc(cur[0])}</b>` : MENU_NAME[key]} <span class="mbarrow">▾</span></span>`
+    + (openMenu === key ? `<div class="mbmenu">${values.map(([label, v]) =>
+        `<div class="mbitem" data-v="${esc(v)}"><span class="mbcheck">${filt[key] === v ? "✓" : ""}</span>${esc(label)}</div>`).join("")}</div>` : "");
+  el.classList.toggle("open", openMenu === key);
+  el.querySelector(".mbname").onclick = e => { e.stopPropagation(); openMenu = openMenu === key ? null : key; render(); };
+  el.querySelectorAll(".mbitem").forEach(it => it.onclick = e => { e.stopPropagation();
+    filt[key] = it.dataset.v; openMenu = null; if (key === "kind") logicAuto = false; render(); });
 }
+document.addEventListener("click", () => { if (openMenu) { openMenu = null; render(); } });
 
 // Pandoc's identifier for a heading, so [text](#section-name) links resolve.
 const slug = t => t.toLowerCase().replace(/<[^>]+>|\[@[^\]]*\]|[*_`]/g, "").replace(/[^\p{L}\p{N}_\-.\s]/gu, "")
@@ -391,7 +411,8 @@ function renderDraft() {
   d.innerHTML = html;
   d.querySelectorAll("ol.refs a[href^='http']").forEach(e => { e.target = "_blank"; e.rel = "noopener"; });
   d.querySelectorAll(".hl").forEach(e => e.onclick = () => select(+e.dataset.n, false));
-  d.querySelectorAll("[data-a]").forEach(e => e.ondblclick = () => editBlock(e));
+  if (!S.readonly) d.querySelectorAll("[data-a]").forEach(e => e.ondblclick = () => editBlock(e));
+  d.classList.toggle("pdf", !!S.pdf);
 }
 
 // Whether saving a paragraph also reviews it, and how much: remembered in this browser.
@@ -434,21 +455,25 @@ function renderCard() {
     return;
   }
   const others = f.votes.filter(v => !v.raised), raisers = f.votes.filter(v => v.raised).length;
-  const votes = others.length ? others.map(v => icon(v.icon, v.label) + " " + ({agree: "✓", partial: "~", disagree: "✗"}[v.vote] || "?")).join("&nbsp;&nbsp;")
-    : raisers > 1 ? `Raised by ${raisers} models` : "No votes";
+  // Beside the title: the labs that flagged it, then each other model's vote before its icon.
+  const sym = {agree: "✓", partial: "~", disagree: "✗"};
+  const flagged = f.votes.filter(v => v.raised).map(v => icon(v.icon, v.label + " flagged this")).join(" ")
+    + others.map(v => ` <span class="vm" title="${esc(v.label)}: ${v.vote}">${sym[v.vote] || "?"}${icon(v.icon, v.label + ": " + v.vote)}</span>`).join("");
   let actions = "";
   if (!f.status) {
     if (mode === "edit") actions = `<textarea id="edtext">${esc(f.new || "")}</textarea><div class="row" style="margin-top:8px"><button id="save">Apply edited text</button><button id="cancel">Cancel</button></div>`;
     else if (mode === "ask") actions = `<textarea id="qtext" placeholder="Why this change? Would this alternative work?" style="min-height:70px"></textarea><div class="row" style="margin-top:8px"><button id="send">Ask all panelists</button><button id="cancel">Cancel</button><span class="meta">⌘Enter sends</span></div>`;
+    else if (S.readonly) actions = `<button id="dec">Decline</button> <button id="ask">Ask</button>`;
     else actions = (f.applicable ? `<button id="acc">Accept</button> ` : "")
       + (f.slot ? `<button id="fill"${f.fill && f.fill.status === "pending" ? " disabled" : ""} title="Search the web for what goes in the blanks">${f.fill && f.fill.status === "pending" ? "Filling…" : "Fill"}</button> ` : "")
       + (f.editable ? `<button id="edt">Edit</button> ` : "") + `<button id="dec">Decline</button> <button id="ask">Ask</button>` + (f.editable ? "" : ` <button id="copy" title="Copy a one-line request to paste into Claude Code or Codex, which can make this change">Copy for agent</button>`);
   }
-  el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity}${f.kind ? " · " + kindOf(f) : ""} · ${esc(f.section)} · ${f.tag}${f.added ? " · from your edit" : ""}</div>
-    <div class="title">${esc(f.title)}</div>${f.severity === "Nitpick" ? "" : `<p class="point">${inline(pointOf(f))}</p>`}
+  el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity}${f.kind ? " · " + kindOf(f) : ""} · ${f.tag}${f.added ? " · from your edit" : ""}</div>
+    <div class="title">${esc(f.title)} <span class="flagged">${flagged}</span></div>${f.severity === "Nitpick" ? "" : `<p class="point">${inline(pointOf(f))}</p>`}
     ${f.body.includes("~~") || f.body.includes("🟢") ? `<div class="diff">${f.old != null && f.new != null ? revHtml(f) : diffHtml(f.body)}</div>` : ""}
-    <div class="votes">${votes}</div>
-    ${!f.status && !f.applicable && !f.editable ? `<p class="reason">Cannot apply here: ${esc(f.reason || "it is about the whole draft")}.</p>` : ""}
+
+    ${S.readonly && !f.status ? `<p class="reason">Read-only: make this change in the source document.</p>` : ""}
+    ${!S.readonly && !f.status && !f.applicable && !f.editable ? `<p class="reason">Cannot apply here: ${esc(f.reason || "it is about the whole draft")}.</p>` : ""}
     ${!f.status && f.fill && f.fill.status === "failed" ? `<p class="reason">Fill found nothing: ${esc(f.fill.reason)}</p>` : ""}
     ${!f.status && f.fill && f.fill.status === "done" && f.fill.sources && f.fill.sources.length ? `<p class="meta">Filled from ${f.fill.sources.map(u => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u.replace(/^https?:\/\/(www\.)?/, "").slice(0, 50))}</a>`).join(" · ")}</p>` : ""}
     ${!f.status && f.changed ? `<div class="row" style="margin-bottom:6px"><button id="done">Mark done</button></div>` : ""}
@@ -496,7 +521,7 @@ function thread(f) {
     Object.entries(q.answers).map(([m, a]) => `<div class="ans"><div class="who">${icon(a.icon, a.label || a.model)}${a.seconds ? ` ${a.seconds} s` : ""}</div>` +
       (a.status === "pending" ? `<div class="meta">Thinking…</div>` : a.status === "failed" ? `<div class="err">No answer: ${esc(a.reason || "the model call failed")}</div>` :
         `<div>${inline(a.text)}</div>` + (a.old ? `<div class="diff" style="margin-top:6px">${revHtml(a)}</div>` +
-          (a.applied ? `<div class="status accepted">Applied</div>` : f.status ? "" : a.applicable ? `<button class="accrev" data-q="${k}" data-m="${m}">Accept this version</button>` : `<div class="reason">This version edits text that is not in the draft now (often the panel's proposal rather than your text), so it cannot be applied.</div>`) : "")) +
+          (a.applied ? `<div class="status accepted">Applied</div>` : f.status ? "" : a.applicable ? (S.readonly ? "" : `<button class="accrev" data-q="${k}" data-m="${m}">Accept this version</button>`) : `<div class="reason">This version edits text that is not in the draft now (often the panel's proposal rather than your text), so it cannot be applied.</div>`) : "")) +
       `</div>`).join("") + `</div>`).join("");
 }
 
@@ -532,7 +557,7 @@ function commentThreads() {
     Object.entries(c.answers).map(([m, a]) => `<div class="ans"><div class="who">${icon(a.icon, a.label || a.model || m)}${a.seconds ? ` ${a.seconds} s` : ""}</div>` +
       (a.status === "pending" ? `<div class="meta">Thinking…</div>` : a.status === "failed" ? `<div class="err">No answer: ${esc(a.reason || "the model call failed")}</div>` :
         `<div>${inline(a.text)}</div>` + (a.changes || []).map((ch, i) => `<div class="diff" style="margin-top:6px">${revHtml(ch)}</div>` +
-          (ch.applied ? `<div class="status accepted">Applied</div>` : ch.applicable ? `<button class="acccha" data-c="${k}" data-m="${m}" data-i="${i}">Accept this change</button>` : `<div class="reason">This change does not match the current text.</div>`)).join("")) +
+          (ch.applied ? `<div class="status accepted">Applied</div>` : ch.applicable ? (S.readonly ? "" : `<button class="acccha" data-c="${k}" data-m="${m}" data-i="${i}">Accept this change</button>`) : `<div class="reason">This change does not match the current text.</div>`)).join("")) +
       `</div>`).join("") + `</div>`).join("");
 }
 
@@ -542,7 +567,7 @@ function renderTypos() {
   el.hidden = !ty.length;
   if (!ty.length) return;
   el.innerHTML = `<div class="listhead"><span class="title">Typos</span> <span class="meta">${ty.length} one-word fixes no other voter disputed · uncheck any to keep</span></div>` +
-    ty.map(f => `<label style="display:flex;gap:8px;align-items:baseline;margin:4px 0;font-size:14px"><input type="checkbox" checked data-n="${f.n}"><span>${f.n}. ${diffHtml(f.body)} <span class="meta">${esc(f.section)}</span></span></label>`).join("") +
+    ty.map(f => `<label style="display:flex;gap:8px;align-items:baseline;margin:4px 0;font-size:14px"><input type="checkbox" checked data-n="${f.n}"><span>${f.n}. ${diffHtml(f.body)}</span></label>`).join("") +
     `<div class="row" style="margin-top:6px"><button id="acctypos">Accept checked</button><span class="err" id="typoerr"></span></div>`;
   document.getElementById("acctypos").onclick = async () => {
     const ns = [...el.querySelectorAll("input:checked")].map(x => +x.dataset.n);
@@ -567,7 +592,7 @@ function renderChecks() {
 }
 
 let summaryOpen = true;
-const openThemes = new Set();  // themes whose findings are shown, kept across re-renders
+const openThemes = new Set();  // themes the reader opened, kept across re-renders (closed by default)
 function renderSummary() {
   const el = document.getElementById("sumpanel");
   document.getElementById("sumbtn").classList.toggle("on", summaryOpen);
@@ -578,26 +603,24 @@ function renderSummary() {
   const item = f => `<div><a data-n="${f.n}" class="sev ${f.severity}">${f.severity[0]}</a> <a data-n="${f.n}">${esc(f.title)}</a>${f.status ? ` <span class="meta">· ${f.status}</span>` : ""}</div>`;
   const outline = fs => `<div class="outline">${fs.sort((a, b) => order[a.severity] - order[b.severity] || a.n - b.n).map(item).join("")}</div>`;
   const sm = S.summary || {};
-  // The first bullet is always the logic flaws, or that there are none.
+  // Logical flaws are the first theme, built from the findings' types; the
+  // model's themes follow for everything else. All are listed the same way.
   const logic = S.findings.filter(f => f.kind === "logic");
   const typed = S.findings.some(f => f.kind);
-  const logicLine = !typed ? `<p style="margin:8px 0"><b>Logical flaws:</b> this review has no type labels. Re-review to sort them out.</p>`
-    : logic.length ? `<p style="margin:8px 0 2px"><b>Logical flaws:</b></p>${outline(logic)}`
-    : `<p style="margin:8px 0"><b>Logical flaws:</b> none found.</p>`;
-  let body;
+  const theme = t => `<li><details data-theme="${esc(t.theme)}"${openThemes.has(t.theme) ? " open" : ""}><summary><b>${esc(t.theme)}</b></summary>${outline(t.fs)}</details></li>`;
+  const noLogic = !typed ? `<li><b>Logical flaws:</b> this review has no type labels. Re-review to sort them out.</li>`
+    : !logic.length ? `<li><b>Logical flaws:</b> none found.</li>` : "";
+  const used = new Set(logic.map(f => f.n)), themes = logic.length ? [{theme: "Logical flaws", fs: logic}] : [];
   if (sm.status === "done") {
-    const byN = Object.fromEntries(S.findings.map(f => [f.n, f])), used = new Set(logic.map(f => f.n));
-    const themes = sm.themes.map(t => ({...t, fs: t.findings.filter(n => byN[n] && !used.has(n) && used.add(n)).map(n => byN[n])}));
-    const rest = S.findings.filter(f => !used.has(f.n));
-    if (rest.length) themes.push({theme: "Other", gist: "", fs: rest});
-    body = logicLine + (!themes.some(t => t.fs.length) ? (logic.length ? "" : `<p style="margin:8px 0">No other findings in this review.</p>`)
-      : `<p style="margin:8px 0">Other weaknesses:</p>` +
-      `<ul class="themes">${themes.filter(t => t.fs.length).map(t => `<li><details data-theme="${esc(t.theme)}"${openThemes.has(t.theme) ? " open" : ""}><summary><b>${esc(t.theme)}</b>${t.gist ? `: ${esc(t.gist)}` : ""}</summary>${outline(t.fs)}</details></li>`).join("")}</ul>`);
-  } else {
-    body = (sm.status === "pending" ? `<div class="meta" style="margin:8px 0">Grouping the reviews by theme…</div>`
-      : sm.status === "failed" ? `<div class="err" style="margin:8px 0">No summary: ${esc(sm.reason || "the model call failed")}</div>` : "") +
-      logicLine + outline(S.findings.filter(f => f.severity !== "Nitpick" && f.kind !== "logic"));
+    const byN = Object.fromEntries(S.findings.map(f => [f.n, f]));
+    for (const t of sm.themes) themes.push({theme: t.theme, fs: t.findings.filter(n => byN[n] && !used.has(n) && used.add(n)).map(n => byN[n])});
   }
+  const rest = S.findings.filter(f => !used.has(f.n) && (sm.status === "done" || f.severity !== "Nitpick"));
+  if (rest.length) themes.push({theme: sm.status === "done" ? "Other" : "Other findings", fs: rest});
+  const body = (sm.status === "pending" ? `<div class="meta" style="margin:8px 0">Grouping the reviews by theme…</div>`
+      : sm.status === "failed" ? `<div class="err" style="margin:8px 0">No summary: ${esc(sm.reason || "the model call failed")}</div>` : "")
+    + (S.findings.length ? `<ul class="themes sumscroll">${noLogic}${themes.filter(t => t.fs.length).map(theme).join("")}</ul>`
+       : `<p style="margin:8px 0">No findings in this review.</p>`);
   // Say whether this summary describes the text as it is now.
   const er = S.edit_review;
   const fresh = er && er.status === "pending" ? `<div class="overview banner" style="margin:8px 0;font-size:14px">Reviewing your edit to “${esc(er.passage.slice(0, 80))}${er.passage.length > 80 ? "…" : ""}”. New findings appear at the end of the list, usually within a minute.</div>`
@@ -663,6 +686,7 @@ function renderSide() {
 }
 
 function render() {
+  document.getElementById("acceptall").hidden = !!(S && S.readonly);
   document.getElementById("name").textContent = S.name;
   document.getElementById("meta").textContent = `Reviewed ${S.started}${S.edited ? ", edited since" : ""}`;
   document.getElementById("panelbtn").innerHTML = "Panel " + S.chosen.map(c => icon(c.icon, c.label)).join(" ") + " ▾";
@@ -676,9 +700,7 @@ function render() {
   if (logicAuto && !openLogic) { logicAuto = false; filt.kind = "All"; }
   chips("f-kind", "kind", KINDS, "All"); chips("f-sev", "sev", SEV, "All");
   chips("f-tag", "tag", TAGS, "Any");
-  const st = document.getElementById("f-status");
-  st.innerHTML = ["Open", "Done", "All"].map(o => `<option${filt.status === o ? " selected" : ""}>${o}</option>`).join("");
-  st.onchange = () => { filt.status = st.value; render(); };
+  chips("f-status", "status", ["Open", "Done"], "All", "Open");
   const vis = S.findings.filter(shown);
   if (!vis.some(f => f.n === cur)) cur = vis.length ? vis[0].n : null;
   renderDraft(); renderCard(); renderSide();

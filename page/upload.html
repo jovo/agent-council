@@ -95,6 +95,7 @@ function show(j) {
   } else if (j.error) {
     $("status").innerHTML = `<div class="err">${esc(j.error)}</div>${log}`;
   } else {
+    if (j.page) { location.href = j.page; return; }  // the full review page for the copy
     $("status").innerHTML = "";
     markdown = j.markdown;
     $("result").innerHTML = j.html || `<pre>${esc(j.markdown)}</pre>`;

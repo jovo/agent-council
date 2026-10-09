@@ -248,6 +248,42 @@ class Rendering(unittest.TestCase):
                 "votes": {"claude": vote("agree"), "gpt": vote("disagree" if contested else "agree")},
                 "contested": contested, "rejected": rejected}
 
+    def test_summary_is_logic_first_then_theme_titles(self):
+        dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
+        g = lambda title, q, kind: {**self.group(title, q, "draft", ur.position(dn, q)), "kind": kind}
+        self.results([g("Step fails", "First line.", "logic"), g("Vague term", "Rome was founded in 1066.", "clarity"),
+                      g("Odd word", "More text here.", "style")])
+        (self.tmp / "summary.json").write_text(json.dumps({"themes": [
+            {"theme": "Wording", "gist": "Long gist sentence.", "findings": [1, 2, 3]}]}))
+        block = ur.review_markdown(self.tmp).split("## Substantive")[0]
+        self.assertIn("## Summary\n\n- **Logical flaws:**\n  - Step fails (1)\n- **Wording:**\n  - Vague term (2)\n  - Odd word (3)\n", block)
+        self.assertNotIn("Long gist", block)
+
+    def test_summary_says_when_there_are_no_logic_flaws(self):
+        self.results([{**self.group("Odd word", "More text here.", "draft", 0), "kind": "style"}])
+        (self.tmp / "summary.json").write_text(json.dumps({"themes": []}))
+        self.assertIn("- **Logical flaws:** none found.\n", ur.review_markdown(self.tmp))
+
+    def test_logic_flaws_come_first(self):
+        dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
+        g = lambda title, q, kind, sev: {**self.group(title, q, "draft", ur.position(dn, q), severity=sev), "kind": kind}
+        self.results([g("Critical fact", "First line.", "evidence", "Critical"),
+                      g("Leap", "More text here.", "logic", "Substantive"),
+                      g("Broken step", "Rome was founded in 1066.", "logic", "Critical")])
+        ur.render(self.tmp)
+        md = (self.tmp / "unified.md").read_text()
+        order = [md.index(x) for x in ("## Logical flaws", "### 1. Broken step (Critical)", "### 2. Leap (Substantive)",
+                                       "## Critical", "### 3. Critical fact (evidence)")]
+        self.assertEqual(order, sorted(order))
+
+    def test_votes_sit_beside_the_title(self):
+        self.results([self.group("Date", "Rome was founded in 1066.", "draft", 0, contested=True)],
+                     reviewers=("claude", "gemini"), voters=("claude", "gpt"))
+        ur.render(self.tmp)
+        md = (self.tmp / "unified.md").read_text()
+        self.assertIn("### 1. Date (contested) ✳ ✗֍\n", md)  # Claude flagged it, GPT disagreed
+        self.assertNotIn("Votes:", md)
+
     def test_layout_severity_then_draft_order(self):
         dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
         at = lambda q: ur.position(dn, q)
@@ -263,8 +299,7 @@ class Rendering(unittest.TestCase):
                                        "### 3. Early substantive", "### 4. Late substantive", "## Nitpicks",
                                        "**5.**")]
         self.assertEqual(order, sorted(order))
-        self.assertIn("*Intro · draft.md, line 4:*", md)  # line 4, not 3: the off-by-one regression
-        self.assertIn("*Body · draft.md, line 8:*", md)
+        self.assertNotIn("draft.md, line", md)  # no section, file, or line for a finding
         self.assertIn("*Whole draft*", md)
         self.assertNotIn("Warning", md)
 
@@ -1242,39 +1277,6 @@ class ReviewPage(unittest.TestCase):
             job = json.loads(page.handle("GET", "/api/job/" + st["id"], b"")[2])
             self.assertTrue(job["running"])
             self.assertEqual(job["name"], "other.md")
-
-    def test_review_markdown_puts_the_summary_under_the_title(self):
-        with tempfile.TemporaryDirectory() as d:
-            run = Path(d)
-            (run / "unified.md").write_text("# draft.md, version 1\n\n## Critical\n\n### 1. A finding\n")
-            self.assertEqual(ur.review_markdown(run), (run / "unified.md").read_text())
-            (run / "summary.json").write_text(json.dumps({"themes": [
-                {"theme": "Logic", "gist": "A step fails.", "findings": [1]}]}))
-            self.assertEqual(ur.review_markdown(run), "# draft.md, version 1\n\n## Summary\n\n"
-                             "- **Logical flaws:** this review has no type labels.\n"
-                             "- **Logic**: A step fails. (1)\n\n## Critical\n\n### 1. A finding\n")
-
-    def test_review_markdown_says_when_there_is_nothing_to_list(self):
-        with tempfile.TemporaryDirectory() as d:
-            run = Path(d)
-            (run / "unified.md").write_text("# draft.md\n\n## Rejected by vote\n\n- A point\n")
-            (run / "summary.json").write_text(json.dumps({"themes": []}))
-            self.assertEqual(ur.review_markdown(run), "# draft.md\n\n## Summary\n\n- **Logical flaws:** none found.\n\n"
-                             "## Rejected by vote\n\n- A point\n")
-
-    def test_review_markdown_lists_each_themes_findings_after_it(self):
-        with tempfile.TemporaryDirectory() as d:
-            run = Path(d)
-            (run / "unified.md").write_text("# draft.md\n\n## Critical\n\n" + "".join(
-                f"### {n}. F{n} ({'logic' if n in (1, 3) else 'style'})\n\n" for n in range(1, 6)))
-            (run / "summary.json").write_text(json.dumps({"themes": [
-                {"theme": "Logic", "gist": "Steps fail.", "findings": [3, 1, 9]},
-                {"theme": "Style", "gist": "", "findings": [1, 4]},
-                {"theme": "Gone", "gist": "Only repeats.", "findings": [3]}]}))
-            block = ur.review_markdown(run).split("## Critical")[0]
-            # Logic findings lead and are not repeated in a theme.
-            self.assertEqual(block, "# draft.md\n\n## Summary\n\n- **Logical flaws:** F1 (1); F3 (3)\n"
-                             "- **Style** (4)\n- **Other** (2, 5)\n\n")
 
     def test_review_prompt_proposes_text_and_keeps_slots_for_citations(self):
         prompt = ur.review_prompt("draft", "", "rules")
