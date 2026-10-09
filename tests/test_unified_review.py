@@ -1101,6 +1101,24 @@ class ReviewPage(unittest.TestCase):
             ur.save_fill(run, 1, {"status": "done", "text": "These systems interact [@Squire04].", "sources": []})
             self.assertEqual(state(), (True, False, None, "These systems interact [@Squire04]."))
 
+    def test_a_comment_about_a_selected_passage_sends_it(self):
+        prompts = []
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "run"
+            run.mkdir()
+            draft = Path(d) / "m.md"
+            draft.write_text("The sky is green.\n")
+            with mock.patch.object(ur, "call", lambda m, prompt, *a, **k: prompts.append(prompt) or "Fine.\nCHANGES: none"), \
+                 mock.patch.object(ur, "page_panel", lambda p: ["claude"]), \
+                 mock.patch.object(ur, "load_rules", lambda p: ("rules", "")):
+                ur.comment_panel(draft, run, "Is this right?", False, "The sky is green.")
+                for _ in range(200):
+                    if ur.load_comments(run)[0]["answers"]["claude"]["status"] != "pending":
+                        break
+                    time.sleep(0.01)
+            self.assertIn("<passage>\nThe sky is green.\n</passage>", prompts[0])
+            self.assertEqual(ur.load_comments(run)[0]["passage"], "The sky is green.")
+
     def test_end_marker_dropped(self):
         fs = ur.parse_findings("=== FINDING\nseverity: Polish\ntitle: T\nquote: a b\n---\nPoint.\n\na ~~b~~ 🟢 **c**.\n=== END FINDING\n")
         self.assertNotIn("END FINDING", fs[0]["body"])

@@ -2759,7 +2759,7 @@ with each edit as its own paragraph: the passage from the current draft as an
 inline diff, with deletions struck as ~~tildes~~ and additions marked as
 🟢 **added text**, leaving unchanged words plain. Copy unchanged words exactly.
 Otherwise write "CHANGES: none".
-{thread}
+{thread}{passage}
 <comment>
 {comment}
 </comment>
@@ -2807,20 +2807,23 @@ def comment_state(run, text):
     return out
 
 
-def comment_panel(path, run, comment, focus):
-    """Send a general comment to every panelist in parallel, in the background."""
+def comment_panel(path, run, comment, focus, passage=""):
+    """Send a general comment to every panelist in parallel, in the background.
+    A passage is text the author selected in the draft: the comment is about it."""
     panel = [panelist(m) for m in page_panel(path)]
     with ASK_LOCK:
         cs = load_comments(run)
         k = len(cs)
-        cs.append({"comment": comment, "focus": bool(focus), "asked": time.strftime("%Y-%m-%d %H:%M"),
+        cs.append({"comment": comment, "passage": passage, "focus": bool(focus), "asked": time.strftime("%Y-%m-%d %H:%M"),
                    "answers": {m: {"status": "pending"} for m in panel}})
         write_atomic(run / "comments.json", json.dumps(cs, indent=1, ensure_ascii=False) + "\n")
     thread = "".join(f"\n<earlier_comment>{c['comment']}</earlier_comment>\n" + "".join(
         f"<answer model=\"{short(m)}\">{a.get('text', '')}</answer>\n" for m, a in c["answers"].items()
         if a.get("status") == "done") for c in cs[:k])
     rules, _ = load_rules(None)
-    prompt = COMMENT.format(thread=thread, comment=comment, draft=Path(path).read_text(), rules=rules)
+    about = (f"\nThe comment is about this passage, which the author selected in the rendered draft:\n"
+             f"<passage>\n{passage}\n</passage>\n") if passage else ""
+    prompt = COMMENT.format(thread=thread, passage=about, comment=comment, draft=Path(path).read_text(), rules=rules)
 
     def one(m):
         t = time.time()
@@ -3067,7 +3070,7 @@ class PageServer:
         if method == "POST" and route == "/api/comment":
             if not body.get("text", "").strip():
                 return 400, "application/json", json.dumps({"error": "empty comment"})
-            comment_panel(self.path, self.run_folder(), body["text"].strip(), body.get("focus"))
+            comment_panel(self.path, self.run_folder(), body["text"].strip(), body.get("focus"), body.get("passage") or "")
             return 200, "application/json", json.dumps({"ok": True})
         if method == "POST" and route == "/api/change":
             err = apply_change(self.path, body.get("old", ""), body.get("new", ""))
@@ -3083,7 +3086,8 @@ class PageServer:
             if not self.job or self.job.poll() is not None:
                 env = {**os.environ, "UNIFIED_REVIEW_NO_PAGE": "1"}
                 log_file = open(RUNS_DIR / "page-update.log", "w")
-                focus = "\n".join(c["comment"] for c in load_comments(self.run_folder()) if c.get("focus"))
+                focus = "\n".join((f'About "{c["passage"]}": ' if c.get("passage") else "") + c["comment"]
+                                  for c in load_comments(self.run_folder()) if c.get("focus"))
                 self.job = subprocess.Popen([sys.executable, os.path.abspath(__file__), str(self.path),
                                              "-p", ",".join(page_panel(self.path))]
                                             + (["-n", focus] if focus else []),

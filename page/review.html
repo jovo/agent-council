@@ -54,6 +54,8 @@ main{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);gap:2
 .point{color:var(--muted);margin:0 0 12px}
 .diff{background:var(--bg);border-radius:8px;padding:10px 12px;margin:0 0 12px;white-space:pre-wrap}
 .mic.rec{color:var(--del)}
+#asksel{position:absolute;z-index:20;font-size:13px;font-weight:bold;width:22px;height:22px;padding:0;border-radius:50%;line-height:20px;background:var(--ink);color:var(--bg);border-color:var(--ink);box-shadow:0 1px 4px rgba(0,0,0,.25)}
+.passage{border-left:3px solid var(--faint);padding-left:8px;margin:0 0 6px;font-style:italic}
 del{color:var(--del);text-decoration:line-through}ins{color:var(--ins);text-decoration:none}.slot{background:var(--subs);color:var(--subs-ink);border-radius:3px;padding:0 3px}
 .votes{font-size:14px;color:var(--muted);margin-bottom:12px}.votes b{color:var(--ink);font-weight:700}
 .status{font-size:14px;margin-top:10px}.status.accepted{color:var(--ok-ink)}.status.declined{color:var(--muted)}
@@ -123,7 +125,7 @@ const SEV = ["Critical", "Substantive", "Polish"];
 const TAGS = ["Unanimous", "Majority", "Contested"];
 const KINDS = ["Logic", "Evidence", "Clarity", "Style"];
 let S = null, cur = null, filt = {kind: "All", sev: "All", tag: "All", status: "Open"}, mode = null, lastRun = null;
-let commentOpen = false;
+let commentOpen = false, passage = "";  // passage: text selected in the draft that the next Ask is about
 let logicAuto = null;  // the logic-first view, set when a review loads and lifted when no logic finding is open
 
 const esc = t => (t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -480,8 +482,35 @@ function thread(f) {
       `</div>`).join("") + `</div>`).join("");
 }
 
+// Select text in the draft, then Ask about this: the Ask box opens with the passage quoted.
+const askSel = document.createElement("button");
+askSel.id = "asksel"; askSel.textContent = "?"; askSel.title = "Ask the panel about the selected text"; askSel.hidden = true;
+document.body.appendChild(askSel);
+document.addEventListener("mouseup", e => {
+  if (e.target === askSel) return;
+  setTimeout(() => {
+    const sel = window.getSelection(), text = sel.toString().trim();
+    const draft = document.getElementById("draft");
+    if (!text || !sel.rangeCount || !draft.contains(sel.anchorNode) || !draft.contains(sel.focusNode)) { askSel.hidden = true; return; }
+    // Sit just after the selection's last character, on its line.
+    const rs = sel.getRangeAt(0).getClientRects(), r = rs[rs.length - 1];
+    askSel.hidden = false;
+    const left = Math.min(r.right + 4, document.documentElement.clientWidth - askSel.offsetWidth - 4);
+    askSel.style.left = (left + window.scrollX) + "px";
+    askSel.style.top = (r.top + window.scrollY + (r.height - askSel.offsetHeight) / 2) + "px";
+  });
+});
+askSel.onmousedown = e => e.preventDefault();  // keep the selection while clicking
+askSel.onclick = () => {
+  passage = window.getSelection().toString().trim().replace(/\s+/g, " ");
+  askSel.hidden = true; window.getSelection().removeAllRanges();
+  commentOpen = true; renderSide();
+  document.getElementById("side").scrollTop = 0;
+  document.querySelector("#commentbox textarea").focus();
+};
+
 function commentThreads() {
-  return (S.comments || []).map((c, k) => `<div class="qa"><div class="q">You: ${esc(c.comment)}${c.focus ? " <span class='meta'>(focus for the next Re-review)</span>" : ""}</div>` +
+  return (S.comments || []).map((c, k) => `<div class="qa">${c.passage ? `<div class="meta passage">About: “${esc(c.passage)}”</div>` : ""}<div class="q">You: ${esc(c.comment)}${c.focus ? " <span class='meta'>(focus for the next Re-review)</span>" : ""}</div>` +
     Object.entries(c.answers).map(([m, a]) => `<div class="ans"><div class="who">${esc(a.model || m)}${a.seconds ? ` · ${a.seconds} s` : ""}</div>` +
       (a.status === "pending" ? `<div class="meta">Thinking…</div>` : a.status === "failed" ? `<div class="err">No answer: ${esc(a.reason || "the model call failed")}</div>` :
         `<div>${inline(a.text)}</div>` + (a.changes || []).map((ch, i) => `<div class="diff" style="margin-top:6px">${revHtml(ch)}</div>` +
@@ -569,15 +598,18 @@ function renderSide() {
   document.getElementById("overview").innerHTML = banner +
     (ov.length ? `<div class="overview" style="margin-bottom:12px">Whole draft: ${ov.map(f => `<a data-n="${f.n}">${f.n}. ${esc(f.title)}</a>`).join(" · ")}</div>` : "");
   document.getElementById("askpanel").innerHTML = (!commentOpen ? "" :
-    `<div class="card" id="commentbox"><div class="row" style="margin-bottom:6px"><span class="title" style="font-size:15px">Ask about the whole draft</span><span class="spacer"></span><a id="closecomment" class="meta" style="cursor:pointer">Close</a></div><div class="meta" style="font-size:13px;margin-bottom:6px">Goes to ${S.chosen.map(c => c.label).join(", ")}</div>
-      <textarea placeholder="A question, a comment, or a request: Is the hypothesis falsifiable as written? Tighten the wedge section." style="min-height:60px"></textarea>
+    `<div class="card" id="commentbox"><div class="row" style="margin-bottom:6px"><span class="title" style="font-size:15px">${passage ? "Ask about this passage" : "Ask about the whole draft"}</span><span class="spacer"></span><a id="closecomment" class="meta" style="cursor:pointer">Close</a></div><div class="meta" style="font-size:13px;margin-bottom:6px">Goes to ${S.chosen.map(c => c.label).join(", ")}</div>
+      ${passage ? `<div class="meta passage">“${esc(passage)}” <a id="clearpassage" style="cursor:pointer">✕ ask about the whole draft</a></div>` : ""}
+      <textarea placeholder="${passage ? "Is this claim supported? Tighten this. Why is this here?" : "A question, a comment, or a request: Is the hypothesis falsifiable as written? Tighten the wedge section."}" style="min-height:60px"></textarea>
       <div class="row" style="margin-top:6px"><button id="sendc">Ask all panelists</button>
       <label class="meta"><input type="checkbox"> Use as focus for the next Re-review</label><span class="err" id="cerr"></span></div>
       ${commentThreads()}</div>`);
   const oc = document.getElementById("opencomment");
   if (oc) oc.onclick = () => { commentOpen = true; renderSide(); document.querySelector("#commentbox textarea").focus(); };
   const cc = document.getElementById("closecomment");
-  if (cc) cc.onclick = () => { commentOpen = false; renderSide(); };
+  if (cc) cc.onclick = () => { commentOpen = false; passage = ""; renderSide(); };
+  const cp = document.getElementById("clearpassage");
+  if (cp) cp.onclick = () => { passage = ""; renderSide(); };
   const nb = document.getElementById("commentbox");
   document.querySelectorAll("#overview a[data-n]").forEach(e => e.onclick = () => select(+e.dataset.n, false));
   const sa0 = document.getElementById("showall"); if (sa0) sa0.onclick = () => { logicAuto = false; filt.kind = "All"; render(); };
@@ -588,7 +620,7 @@ function renderSide() {
   const sendC = async () => {
     const t = nb.querySelector("textarea").value.trim();
     if (!t) { document.getElementById("cerr").textContent = "Type a comment first."; return; }
-    try { await api("/api/comment", {text: t, focus: nb.querySelector("input").checked}); nb.querySelector("textarea").value = ""; await load(); }
+    try { await api("/api/comment", {text: t, focus: nb.querySelector("input").checked, passage}); nb.querySelector("textarea").value = ""; passage = ""; await load(); }
     catch (e) { document.getElementById("cerr").textContent = e.message; }
   };
   document.getElementById("sendc").onclick = sendC;
