@@ -49,6 +49,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -337,6 +338,7 @@ Output only findings, each in exactly this form, and nothing else:
 
 === FINDING
 severity: Critical | Substantive | Polish
+kind: logic | evidence | clarity | style
 title: <under 12 words>
 quote: <the exact text this finding targets, copied verbatim from the draft or
   the author's focus material. For a finding about one section, its heading
@@ -344,6 +346,12 @@ quote: <the exact text this finding targets, copied verbatim from the draft or
 ---
 <the point in 1-4 sentences, then the inline diff per the house rules.
 No heading and no number.>
+
+Kinds: logic, a step that does not follow (missing premise, non sequitur,
+circular setup, unaddressed alternative, over- or underclaim, or an inference
+the design or data do not support); evidence, an unsupported or wrong factual
+claim or a citation problem; clarity, the argument holds but a reader cannot
+follow it; style, wording, house style, or typos.
 
 <draft>
 {draft}
@@ -366,11 +374,14 @@ For each finding, decide:
   the quoted text is in neither the draft nor the focus material, or the fix
   makes the draft worse).
 - severity: Critical, Substantive, or Polish, as you would rate it.
+- kind: logic (a step that does not follow, or an inference the evidence does
+  not support), evidence (an unsupported or wrong factual claim, or a
+  citation), clarity (the argument holds but is hard to follow), or style.
 - same: the id of an EARLIER finding that makes the same point, or the id of a
   point the author declined (D1, D2, ...) if it repeats that point, or none.
 
 Reply with exactly one line per finding, in the order given, and nothing else:
-<id> | <vote> | <severity> | same:<id or none> | <one-sentence reason>
+<id> | <vote> | <severity> | <kind> | same:<id or none> | <one-sentence reason>
 
 <draft>
 {draft}
@@ -423,21 +434,24 @@ def parse_findings(text):
         head, sep, body = block.partition("\n---")
         if not sep:
             continue
-        f = {"severity": "Substantive", "title": "", "quote": ""}
+        f = {"severity": "Substantive", "kind": "", "title": "", "quote": ""}
         for line in head.strip().splitlines():
             k, _, v = line.partition(":")
             k = k.strip().lower()
-            if k in ("severity", "title", "quote"):
+            if k in ("severity", "kind", "title", "quote"):
                 f[k] = v.strip()
         f["severity"] = next((s for s in SEVERITIES if s.lower() in f["severity"].lower()), "Substantive")
+        f["kind"] = next((k for k in KINDS if k in f["kind"].lower()), "")
         f["body"] = body.strip()
         if f["body"] or f["title"]:
             out.append(f)
     return out
 
 
+KINDS = ["logic", "evidence", "clarity", "style"]  # logic first: fix the argument before its wording
 VOTE_LINE = re.compile(
     r"^\W*([A-Z]\d+)\W*\|\s*(agree|partial|disagree)\s*\|\s*(critical|substantive|polish)\s*\|"
+    r"(?:\s*(logic|evidence|clarity|style)\s*\|)?"
     r"\s*same\s*:?\s*([A-Z]\d+|none)?\s*\|\s*(.*)$", re.I)
 
 
@@ -533,8 +547,8 @@ def parse_votes(text):
     for line in (text or "").splitlines():
         m = VOTE_LINE.match(line.strip())
         if m:
-            fid, v, sev, same, reason = m.groups()
-            votes[fid.upper()] = {"vote": v.lower(), "severity": sev.capitalize(),
+            fid, v, sev, kind, same, reason = m.groups()
+            votes[fid.upper()] = {"vote": v.lower(), "severity": sev.capitalize(), "kind": (kind or "").lower(),
                                   "same": (same or "none").upper(), "reason": reason.strip()}
     return votes
 
@@ -613,11 +627,21 @@ def score_group(members, votes, voters, owner):
         "raised_by": sorted({owner[f["id"][0]] for f in members}, key=list(PANELISTS).index),
         "votes": rep_votes, "score": rep["score"], "n_votes": rep["n_votes"], "frac": rep["frac"],
         "severity": median_severity([v["severity"] for v in rep_votes.values()] or [rep["severity"]]),
+        "kind": majority_kind([v.get("kind", "") for v in rep_votes.values()], rep.get("kind", "")),
         "rejected": bool(rep_votes) and n_dis > len(rep_votes) / 2,
         # Split vote: at least one model agreed and at least one disagreed.
         "contested": n_agree > 0 and n_dis > 0,
         "pos": min(f["pos"] for f in members),
     }
+
+
+def majority_kind(voted, raised):
+    """The kind most voters gave a finding. Ties go to the earlier kind in
+    KINDS (logic first), and no votes fall back to the reviewer's label."""
+    voted = [k for k in voted if k in KINDS]
+    if not voted:
+        return raised if raised in KINDS else ""
+    return max(KINDS, key=lambda k: (voted.count(k), -KINDS.index(k)))
 
 
 VOTE_RANK = {"disagree": 0, "partial": 1, "agree": 2}
@@ -952,7 +976,7 @@ def render(outdir):
             parts.append(f"## {sev}")
         # Escape headings inside a reviewer's diff so they do not become sections here.
         body = re.sub(r"^(\s*(?:🟢\s*)?(?:\*\*)?)#", r"\1\\#", g["rep"]["body"], flags=re.M)
-        tag = f" (contested)" if g.get("contested") else ""
+        tag = (f" ({g['kind']})" if g.get("kind") else "") + (" (contested)" if g.get("contested") else "")
         parts.append(f"### {n}. {g['rep']['title']}{tag}\n\n"
                      f"{quoted(g, r['files'], where_label)}{body}\n\n{vote_line(g, voters)}")
     held = [g for g in r["groups"] if g.get("declined") and not g["rejected"]]
@@ -1455,7 +1479,7 @@ def page_state(path, run):
             reason = "the text this diff changes is no longer in the file"
         d = decided.get(rep["title"])
         out.append({
-            "n": n, "severity": sev, "section": label, "title": rep["title"], "where": g["where"],
+            "n": n, "severity": sev, "kind": g.get("kind", ""), "section": label, "title": rep["title"], "where": g["where"],
             "point": rep["body"].split("\n\n")[0], "body": rep["body"], "quote": rep["quote"],
             "old": old, "new": new if old is not None else None, "reason": reason,
             "span": list(span or quote_span or []) or None, "applicable": span is not None,
@@ -1464,8 +1488,21 @@ def page_state(path, run):
                       for m, v in g["votes"].items()],
             "status": {"applied": "accepted", "ignore": "declined"}.get(d["decision"]) if d else None,
             "note": d.get("note", "") if d else ""})
+    qs = load_questions(run)
+    for f in out:
+        f["questions"] = qs.get(str(f["n"]), [])
+        for q in f["questions"]:
+            for m, a in q["answers"].items():
+                if a.get("old"):  # re-check against the text as it is now
+                    a["applicable"] = (find_span(text, a["old"]) is not None or fuzzy_span(
+                        text, a["old"], find_span(text, a["old"][:40])) is not None)
+                    a["applied"] = not a["applicable"] and find_span(text, a["new"]) is not None
+                a["model"] = labels.get(m, m).split()[0]
+                a["raised"] = m in next(g for n, _, _, g in ordered_findings(r) if n == f["n"])["raised_by"]
     vers = (r.get("versions") or [{}])[0]
     return {"file": str(path), "name": Path(path).name, "run": run.name, "version": vers.get("number"),
+            "edited": bool(vers.get("version")) and fingerprint(text) != vers.get("version"),
+            "comments": comment_state(run, text),
             "started": r.get("started", ""), "panel": [labels.get(m, m) for m in r["reviewers_ok"]],
             "failures": r.get("failures", []), "text": text, "findings": out}
 
@@ -1480,6 +1517,181 @@ def apply_change(path, old, new, quote=""):
         return "the text this change targets is no longer in the file"
     Path(path).write_text(text[:span[0]] + new + text[span[1]:])
     return None
+
+
+ASK = """The author of the draft below is asking about one finding from a review
+of it. You are one of several reviewers answering in parallel. Answer the
+question directly, in at most six sentences, against the draft as it stands
+now. You have no web access. Follow the house rules for any wording you propose.
+
+End with one line that starts with "REVISED:". If your answer changes the
+proposed edit, follow it with the revised passage as an inline diff of the
+current text: strike deletions with ~~tildes~~ and mark additions as
+🟢 **added text**, leaving unchanged words plain. Otherwise write "REVISED: none".
+
+<finding>
+{finding}
+</finding>
+{thread}
+<question>
+{question}
+</question>
+
+<draft>
+{draft}
+</draft>
+
+---- HOUSE RULES ----
+{rules}"""
+ASK_LOCK = threading.Lock()
+
+
+def load_questions(run):
+    f = run / "questions.json"
+    return json.loads(f.read_text()) if f.exists() else {}
+
+
+def save_question(run, n, k, model, answer):
+    """Store one model's answer to question k on finding n."""
+    with ASK_LOCK:
+        qs = load_questions(run)
+        qs[str(n)][k]["answers"][model] = answer
+        write_atomic(run / "questions.json", json.dumps(qs, indent=1, ensure_ascii=False) + "\n")
+
+
+def parse_answer(text, current):
+    """(answer, revised old, revised new, applicable) from a model's reply."""
+    text = (text or "").strip()
+    head, _, rev = text.rpartition("REVISED:") if "REVISED:" in text else (text, "", "")
+    rev = rev.strip()
+    if not rev or rev.lower().startswith("none"):
+        return head.strip(), None, None, False
+    old, new = diff_parts("point\n\n" + rev)
+    ok = old is not None and (find_span(current, old) is not None
+                              or fuzzy_span(current, old, find_span(current, old[:40])) is not None)
+    return head.strip(), old, new, ok
+
+
+def ask_panel(path, run, f, question):
+    """Ask every panelist from the run about finding f, in parallel, in the
+    background. Answers land in questions.json as each model finishes."""
+    r = json.loads((run / "results.json").read_text())
+    panel = [m for m in r["reviewers_ok"] if m in PANELISTS]
+    with ASK_LOCK:
+        qs = load_questions(run)
+        thread = qs.setdefault(str(f["n"]), [])
+        k = len(thread)
+        thread.append({"question": question, "asked": time.strftime("%Y-%m-%d %H:%M"),
+                       "answers": {m: {"status": "pending"} for m in panel}})
+        write_atomic(run / "questions.json", json.dumps(qs, indent=1, ensure_ascii=False) + "\n")
+    earlier = "".join(f"\n<earlier_question>{q['question']}</earlier_question>\n" + "".join(
+        f"<answer model=\"{short(m)}\">{a.get('text', '')}</answer>\n" for m, a in q["answers"].items()
+        if a.get("status") == "done") for q in thread[:k])
+    votes = ", ".join(f"{v['model']} {v['vote']}" for v in f["votes"])
+    finding = f"{f['severity']}: {f['title']}\n{f['body']}\nVotes: {votes}"
+    rules, _ = load_rules(None)
+    prompt = ASK.format(finding=finding, thread=earlier, question=question,
+                        draft=Path(path).read_text(), rules=rules)
+
+    def one(m):
+        t = time.time()
+        text = call(m, prompt, run / f"ask-{f['n']}-{k}-{m}.txt", Path(path).parent, stage="ask")
+        if text is None:
+            save_question(run, f["n"], k, m, {"status": "failed", "seconds": round(time.time() - t)})
+            return
+        answer, old, new, ok = parse_answer(text, Path(path).read_text())
+        save_question(run, f["n"], k, m, {"status": "done", "text": answer, "old": old, "new": new,
+                                          "applicable": ok, "seconds": round(time.time() - t)})
+    threading.Thread(target=lambda: parallel(one, panel), daemon=True).start()
+
+
+COMMENT = """The author of the draft below has a general comment, question, or request
+about it. You are one of several reviewers answering in parallel. Answer
+directly, in at most eight sentences, against the draft as it stands now. You
+have no web access. Follow the house rules for any wording you propose.
+
+End with a line that is exactly "CHANGES:". If you propose edits, follow it
+with each edit as its own paragraph: the passage from the current draft as an
+inline diff, with deletions struck as ~~tildes~~ and additions marked as
+🟢 **added text**, leaving unchanged words plain. Copy unchanged words exactly.
+Otherwise write "CHANGES: none".
+{thread}
+<comment>
+{comment}
+</comment>
+
+<draft>
+{draft}
+</draft>
+
+---- HOUSE RULES ----
+{rules}"""
+
+
+def load_comments(run):
+    f = run / "comments.json"
+    return json.loads(f.read_text()) if f.exists() else []
+
+
+def parse_changes(text, current):
+    """(answer, [{old, new, applicable}]) from a reply to a general comment."""
+    text = (text or "").strip()
+    head, _, tail = text.rpartition("CHANGES:") if "CHANGES:" in text else (text, "", "")
+    changes = []
+    if tail.strip() and not tail.strip().lower().startswith("none"):
+        for para in re.split(r"\n\s*\n", tail.strip()):
+            old, new = diff_parts("point\n\n" + para)
+            if old is None:
+                continue
+            ok = find_span(current, old) is not None or fuzzy_span(current, old, find_span(current, old[:40])) is not None
+            changes.append({"old": old, "new": new, "applicable": ok})
+    return head.strip(), changes
+
+
+def comment_state(run, text):
+    """Comments with their answers, each proposed change re-checked against the text now."""
+    r = json.loads((run / "results.json").read_text())
+    labels = r["labels"]
+    out = load_comments(run)
+    for c in out:
+        for m, a in c["answers"].items():
+            a["model"] = labels.get(m, m).split()[0]
+            for ch in a.get("changes", []):
+                ch["applicable"] = (find_span(text, ch["old"]) is not None or fuzzy_span(
+                    text, ch["old"], find_span(text, ch["old"][:40])) is not None)
+                ch["applied"] = not ch["applicable"] and find_span(text, ch["new"]) is not None
+    return out
+
+
+def comment_panel(path, run, comment, focus):
+    """Send a general comment to every panelist in parallel, in the background."""
+    r = json.loads((run / "results.json").read_text())
+    panel = [m for m in r["reviewers_ok"] if m in PANELISTS]
+    with ASK_LOCK:
+        cs = load_comments(run)
+        k = len(cs)
+        cs.append({"comment": comment, "focus": bool(focus), "asked": time.strftime("%Y-%m-%d %H:%M"),
+                   "answers": {m: {"status": "pending"} for m in panel}})
+        write_atomic(run / "comments.json", json.dumps(cs, indent=1, ensure_ascii=False) + "\n")
+    thread = "".join(f"\n<earlier_comment>{c['comment']}</earlier_comment>\n" + "".join(
+        f"<answer model=\"{short(m)}\">{a.get('text', '')}</answer>\n" for m, a in c["answers"].items()
+        if a.get("status") == "done") for c in cs[:k])
+    rules, _ = load_rules(None)
+    prompt = COMMENT.format(thread=thread, comment=comment, draft=Path(path).read_text(), rules=rules)
+
+    def one(m):
+        t = time.time()
+        text = call(m, prompt, run / f"comment-{k}-{m}.txt", Path(path).parent, stage="comment")
+        if text is None:
+            ans = {"status": "failed", "seconds": round(time.time() - t)}
+        else:
+            answer, changes = parse_changes(text, Path(path).read_text())
+            ans = {"status": "done", "text": answer, "changes": changes, "seconds": round(time.time() - t)}
+        with ASK_LOCK:
+            cs2 = load_comments(run)
+            cs2[k]["answers"][m] = ans
+            write_atomic(run / "comments.json", json.dumps(cs2, indent=1, ensure_ascii=False) + "\n")
+    threading.Thread(target=lambda: parallel(one, panel), daemon=True).start()
 
 
 def edit_block(path, old, new, start=None):
@@ -1525,10 +1737,11 @@ class PageServer:
             if not f:
                 return 404, "application/json", json.dumps({"error": "no such finding"})
             if route == "/api/accept":
+                old = body.get("old", f["old"])
                 new = body.get("text", f["new"])
-                if f["old"] is None:
+                if old is None:
                     return 409, "application/json", json.dumps({"error": f["reason"]})
-                err = apply_change(self.path, f["old"], new, f["quote"])
+                err = apply_change(self.path, old, new, f["quote"])
                 if err:
                     return 409, "application/json", json.dumps({"error": err})
                 with contextlib.redirect_stdout(io.StringIO()):
@@ -1536,6 +1749,23 @@ class PageServer:
             else:
                 with contextlib.redirect_stdout(io.StringIO()):
                     record_decisions(str(f["n"]), "ignore", body.get("note", ""), run)
+            return 200, "application/json", json.dumps({"ok": True})
+        if method == "POST" and route == "/api/ask":
+            run = self.run_folder()
+            f = next((f for f in page_state(self.path, run)["findings"] if f["n"] == body.get("n")), None)
+            if not f or not body.get("question", "").strip():
+                return 400, "application/json", json.dumps({"error": "no finding or no question"})
+            ask_panel(self.path, run, f, body["question"].strip())
+            return 200, "application/json", json.dumps({"ok": True})
+        if method == "POST" and route == "/api/comment":
+            if not body.get("text", "").strip():
+                return 400, "application/json", json.dumps({"error": "empty comment"})
+            comment_panel(self.path, self.run_folder(), body["text"].strip(), body.get("focus"))
+            return 200, "application/json", json.dumps({"ok": True})
+        if method == "POST" and route == "/api/change":
+            err = apply_change(self.path, body.get("old", ""), body.get("new", ""))
+            if err:
+                return 409, "application/json", json.dumps({"error": err})
             return 200, "application/json", json.dumps({"ok": True})
         if method == "POST" and route == "/api/edit":
             err = edit_block(self.path, body.get("old", ""), body.get("new", ""), body.get("start"))
@@ -1546,7 +1776,9 @@ class PageServer:
             if not self.job or self.job.poll() is not None:
                 env = {**os.environ, "UNIFIED_REVIEW_NO_PAGE": "1"}
                 log_file = open(RUNS_DIR / "page-update.log", "w")
-                self.job = subprocess.Popen([sys.executable, os.path.abspath(__file__), str(self.path)],
+                focus = "\n".join(c["comment"] for c in load_comments(self.run_folder()) if c.get("focus"))
+                self.job = subprocess.Popen([sys.executable, os.path.abspath(__file__), str(self.path)]
+                                            + (["-n", focus] if focus else []),
                                             cwd=str(self.path.parent), env=env, stdin=subprocess.DEVNULL,
                                             stdout=log_file, stderr=log_file)
             return 200, "application/json", json.dumps({"job": self.job_state()})

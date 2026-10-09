@@ -22,7 +22,7 @@ Before starting, the script checks that each CLI is installed and logged in, usi
 
 A file to review can be a PDF. If it is plain prose, the panel gets its text (from `pdftotext`). If it has anything the text would lose, such as figures, images, ruled tables, or equations, each panelist opens the PDF itself. Findings on a PDF cite page numbers, and edits go in its source document. The check needs Ghostscript and poppler (`brew install ghostscript poppler`).
 
-1. **Review.** Each panelist reviews the draft without web search. Findings come back in a fixed format: severity, title, the exact text targeted, then the point and an inline diff.
+1. **Review.** Each panelist reviews the draft without web search. Findings come back in a fixed format: severity, kind, title, the exact text targeted, then the point and an inline diff. The kind is logic (a step that does not follow, or an inference the evidence does not support), evidence (an unsupported or wrong factual claim), clarity, or style. Voters vote on the kind too, and each finding takes the majority's.
 2. **Vote.** Each panelist votes agree, partial, or disagree on every finding, sees reviewers only as A, B, C, and flags duplicates.
 A model call that times out, errors, or returns nothing gets one retry, except after a login error. A login error is recognized only from the CLI's own messages at the end of its log ("not logged in", "401 Unauthorized", and the like), since CLIs copy the prompt into that log and a draft may say "authorized" or "log in" anywhere. A reply in the wrong format also gets one retry.
 
@@ -54,7 +54,10 @@ For one Markdown file, `unified-review` opens a local page in your browser (`htt
 - A finding with no exact diff, such as one about the whole draft or one whose new text has a blank to fill in, cannot be accepted on the page. Its card says why and copies a request you can paste to an agent.
 - Filters select findings by severity, by vote (unanimous, majority, contested), and by status. **Accept all shown** applies every open finding the filters select. Keys: `j` and `k` move between findings, `a` accepts, `e` edits, `d` declines.
 - Double-click any paragraph or heading to edit its Markdown in place. Save writes that paragraph back, unless it changed in the file since the page loaded.
-- **Update** runs a new review of the current text and loads it into the page.
+- **Logic first.** When a review has open logic findings, the page opens showing only those, since a passage whose argument fails may be rewritten anyway. Once none are open, it shows everything, ordered by severity. A banner says so, with a link to show everything at once.
+- **Ask** sends a question about a finding to every panelist in parallel, with the draft, the finding, its votes, and earlier questions. Answers appear as each model finishes, marked with the model that raised the finding. An answer that revises the change gets its own **Accept this version**.
+- **Ask the panel about the whole draft** takes a general question, comment, or request ("tighten the wedge section"). Each panelist answers, and any edits it proposes appear as changes with their own Accept. Tick "Use as focus for the next Update" to pass the comment to the next review as its focus (`-n`). Questions and comments are saved in the run folder.
+- **Update** runs a new review of the current text and loads it into the page. The header names the version that was reviewed and says "edited since" once the file differs. Editing never creates a version: a new number is assigned only when a review runs on new text.
 
 The page is served by a small server inside `unified-review`, using only Python's standard library. It listens only on your machine, serves one file, and exits after 8 hours without use. `unified-review --page FILE` reopens it.
 

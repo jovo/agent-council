@@ -70,7 +70,11 @@ findings. There is no cap on findings.
 For one Markdown file, the script opens the review page in the user's browser
 and prints `Review page: http://127.0.0.1:<port>/`. The page shows the draft
 with each finding in place, and the user accepts, edits, or declines findings
-there, which writes to the file and records the decision. Give the user that
+there, which writes to the file and records the decision. The page opens on
+logic findings first, and lets the user ask the panel about a finding or the
+whole draft. Each finding carries a kind (logic, evidence, clarity, style);
+when acting on findings outside the page, take open logic findings first.
+Give the user that
 link and say how many findings there are by severity. Do not paste
 `unified.md` unless asked. Run `unified-review --page FILE` to reopen the page.
 Decisions made on the page are in the same log as `--applied` and `--ignore`,

@@ -561,6 +561,32 @@ class ReviewPage(unittest.TestCase):
             st = json.loads(page.handle("GET", "/api/state", {})[2])
             self.assertEqual([f["status"] for f in st["findings"]], ["accepted", "declined"])
 
+    def test_parse_answer(self):
+        cur = "Intro. We test the links first, which leave one link open. End."
+        ans, old, new, ok = ur.parse_answer("Not Critical.\n\nREVISED: We test the links first~~, which leave one link open~~ 🟢 **and name what would refute them**.", cur)
+        self.assertEqual(ans, "Not Critical.")
+        self.assertTrue(ok)
+        self.assertEqual(new, "We test the links first and name what would refute them.")
+        self.assertEqual(ur.parse_answer("Fine as is.\nREVISED: none", cur)[1:], (None, None, False))
+        self.assertFalse(ur.parse_answer("x\nREVISED: Text ~~not~~ 🟢 **never** in the draft at all.", cur)[3])
+
+    def test_kind_parsing_and_majority(self):
+        fs = ur.parse_findings("=== FINDING\nseverity: Critical\nkind: Logic\ntitle: T\nquote: q\n---\nPoint.")
+        self.assertEqual(fs[0]["kind"], "logic")
+        v = ur.parse_votes("A1 | agree | Polish | style | same:none | ok\nA2 | partial | Critical | same:none | old format")
+        self.assertEqual((v["A1"]["kind"], v["A2"]["kind"]), ("style", ""))
+        self.assertEqual(ur.majority_kind(["logic", "clarity", "clarity"], "logic"), "clarity")
+        self.assertEqual(ur.majority_kind(["logic", "clarity"], ""), "logic")  # ties go to logic
+        self.assertEqual(ur.majority_kind([], "evidence"), "evidence")
+
+    def test_parse_changes(self):
+        cur = "One sentence here. Another sentence there."
+        ans, ch = ur.parse_changes("Do this.\n\nCHANGES:\nOne ~~sentence~~ 🟢 **line** here.\n\nAnother ~~sentence~~ 🟢 **line** there.", cur)
+        self.assertEqual(ans, "Do this.")
+        self.assertEqual([c["new"] for c in ch], ["One line here.", "Another line there."])
+        self.assertTrue(all(c["applicable"] for c in ch))
+        self.assertEqual(ur.parse_changes("Fine.\nCHANGES: none", cur)[1], [])
+
     def test_edit_block(self):
         with tempfile.TemporaryDirectory() as d:
             doc = Path(d) / "memo.md"
