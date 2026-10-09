@@ -19,7 +19,10 @@
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "NewCM Body",Georgia,serif}
 h1,h2,h3,.title{font-family:"NewCM Title","Helvetica Neue",Arial,sans-serif;font-weight:700}
 button,textarea,input{font:inherit;color:inherit}
-select{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:2px 6px;font:inherit;font-size:14px;color:inherit;margin-right:10px}
+select{-webkit-appearance:none;appearance:none;background-color:var(--panel);border:1px solid var(--line);border-radius:6px;padding:3px 30px 3px 9px;font:inherit;font-size:14px;color:inherit;margin-right:10px;cursor:pointer;
+background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
+background-position:calc(100% - 15px) 55%,calc(100% - 10px) 55%;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+select:hover{border-color:var(--muted)}
 button{background:transparent;border:1px solid var(--line);border-radius:6px;padding:3px 11px;cursor:pointer;font-size:14px}
 button:hover{border-color:var(--muted)}
 button.on{background:var(--panel);border-color:var(--ink)}
@@ -55,7 +58,7 @@ textarea{width:100%;min-height:110px;border:1px solid var(--line);border-radius:
 input.note{width:100%;border:1px solid var(--line);border-radius:6px;padding:4px 8px;background:var(--bg);margin:8px 0}
 .overview{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:15px}
 .banner{border-color:var(--subs-ink)}
-.menu{position:absolute;top:30px;right:0;z-index:5;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 0;min-width:280px;font-size:14px;box-shadow:0 6px 20px rgba(0,0,0,.18)}
+.menu{position:absolute;top:30px;right:0;z-index:5;max-height:75vh;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 0;min-width:280px;font-size:14px;box-shadow:0 6px 20px rgba(0,0,0,.18)}
 .menu .mi{padding:4px 14px;display:flex;gap:8px;align-items:center;cursor:pointer;white-space:nowrap;position:relative}
 .menu .mi:hover{background:var(--bg)}
 .menu .sep{border-top:1px solid var(--line);margin:5px 0}
@@ -66,7 +69,9 @@ input.note{width:100%;border:1px solid var(--line);border-radius:6px;padding:4px
 #card{cursor:pointer}
 .menu .arrow{margin-left:auto;color:var(--faint)}
 .overview a{cursor:pointer;text-decoration:underline;text-decoration-color:var(--faint)}
-.list{font-size:14px}.list div{padding:3px 0;cursor:pointer;color:var(--muted)}.list div.cur{color:var(--ink)}
+.list{font-size:14px}
+.list .listhead{cursor:default;color:var(--ink);padding:0 0 6px;margin-bottom:4px;border-bottom:1px solid var(--line)}
+.list .listhead .title{font-size:15px}.list div{padding:3px 0;cursor:pointer;color:var(--muted)}.list div.cur{color:var(--ink)}
 .err{color:var(--crit-ink);font-size:14px;margin-top:8px}
 .qa{border-top:1px solid var(--line);margin-top:14px;padding-top:10px}
 .q{font-size:14px;margin-bottom:8px}.ans{margin:0 0 12px;font-size:15px}.who{font-size:13px;color:var(--muted)}
@@ -97,7 +102,7 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
 </header>
 <main>
   <div><div id="overview"></div><article id="draft"></article></div>
-  <aside id="side"><div class="card" id="card"></div><div class="card list" id="list"></div>
+  <aside id="side"><div id="askpanel"></div><div class="card" id="card"></div><div class="card list" id="list"></div>
     <div class="meta" style="font-size:13px"><kbd>j</kbd> <kbd>k</kbd> next and previous · <kbd>a</kbd> accept · <kbd>e</kbd> edit · <kbd>d</kbd> decline · <kbd>q</kbd> ask · double-click a paragraph to edit it, <kbd>⌘</kbd><kbd>Enter</kbd> saves</div></aside>
 </main>
 <script>
@@ -292,7 +297,7 @@ function commentThreads() {
 
 function renderSide() {
   const el = document.getElementById("list"), fs = S.findings.filter(shown);
-  el.innerHTML = `<div class="meta" style="cursor:default;color:var(--muted)">Findings shown: ${fs.length}. Click one to jump to it.</div>` +
+  el.innerHTML = `<div class="listhead"><span class="title">Findings</span> <span class="meta">${fs.length} shown by the filters above · click one to jump to it</span></div>` +
     fs.map(f => `<div data-n="${f.n}" class="${f.n === cur ? "cur" : ""}">${f.n}. <span class="sev ${f.severity}">${f.severity}</span>${f.kind ? " · " + kindOf(f) : ""} · ${esc(f.title)}${f.status ? " · " + f.status : ""}</div>`).join("");
   el.querySelectorAll("div[data-n]").forEach(e => e.onclick = () => select(+e.dataset.n, true));
   const ov = S.findings.filter(f => shown(f) && !f.span);
@@ -303,9 +308,9 @@ function renderSide() {
   const box = document.getElementById("commentbox");
   const keep = box ? {text: box.querySelector("textarea").value, focus: box.querySelector("input").checked, active: document.activeElement === box.querySelector("textarea")} : null;
   document.getElementById("overview").innerHTML = banner +
-    (ov.length ? `<div class="overview" style="margin-bottom:12px">Whole draft: ${ov.map(f => `<a data-n="${f.n}">${f.n}. ${esc(f.title)}</a>`).join(" · ")}</div>` : "") +
-    (!commentOpen ? "" :
-    `<div class="overview" id="commentbox" style="margin-bottom:12px"><div class="row" style="margin-bottom:6px"><span class="title" style="font-size:15px">Ask the panel about the whole draft</span><span class="meta">${S.chosen.map(c => c.label).join(", ")}</span><span class="spacer"></span><a id="closecomment" class="meta">Close</a></div>
+    (ov.length ? `<div class="overview" style="margin-bottom:12px">Whole draft: ${ov.map(f => `<a data-n="${f.n}">${f.n}. ${esc(f.title)}</a>`).join(" · ")}</div>` : "");
+  document.getElementById("askpanel").innerHTML = (!commentOpen ? "" :
+    `<div class="card" id="commentbox"><div class="row" style="margin-bottom:6px"><span class="title" style="font-size:15px">Ask about the whole draft</span><span class="spacer"></span><a id="closecomment" class="meta" style="cursor:pointer">Close</a></div><div class="meta" style="font-size:13px;margin-bottom:6px">Goes to ${S.chosen.map(c => c.label).join(", ")}</div>
       <textarea placeholder="A question, a comment, or a request: Is the hypothesis falsifiable as written? Tighten the wedge section." style="min-height:60px"></textarea>
       <div class="row" style="margin-top:6px"><button id="sendc">Ask all panelists</button>
       <label class="meta"><input type="checkbox"> Use as focus for the next Update</label><span class="err" id="cerr"></span></div>
@@ -385,18 +390,22 @@ async function act(route, body) {
   } catch (e) { document.getElementById("err").textContent = e.message; }
 }
 
-let MODELS = null;
+let MODELS = null, openKeys = new Set();
 async function savePanel(list) { await api("/api/panel", {panel: list}); await load(); drawPanelMenu(); }
 function drawPanelMenu() {
   const el = document.getElementById("panelmenu"), chosen = S.chosen.map(c => c.spec);
-  const add = MODELS ? `<div class="mi sub">Add<span class="arrow">◂</span><div class="menu">` + MODELS.map(l =>
-      `<div class="mi sub">${esc(l.lab)}<span class="arrow">◂</span><div class="menu">` + l.families.map(f =>
-        `<div class="mi sub">${esc(f.family)}<span class="arrow">◂</span><div class="menu">` + f.items.map(i =>
-          `<div class="mi pick" data-spec="${esc(i.spec)}">${chosen.includes(i.spec) ? "✓ " : ""}${esc(i.label)}</div>`).join("") + `</div></div>`).join("") +
-      `</div></div>`).join("") + `</div></div>` : `<div class="mi meta">Loading models…</div>`;
+  const add = !MODELS ? `<div class="mi meta">Loading models…</div>` :
+    `<div class="mi meta" style="cursor:default">Add a model</div>` + MODELS.map((l, li) =>
+      `<div class="mi tog" data-k="L${li}" style="padding-left:14px">${openKeys.has("L" + li) ? "▾" : "▸"} ${esc(l.lab)}</div>` +
+      (!openKeys.has("L" + li) ? "" : l.families.map((f, fi) =>
+        `<div class="mi tog" data-k="L${li}F${fi}" style="padding-left:28px">${openKeys.has("L" + li + "F" + fi) ? "▾" : "▸"} ${esc(f.family)}</div>` +
+        (!openKeys.has("L" + li + "F" + fi) ? "" : f.items.map(i =>
+          `<div class="mi pick" data-spec="${esc(i.spec)}" style="padding-left:46px">${chosen.includes(i.spec) ? "✓ " : ""}${esc(i.label)}</div>`).join(""))).join(""))).join("");
   el.innerHTML = `<div class="mi meta" style="cursor:default">Used for Update and Ask</div>` +
     S.chosen.map(c => `<div class="mi">${esc(c.label)}<span class="arrow rm" data-spec="${esc(c.spec)}" title="Remove">✕</span></div>`).join("") +
     `<div class="sep"></div>${add}<div class="mi" id="resetpanel">Reset to default</div>`;
+  el.querySelectorAll(".tog").forEach(x => x.onclick = e => { e.stopPropagation(); const k = x.dataset.k;
+    openKeys.has(k) ? openKeys.delete(k) : openKeys.add(k); drawPanelMenu(); });
   el.querySelectorAll(".rm").forEach(x => x.onclick = e => { e.stopPropagation(); savePanel(chosen.filter(s => s !== x.dataset.spec)); });
   el.querySelectorAll(".pick").forEach(x => x.onclick = e => { e.stopPropagation(); const sp = x.dataset.spec;
     savePanel(chosen.includes(sp) ? chosen.filter(s => s !== sp) : [...chosen, sp]); });
@@ -406,7 +415,10 @@ document.getElementById("panelbtn").onclick = async e => {
   e.stopPropagation();
   const el = document.getElementById("panelmenu");
   el.hidden = !el.hidden;
-  if (!el.hidden) { drawPanelMenu(); if (!MODELS) { MODELS = await api("/api/models"); drawPanelMenu(); } }
+  if (!el.hidden) {  // drop down inside the right column, below the header
+    const side = document.getElementById("side").getBoundingClientRect(), head = document.querySelector("header").getBoundingClientRect();
+    Object.assign(el.style, {position: "fixed", left: side.left + "px", width: side.width + "px", right: "auto", top: head.bottom + 4 + "px"});
+    drawPanelMenu(); if (!MODELS) { MODELS = await api("/api/models"); drawPanelMenu(); } }
 };
 document.addEventListener("click", e => { const el = document.getElementById("panelmenu"); if (!el.contains(e.target)) el.hidden = true; });
 function centerOn(el) {
@@ -423,7 +435,7 @@ document.getElementById("card").addEventListener("click", e => {
   if (e.target.closest("button, textarea, input, a, select")) return;
   if (cur != null) goTo(cur);
 });
-document.getElementById("askbtn").onclick = () => { commentOpen = !commentOpen; renderSide(); const t = document.querySelector("#commentbox textarea"); if (t) { t.focus(); window.scrollTo({top: 0}); } };
+document.getElementById("askbtn").onclick = () => { commentOpen = !commentOpen; renderSide(); const t = document.querySelector("#commentbox textarea"); if (t) { document.getElementById("side").scrollTop = 0; t.focus(); } };
 document.getElementById("update").onclick = async () => { await api("/api/update", {}); load(); };
 document.getElementById("acceptall").onclick = async () => {
   const todo = S.findings.filter(f => shown(f) && !f.status && f.applicable);

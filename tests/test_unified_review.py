@@ -604,6 +604,23 @@ class ReviewPage(unittest.TestCase):
         self.assertEqual(mark("and it correlates", "and it strongly correlates"), "it")
         self.assertEqual(mark("Within primates, neuron", "Across species, cell"), "Within primates, neuron")
 
+    def test_ellipsis_diff(self):
+        body = "Point.\n\nThe kit ~~combines~~ 🟢 **pairs** cameras ... and ~~also records~~ 🟢 **records** demos."
+        old, new = ur.diff_parts(body)
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "m.md"
+            f.write_text("The kit combines cameras, phones, and rings, and also records demos. End.")
+            self.assertIsNone(ur.apply_change(f, old, new))
+            self.assertEqual(f.read_text(), "The kit pairs cameras, phones, and rings, and records demos. End.")
+            f.write_text("The kit combines cameras, and nothing else.")
+            self.assertIsNotNone(ur.apply_change(f, old, new))  # a part is missing: refuse
+            self.assertEqual(f.read_text(), "The kit combines cameras, and nothing else.")
+
+    def test_end_marker_dropped(self):
+        fs = ur.parse_findings("=== FINDING\nseverity: Polish\ntitle: T\nquote: a b\n---\nPoint.\n\na ~~b~~ 🟢 **c**.\n=== END FINDING\n")
+        self.assertNotIn("END FINDING", fs[0]["body"])
+        self.assertEqual(ur.diff_parts("Point.\n\na ~~b~~ 🟢 **c**.\n=== END FINDING"), ("a b.", "a c."))
+
     def test_edit_block(self):
         with tempfile.TemporaryDirectory() as d:
             doc = Path(d) / "memo.md"

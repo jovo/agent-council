@@ -475,6 +475,14 @@ Reply with exactly one line per claim, in order, and nothing else:
 
 # ---------------------------------------------------------------- parsing
 
+END_MARK = re.compile(r"^\s*=+\s*END\s*(?:OF\s*)?FINDING\s*=*\s*$", re.M | re.I)
+
+
+def strip_end(body):
+    """Drop an '=== END FINDING' line a reviewer added though the format has none."""
+    return END_MARK.sub("", body or "").strip()
+
+
 def parse_findings(text):
     out = []
     for block in re.split(r"^\s*=+\s*FINDING\s*=*\s*$", text, flags=re.M)[1:]:
@@ -489,7 +497,7 @@ def parse_findings(text):
                 f[k] = v.strip()
         f["severity"] = next((s for s in SEVERITIES if s.lower() in f["severity"].lower()), "Substantive")
         f["kind"] = next((k for k in KINDS if k in f["kind"].lower()), "")
-        f["body"] = body.strip()
+        f["body"] = strip_end(body)
         if f["body"] or f["title"]:
             out.append(f)
     return out
@@ -1433,6 +1441,7 @@ ADD = re.compile(r"\*\*🟢\s*(.+?)\*\*|🟢\s*\*\*(.+?)\*\*", re.S)
 def diff_parts(body):
     """(old, new) text of a finding's diff, or (None, reason) when it has none
     that can be applied as written."""
+    body = strip_end(body)
     paras = body.split("\n\n")[1:]
     fence = re.search(r"```[a-z]*\n(.*?)\n```", body, re.S)
     if fence:
@@ -1443,14 +1452,14 @@ def diff_parts(body):
     text = "\n\n".join(x for x in paras if "~~" in x or "🟢" in x).strip()
     if not text:
         return None, "the finding has no diff"
-    old = ADD.sub("", DEL.sub(lambda m: m.group(1) or m.group(2), text))
-    new = DEL.sub("", ADD.sub(lambda m: m.group(1) or m.group(2), text))
+    # Removing a marked span takes the space before it too, so "a ~~b~~ 🟢 **c**."
+    # gives old "a b." and new "a c.", not "a b ." and "a  c.".
+    old = re.sub(r"[ \t]*(?:" + ADD.pattern + ")", "", DEL.sub(lambda m: m.group(1) or m.group(2), text))
+    new = re.sub(r"[ \t]*(?:" + DEL.pattern + ")", "", ADD.sub(lambda m: m.group(1) or m.group(2), text))
     # Removing a marked span leaves doubled spaces. In the new text it can also
     # leave a space before punctuation. The old text keeps its punctuation as is.
     spaces = lambda t: re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t]{2,}", " ", t)).strip()
     old, new = spaces(old), spaces(re.sub(r" +([.,;:])", r"\1", new))
-    if re.search(r"\.\.\.|…", old):
-        return None, "the diff skips text with an ellipsis"
     if re.search(r"\[[^\]@]*(name|key|insert|N\b|M\b)[^\]]*\]", new, re.I):
         return None, "the new text has a placeholder to fill in"
     return old, new
@@ -1551,17 +1560,18 @@ def page_state(path, run):
         old, new = diff_parts(rep["body"])
         reason = None if old is not None else new
         quote_span = find_span(text, rep["quote"]) if rep["quote"] else None
-        span = (find_span(text, old, quote_span[0] if quote_span else None)
-                or fuzzy_span(text, old, quote_span)) if old else None
+        edits = locate_edits(text, old, new, rep["quote"]) if old else None
+        span = (edits[0][0], edits[-1][1]) if edits else None
         if old is not None and span is None:
             reason = "the text this diff changes is no longer in the file"
         d = decided.get(rep["title"])
         out.append({
             "n": n, "severity": sev, "kind": g.get("kind", ""), "section": where_label, "title": rep["title"], "where": g["where"],
-            "point": rep["body"].split("\n\n")[0], "body": rep["body"], "quote": rep["quote"],
+            "point": strip_end(rep["body"]).split("\n\n")[0], "body": strip_end(rep["body"]), "quote": rep["quote"],
             "old": old, "new": new if old is not None else None, "reason": reason,
             "span": list(span or quote_span or []) or None, "applicable": span is not None,
-            "mark": change_mark(text, span, old, new) if span else None,
+            "mark": (change_mark(text, span, old, new) if len(edits) == 1
+                     else [edits[0][0], edits[0][1]]) if span else None,
             "tag": vote_tag(g),
             "votes": [{"model": labels.get(m, m).split()[0], "vote": v["vote"], "raised": m in g["raised_by"]}
                       for m, v in g["votes"].items()],
@@ -1589,15 +1599,48 @@ def page_state(path, run):
             "failures": r.get("failures", []), "text": text, "findings": out}
 
 
+ELLIPSIS = re.compile(r"\s*(?:\.\.\.|…)\s*")
+
+
+def locate_edits(text, old, new, quote=""):
+    """Where a change applies: [(start, end, new text)], or None if any part is
+    missing. A diff that skips text with an ellipsis becomes one edit per part,
+    found in order, and applies only when every part is found."""
+    quote_span = find_span(text, quote) if quote else None
+    near = quote_span[0] if quote_span else None
+    span = find_span(text, old, near) or (fuzzy_span(text, old, quote_span) if not ELLIPSIS.search(old) else None)
+    if span:
+        return [(span[0], span[1], new)]
+    olds, news = ELLIPSIS.split(old), ELLIPSIS.split(new)
+    if len(olds) < 2 or len(olds) != len(news):
+        return None
+    edits, pos = [], None
+    for o, n in zip(olds, news):
+        if not o.strip():
+            continue
+        if pos is None:  # the first part: anywhere, nearest the finding's quote
+            sp = find_span(text, o, near)
+        else:  # later parts: after the one before
+            sp = find_span(text[pos:], o, 0)
+            sp = (pos + sp[0], pos + sp[1]) if sp else None
+        if sp is None:
+            return None
+        if o != n:
+            edits.append((sp[0], sp[1], n))
+        pos = sp[1]
+    return edits or None
+
+
 def apply_change(path, old, new, quote=""):
     """Replace old with new in the file. Re-reads the file first, so edits made
     since the page loaded are kept. Returns an error message or None."""
     text = Path(path).read_text()
-    quote_span = find_span(text, quote) if quote else None
-    span = find_span(text, old, quote_span[0] if quote_span else None) or fuzzy_span(text, old, quote_span)
-    if span is None:
+    edits = locate_edits(text, old, new, quote)
+    if not edits:
         return "the text this change targets is no longer in the file"
-    Path(path).write_text(text[:span[0]] + new + text[span[1]:])
+    for a, b, n in sorted(edits, reverse=True):  # from the end, so earlier offsets hold
+        text = text[:a] + n + text[b:]
+    Path(path).write_text(text)
     return None
 
 
