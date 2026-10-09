@@ -3237,11 +3237,14 @@ def serve(path):
         def do_POST(self):
             self.reply("POST")
 
-    try:  # a fixed port keeps one forwarded URL in a codespace; fall back if it is taken
-        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", int(os.environ.get("UNIFIED_REVIEW_PORT") or 0)), Handler)
+    pages = json.loads((RUNS_DIR / "pages.json").read_text()) if (RUNS_DIR / "pages.json").exists() else {}
+    # A fixed port keeps one forwarded URL in a codespace. Otherwise reuse this file's
+    # last port, so a tab left open works again after a restart. Fall back if it is taken.
+    port = int(os.environ.get("UNIFIED_REVIEW_PORT") or (pages.get(str(page.path)) or {}).get("port") or 0)
+    try:
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
     except OSError:
         httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    pages = json.loads((RUNS_DIR / "pages.json").read_text()) if (RUNS_DIR / "pages.json").exists() else {}
     pages[str(page.path)] = {"port": httpd.server_address[1], "pid": os.getpid()}
     write_atomic(RUNS_DIR / "pages.json", json.dumps(pages, indent=1) + "\n")
     httpd.timeout = 60
