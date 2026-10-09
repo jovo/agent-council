@@ -1967,10 +1967,12 @@ def page_state(path, run):
     r = json.loads((run / "results.json").read_text())
     text = Path(path).read_text()
     labels = r["labels"]
-    decided = {}
+    decided, earlier = {}, {}
     for d in load_decisions().get(str(path), []):
         if d.get("run") == run.name:
             decided[d["title"]] = d
+        elif d.get("quote") and d.get("decision") in ("applied", "ignore"):
+            earlier[" ".join(d["quote"].split())] = d  # newest decision on a sentence wins
     out = []
     for n, sev, where_label, g in ordered_findings(r):
         rep = g["rep"]
@@ -1982,6 +1984,18 @@ def page_state(path, run):
         if old is not None and span is None:
             reason = unplaced_reason(text, reviewed_text(run, path), old, new, rep["quote"])
         d = decided.get(rep["title"])
+        if d is None and span is None and rep["quote"]:
+            # The same sentence was accepted or declined from an earlier review: that settles it.
+            e = earlier.get(" ".join(rep["quote"].split()))
+            if e:
+                when = re.match(r"(\d{4}-\d\d-\d\d)-(\d\d)(\d\d)", e.get("run", ""))
+                at = f"the {when.group(2)}:{when.group(3)} review" if when else "an earlier review"
+                if when and when.group(1) != run.name[:10]:
+                    at += f" of {when.group(1)}"
+                verb = "accepted" if e["decision"] == "applied" else "declined"
+                d = {"decision": e["decision"], "note": f"Done: {verb} in {at} as \u201c{e['title']}\u201d"}
+        if d is None and reason and reason.startswith("this change is already in the file"):
+            d = {"decision": "applied", "note": "Done: the change is already in the file"}
         out.append({
             "n": n, "severity": sev, "kind": g.get("kind", ""), "section": where_label, "title": rep["title"], "where": g["where"],
             "point": strip_end(rep["body"]).split("\n\n")[0], "body": strip_end(rep["body"]), "quote": rep["quote"],

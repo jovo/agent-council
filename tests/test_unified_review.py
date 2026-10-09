@@ -869,6 +869,32 @@ class ReviewPage(unittest.TestCase):
         self.assertIn("not in the draft as reviewed",
                       why(fixed, "and it leaves", "and the data leaves"))
 
+    def test_settled_findings_show_as_done(self):
+        """A finding is done when another review's decision covered its sentence (as
+        when you accept while Update runs), or when its change is already in the file."""
+        quote = "The archive keeps records local, and they leave only when exported."
+        g = lambda title, new: {"rep": {"title": title, "quote": quote, "body": f"Point.\n\n~~{quote}~~ 🟢 **{new}**"},
+                                "votes": {}, "raised_by": [], "where": "", "kind": "clarity"}
+        groups = [g("Pronoun", "The archive keeps records local, and the records go only when exported."),
+                  g("Present", "The archive keeps records local, and the records leave only when exported.")]
+        earlier = [{"decision": "applied", "title": "Resolve the pronoun", "quote": quote, "run": "2026-10-08-2132-x-v15"}]
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "2026-10-08-2140-x-v16"
+            (run / "reviewed").mkdir(parents=True)
+            (run / "results.json").write_text('{"labels": {}, "reviewers_ok": []}')
+            draft = Path(d) / "m.md"
+            draft.write_text("The archive keeps records local, and the records leave only when exported.\n")
+
+            def state(decisions):
+                with mock.patch.object(ur, "ordered_findings", lambda r: [(1, "Polish", "", groups[0]), (2, "Polish", "", groups[1])]), \
+                     mock.patch.object(ur, "load_decisions", lambda: {str(draft): decisions}), \
+                     mock.patch.object(ur, "load_questions", lambda run: {}), \
+                     mock.patch.object(ur, "page_panel", lambda p: []):
+                    return [(f["status"], f["note"]) for f in ur.page_state(draft, run)["findings"]]
+            done_earlier = ("accepted", "Done: accepted in the 21:32 review as \u201cResolve the pronoun\u201d")
+            self.assertEqual(state(earlier), [done_earlier, done_earlier])
+            self.assertEqual(state([]), [(None, ""), ("accepted", "Done: the change is already in the file")])
+
     def test_end_marker_dropped(self):
         fs = ur.parse_findings("=== FINDING\nseverity: Polish\ntitle: T\nquote: a b\n---\nPoint.\n\na ~~b~~ 🟢 **c**.\n=== END FINDING\n")
         self.assertNotIn("END FINDING", fs[0]["body"])

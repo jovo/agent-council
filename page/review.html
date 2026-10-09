@@ -241,7 +241,7 @@ function renderCard() {
     ${!f.status && !f.applicable ? `<p class="reason">Cannot apply here: ${esc(f.reason || "it is about the whole draft")}.</p>` : ""}
     ${!f.status && f.changed ? `<div class="row" style="margin-bottom:6px"><button id="done">Mark done</button></div>` : ""}
     <div class="row">${actions}</div>
-    ${f.status ? `<div class="status ${f.status}">${f.status === "accepted" ? (f.note === "fixed by hand" ? "Done: fixed by hand" : "Accepted and written to the file") : "Declined" + (f.note ? ": " + esc(f.note) : "")}</div>` : ""}
+    ${f.status ? `<div class="status ${f.status}">${f.note.startsWith("Done: ") ? esc(f.note) : f.status === "accepted" ? (f.note === "fixed by hand" ? "Done: fixed by hand" : "Accepted and written to the file") : "Declined" + (f.note ? ": " + esc(f.note) : "")}</div>` : ""}
     ${thread(f)}
     <div class="err" id="err"></div>`;
   const on = (id, fn) => { const b = document.getElementById(id); if (b) b.onclick = fn; };
