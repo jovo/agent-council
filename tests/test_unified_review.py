@@ -537,6 +537,42 @@ class Typos(unittest.TestCase):
         self.assertEqual([sev for _, sev, _, _ in ur.ordered_findings(r)], ["Polish", "Typo"])
 
 
+class MechanicalChecks(unittest.TestCase):
+    def run_checks(self, text, bib=None):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "refs.bib").write_text(bib or "@article{Friston10,\n title={x}}\n")
+            doc = d / "memo.md"
+            doc.write_text(text)
+            with mock.patch.object(ur, "BIB", d / "refs.bib"):
+                return [c["what"] for c in ur.checks(text, doc)]
+
+    def test_equations(self):
+        text = "$$a\\tag{1}$$\n\n$$b\\tag{3}$$\n\nBy Eq. (1) and Eq. (2), and Eq. (3)."
+        out = self.run_checks(text)
+        self.assertIn("Equation 3 follows Equation 1.", out)
+        self.assertIn("Equation 2 is cited but does not exist.", out)
+
+    def test_figures(self):
+        text = "**Figure 1.** Caption.\n\n**Figure 2.** Another.\n\nSee Figure 1 and Figure 4."
+        out = self.run_checks(text)
+        self.assertIn("Figure 4 is cited but does not exist.", out)
+        self.assertIn("Figure 2 is never cited in the text.", out)
+        self.assertNotIn("Figure 1 is never cited in the text.", out)  # its caption is not a citation
+
+    def test_links_citations_and_terms(self):
+        text = ("# Methods\n\n<a id=\"table-1-1\"></a>\n\nSee [Table 1.1](#table-1-1), [above](#methods), "
+                "and [gone](#nowhere). As in [@Friston10; @Nobody99]. A multi-model panel. "
+                "Multimodel panels vote. `multi-model` in code does not count.")
+        out = self.run_checks(text)
+        self.assertEqual(out, ["Link to #nowhere has no matching anchor or heading.",
+                               "Citation key @Nobody99 is not in the bibliography.",
+                               '"multi-model" (1×) and "multimodel" (1×) are both used.'])
+
+    def test_clean_draft_has_no_checks(self):
+        self.assertEqual(self.run_checks("A plain paragraph with no numbering at all."), [])
+
+
 class Churn(unittest.TestCase):
     def test_times_changed(self):
         history = ["Alpha one.\n\nBeta one.", "Alpha two.\n\nBeta one.", "Alpha three.\n\nBeta one."]

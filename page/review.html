@@ -102,7 +102,7 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
 </header>
 <main>
   <div><div id="overview"></div><article id="draft"></article></div>
-  <aside id="side"><div id="askpanel"></div><div class="card" id="card"></div><div class="card" id="typos" hidden></div><div class="card list" id="list"></div>
+  <aside id="side"><div id="askpanel"></div><div class="card" id="card"></div><div class="card" id="checks" hidden></div><div class="card" id="typos" hidden></div><div class="card list" id="list"></div>
     <div class="meta" style="font-size:13px"><kbd>j</kbd> <kbd>k</kbd> next and previous · <kbd>a</kbd> accept · <kbd>e</kbd> edit · <kbd>d</kbd> decline · <kbd>q</kbd> ask · double-click a paragraph to edit it, <kbd>⌘</kbd><kbd>Enter</kbd> saves</div></aside>
 </main>
 <script>
@@ -310,7 +310,22 @@ function renderTypos() {
   };
 }
 
+function renderChecks() {
+  // Problems the script finds without a model, recomputed from the current text on every load.
+  const el = document.getElementById("checks"), cs = S.checks || [];
+  el.hidden = !cs.length;
+  if (!cs.length) return;
+  el.innerHTML = `<div class="listhead"><span class="title">Checks</span> <span class="meta">${cs.length} found by the script, not the panel · click one to jump to it</span></div>` +
+    cs.map(c => `<div class="chk" data-pos="${c.pos}" style="cursor:pointer;font-size:14px;margin:3px 0">${c.id}. <span class="meta">line ${c.line}</span> ${esc(c.what)}</div>`).join("");
+  el.querySelectorAll(".chk").forEach(x => x.onclick = () => {
+    const pos = +x.dataset.pos;
+    const b = [...document.querySelectorAll("#draft [data-a]")].find(e => +e.dataset.a <= pos && pos < +e.dataset.b);
+    if (b) { centerOn(b); b.classList.remove("flash"); void b.offsetWidth; b.classList.add("flash"); }
+  });
+}
+
 function renderSide() {
+  renderChecks();
   renderTypos();
   const el = document.getElementById("list"), fs = S.findings.filter(shown);
   el.innerHTML = `<div class="listhead"><span class="title">Findings</span> <span class="meta">${fs.length} shown by the filters above · click one to jump to it</span></div>` +

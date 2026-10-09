@@ -1106,6 +1106,10 @@ def render(outdir):
         tag = (f" ({g['kind']})" if g.get("kind") else "") + (" (contested)" if g.get("contested") else "")
         parts.append(f"### {n}. {g['rep']['title']}{tag}\n\n"
                      f"{quoted(g, r['files'], where_label)}{body}\n\n{vote_line(g, voters)}")
+    if r.get("checks"):
+        parts.append("## Checks\n\nFound by the script, not the panel: numbering, references, citation keys, and "
+                     "terms spelled two ways.\n\n" + "\n".join(
+                         f"- **{c['id']}.** Line {c['line']}: {c['what']}" for c in r["checks"]))
     if typos:
         parts.append("## Typos\n\nOne-word fixes that no other voter disputed. Accept them together on "
                      "the review page, or by number.\n\n" + "\n".join(typos))
@@ -1313,8 +1317,10 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
                         and norm(d["quote"]) == norm(g["rep"]["quote"])), None)
         if hit:
             g["declined"] = {"id": hit, "title": ids[hit]["title"]}
+    mech = []
     if len(files) == 1 and not is_pdf(files[0]):
         text = files[0].read_text()
+        mech = checks(text, files[0])
         history = reviewed_history(files[0], text)
         for g in groups:
             if not g["rejected"] and not g.get("declined"):
@@ -1335,7 +1341,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         "labels": {m: label(m) for m in panel}, "verify": verify,
         "failures": FAILURES, "agreement": vote_agreement(flat, votes, owner),
         "anonymization": letters, "timings_s": timings, "headings": draft_headings(draft),
-        "findings": flat, "votes": votes, "groups": groups}, indent=1, ensure_ascii=False) + "\n")
+        "findings": flat, "votes": votes, "groups": groups, "checks": mech}, indent=1, ensure_ascii=False) + "\n")
     render(outdir)
     LAST_RUN.parent.mkdir(parents=True, exist_ok=True)
     LAST_RUN.write_text(str(outdir))
@@ -1519,6 +1525,102 @@ def write_changes(p, start):
             if body else "*No changes.*"]
     out.write_text("\n\n".join(head + body) + "\n")
     return out
+
+
+# ---------------------------------------------------------------- checks
+# Mechanical checks that need no model: numbering, references, citation keys,
+# and terms spelled two ways. They follow the house rules in skills/documents.
+
+BIB = Path(os.environ.get("BIB_DIR") or Path.home() / "github" / "bib") / "references.bib"
+_BIB_KEYS = {}
+
+
+def bib_keys(text, path):
+    """Citation keys in the draft's bibliography: a local file named in its front
+    matter, else the shared bibliography. None when neither can be read."""
+    m = re.match(r"---\n(.*?)\n---", text, re.S)
+    named = re.search(r"^bibliography:\s*(\S+)", m.group(1), re.M) if m else None
+    bib = BIB
+    if named and "://" not in named.group(1):
+        bib = (Path(path).parent / named.group(1)).expanduser()
+    try:
+        stamp = bib.stat().st_mtime
+    except OSError:
+        return None
+    if _BIB_KEYS.get(bib, (None,))[0] != stamp:
+        _BIB_KEYS[bib] = (stamp, set(re.findall(r"^@\w+\{([^,\s]+),", bib.read_text(errors="replace"), re.M)))
+    return _BIB_KEYS[bib][1]
+
+
+def blank(text, pattern, flags=0):
+    """Text with each match replaced by spaces, so positions stay the same."""
+    return re.sub(pattern, lambda m: re.sub(r"[^\n]", " ", m.group(0)), text, flags=flags)
+
+
+def checks(text, path):
+    """Problems a script can find without a model: [{"id", "line", "what"}],
+    in draft order."""
+    found = []
+    line = lambda pos: text.count("\n", 0, pos) + 1
+    add = lambda pos, what: found.append((pos, what))
+    prose = blank(text, r"```.*?```|`[^`\n]*`", re.S)  # code never counts
+    words = blank(prose, r"\$\$.*?\$\$|\$[^$\n]+\$|<[^>\n]+>|\]\([^)\s]*\)|https?://\S+", re.S)
+
+    def numbering(label, defs, refs, uncited=True):
+        """defs, refs: [(position, number)]. Duplicates, order, missing targets, and
+        optionally uncited ones. A draft that numbers none of these is not checked,
+        since its references may point elsewhere."""
+        if not defs:
+            return
+        seen, last = set(), None
+        for pos, n in defs:
+            if n in seen:
+                add(pos, f"{label} {n} is numbered twice.")
+            seen.add(n)
+            if n.isdigit() and last is not None and int(n) != last + 1:
+                add(pos, f"{label} {n} follows {label} {last}.")
+            last = int(n) if n.isdigit() else None
+        cited = {n for _, n in refs}
+        for pos, n in refs:
+            if n not in seen:
+                add(pos, f"{label} {n} is cited but does not exist.")
+        for pos, n in defs:
+            if uncited and n not in cited:
+                add(pos, f"{label} {n} is never cited in the text.")
+
+    numbering("Equation", [(m.start(), m.group(1).strip()) for m in re.finditer(r"\\tag\{([^}]*)\}", prose)],
+              [(m.start(), m.group(1).strip()) for m in re.finditer(r"\bEqs?\.\s*\(([^)]+)\)", words)],
+              uncited=False)  # an equation need not be cited
+    caps = [(m.start(), m.group(1)) for m in re.finditer(r"\*\*Figure (\d+(?:\.\d+)*)\.\*\*", words)]
+    capspots = {p for p, _ in caps}
+    numbering("Figure", caps, [(m.start(), m.group(1)) for m in re.finditer(r"\b(?:Figure|Fig\.)\s+(\d+(?:\.\d+)*)", words)
+                               if m.start() - 2 not in capspots])
+
+    slug = lambda h: re.sub(r"\s+", "-", re.sub(r"[^\w\s-]", "", h.strip().lower()))
+    targets = set(re.findall(r"""\bid=["']([^"']+)["']""", prose))
+    targets |= {slug(h) for h in re.findall(r"^#{1,6}\s+(.+?)\s*#*\s*$", prose, re.M)}
+    for m in re.finditer(r"\]\(#([^)\s]+)\)", prose):
+        if m.group(1) not in targets:
+            add(m.start(), f"Link to #{m.group(1)} has no matching anchor or heading.")
+
+    keys = bib_keys(text, path)
+    if keys is not None:
+        for m in re.finditer(r"\[[^\[\]]*?@[^\[\]]*\]", prose):
+            for k in re.findall(r"@([\w:.#$%&+?<>~/'-]+)", m.group(0)):
+                k = k.rstrip(".,;:")
+                if k not in keys:
+                    add(m.start(), f"Citation key @{k} is not in the bibliography.")
+
+    lower = words.lower()
+    for hyph in sorted({m.group(0).lower() for m in re.finditer(r"\b[A-Za-z]{2,}-[A-Za-z]{2,}\b", words)}):
+        closed = hyph.replace("-", "")
+        n_closed = len(re.findall(rf"\b{closed}\b", lower))
+        if n_closed:
+            first = re.search(rf"\b{closed}\b", lower).start()
+            n_hyph = len(re.findall(rf"\b{re.escape(hyph)}\b", lower))
+            add(first, f'"{hyph}" ({n_hyph}×) and "{closed}" ({n_closed}×) are both used.')
+    found.sort(key=lambda x: x[0])
+    return [{"id": f"M{i}", "line": line(pos), "pos": pos, "what": what} for i, (pos, what) in enumerate(found, 1)]
 
 
 # ---------------------------------------------------------------- churn
@@ -1772,7 +1874,7 @@ def page_state(path, run):
     return {"file": str(path), "name": Path(path).name, "run": run.name, "version": vers.get("number"),
             "edited": bool(vers.get("version")) and fingerprint(text) != vers.get("version"),
             "chosen": [{"spec": m, "label": label(panelist(m))} for m in page_panel(path)],
-            "comments": comment_state(run, text),
+            "comments": comment_state(run, text), "checks": checks(text, path),
             "started": r.get("started", ""), "panel": [labels.get(m, m) for m in r["reviewers_ok"]],
             "failures": r.get("failures", []), "text": text, "findings": out}
 
