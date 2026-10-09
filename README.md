@@ -18,6 +18,8 @@ unified-review memo.md
 
 A review of a 1,300-word memo takes 40 to 120 seconds. For a Markdown file, the review page then opens in your browser. Click a highlighted passage to see its finding, then Accept, Edit, or Decline it. Click **Update** to review the revised text. [Install](#install) lists what you need first.
 
+To review a file without the command line, run `unified-review --upload`. A page opens where you drop or choose a PDF, Markdown, text, or TeX file. The panel reviews a copy, and the page shows the unified review when it finishes, with a button to download it as Markdown. Nothing is written back to your file.
+
 ## Why a panel that votes
 
 A single model reviewing a draft misses things another model catches. A single model merging several reviews favors its own findings: LLM evaluators recognize their own outputs and rate them higher (Panickssery et al. 2024, [arXiv:2404.13076](https://arxiv.org/abs/2404.13076)). A panel of judges from different model families tracks human judgments more closely than one large judge and shows less intra-model bias (Verga et al. 2024, [arXiv:2404.18796](https://arxiv.org/abs/2404.18796)).

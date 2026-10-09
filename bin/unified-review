@@ -8,6 +8,7 @@ factcheck.md.
 
 Usage: unified-review [-o OUTDIR] [-n FOCUS] [-p PANEL] [--context FILE]... [--verify] [--rules FILE] FILE [FILE...]
        unified-review --page FILE                  open the review page for a file
+       unified-review --upload                     open a page to upload a file and read its review
        unified-review --item 3,7,K2 [--run DIR]   print items to act on
        unified-review --ignore 5,7 [--note WHY]    record declined findings
        unified-review --applied 3                  record applied findings
@@ -396,7 +397,11 @@ the house rules to verify or tag claims, and do not cite sources from memory.
 Flag a factual claim only if it needs a source and lacks one, or looks wrong on
 its face, and say why. A separate fact-check pass verifies claims. Otherwise
 follow the Review section of the house rules for each finding's content: state
-the point, then show its inline diff. Ignore the house rules' cap on findings
+the point, then show its inline diff. The 🟢 text is literal text for the
+draft, never an instruction to the author ("add citations ..."). When the fix
+needs content you lack, such as a citation, number, or definition, write a slot
+shaped like the final text where it goes, such as "RECAP (Author, year)", and
+say in the point what fills it. Ignore the house rules' cap on findings
 and their ordering rule: report every finding worth making, in any order. This
 script places findings in draft order. Report nothing you would not change: if
 the draft needs no change, reply with the single line NO FINDINGS.
@@ -913,8 +918,12 @@ def locate(quote, files):
         if not p.exists():
             continue
         if is_pdf(p):
+            # A quote copied across table columns carries the column gaps (3+ spaces)
+            # and has other cells' text between its parts on the page: match each part.
+            parts = [s for s in (norm(s) for s in re.split(r" {3,}", quote.strip())) if s]
             for i, page in enumerate(doc_text(p).split("\f")):
-                if q in norm(page):
+                page = norm(page)
+                if q in page or (len(parts) > 1 and all(s in page for s in parts)):
                     return p, i + 1, "page"
             continue
         lines = p.read_text().splitlines()
@@ -1076,7 +1085,7 @@ def quoted(g, files, where_label=""):
         head = "Focus or supporting material:"
     else:
         loc = locate(q, files)
-        place = f"{loc[0].name}, {loc[2]} {loc[1]}" if loc else "quoted text no longer in the file"
+        place = f"{loc[0].name}, {loc[2]} {loc[1]}" if loc else "quoted text not found in the file"
         dup = loc and where_label == loc[0].name  # no headings: the section is the file
         head = f"{where_label} · {place}:" if where_label and not dup else f"{place}:"
     block = "\n".join("> " + line for line in q.splitlines())
@@ -2560,11 +2569,7 @@ class PageServer:
             return 200, "application/json", json.dumps({"job": self.job_state()})
         if method == "GET" and route in ("/", "/index.html"):
             return 200, "text/html; charset=utf-8", (PAGE_DIR / "review.html").read_text()
-        if method == "GET" and route.startswith("/fonts/"):
-            f = FONT_DIR / Path(route).name
-            if f.suffix == ".woff2" and f.exists():
-                return 200, "font/woff2", f.read_bytes()
-        return 404, "text/plain", "not found"
+        return static(method, route)
 
     def job_state(self):
         if not self.job:
@@ -2573,11 +2578,88 @@ class PageServer:
         return {"running": code is None, "ok": code == 0 if code is not None else None}
 
 
+def static(method, route):
+    """The page fonts, else not found."""
+    if method == "GET" and route.startswith("/fonts/"):
+        f = FONT_DIR / Path(route).name
+        if f.suffix == ".woff2" and f.exists():
+            return 200, "font/woff2", f.read_bytes()
+    return 404, "text/plain", "not found"
+
+
+UPLOAD = "upload"  # the upload page's key in pages.json, and its --serve argument
+UPLOAD_TYPES = (".pdf", ".md", ".txt", ".tex")
+
+
+class UploadServer:
+    """The upload page: send a file, the server reviews a copy of it, and the
+    page shows unified.md. Nothing is written back to the original."""
+    path = UPLOAD
+
+    def __init__(self):
+        self.jobs = {}  # upload id -> its review process
+        self.last = time.time()
+
+    def handle(self, method, route, body):
+        self.last = time.time()
+        ok = lambda d: (200, "application/json", json.dumps(d))
+        err = lambda code, msg: (code, "application/json", json.dumps({"error": msg}))
+        if method == "GET" and route == "/api/ping":
+            return ok({"file": UPLOAD})
+        if method == "POST" and route.startswith("/api/upload/"):
+            import urllib.parse
+            name = Path(urllib.parse.unquote(route[len("/api/upload/"):])).name
+            if Path(name).suffix.lower() not in UPLOAD_TYPES:
+                return err(400, f"choose a {', '.join(UPLOAD_TYPES)} file")
+            if not body:
+                return err(400, "the file is empty")
+            uid = time.strftime("%Y-%m-%d-%H%M%S-") + hashlib.sha1(body).hexdigest()[:6]
+            folder = RUNS_DIR / "uploads" / uid
+            doc = folder / "upload" / name  # so the run is named <date>-upload-<file>-v1
+            doc.parent.mkdir(parents=True)
+            doc.write_bytes(body)
+            env = {**os.environ, "UNIFIED_REVIEW_NO_PAGE": "1"}
+            with open(folder / "stdout.log", "w") as out, open(folder / "stderr.log", "w") as log_file:
+                self.jobs[uid] = subprocess.Popen([sys.executable, os.path.abspath(__file__), str(doc)],
+                                                  cwd=str(folder), env=env, stdin=subprocess.DEVNULL,
+                                                  stdout=out, stderr=log_file)
+            return ok({"id": uid})
+        if method == "GET" and route.startswith("/api/job/"):
+            uid = Path(route).name
+            folder = RUNS_DIR / "uploads" / uid
+            if not uid or not folder.is_dir():
+                return err(404, "no such upload")
+            job = self.jobs.get(uid)
+            running = job is not None and job.poll() is None
+            read = lambda f: (folder / f).read_text(errors="replace") if (folder / f).exists() else ""
+            names = [p.name for p in (folder / "upload").glob("*")]
+            st = {"running": running, "name": names[0] if names else uid,
+                  "log": read("stderr.log").splitlines()[-12:]}
+            if running:
+                return ok(st)
+            # The review prints the path of unified.md as its last line.
+            lines = [l.strip() for l in read("stdout.log").splitlines() if l.strip()]
+            unified = Path(lines[-1]) if lines and lines[-1].endswith("unified.md") else None
+            if not unified or not unified.exists():
+                st["error"] = "the review did not finish" + (" (see the log below)" if st["log"] else "")
+                return ok(st)
+            st["markdown"] = unified.read_text()
+            st["html"] = None
+            if shutil.which("pandoc"):
+                r = subprocess.run(["pandoc", "-f", "gfm", "-t", "html"], input=st["markdown"],
+                                   capture_output=True, text=True)
+                st["html"] = r.stdout if r.returncode == 0 else None
+            return ok(st)
+        if method == "GET" and route in ("/", "/index.html"):
+            return 200, "text/html; charset=utf-8", (PAGE_DIR / "upload.html").read_text()
+        return static(method, route)
+
+
 def serve(path):
-    """Serve the review page for one file on a free local port, and record the
-    port so later reviews of the file reuse this server."""
+    """Serve the review page for one file, or the upload page, on a free local
+    port, and record the port so later calls reuse this server."""
     import http.server
-    page = PageServer(path)
+    page = UploadServer() if path == UPLOAD else PageServer(path)
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -2586,7 +2668,8 @@ def serve(path):
         def reply(self, method):
             n = int(self.headers.get("Content-Length") or 0)
             try:
-                body = json.loads(self.rfile.read(n) or b"{}") if method == "POST" else {}
+                raw = self.rfile.read(n) if method == "POST" else b""
+                body = raw if self.path.startswith("/api/upload/") else json.loads(raw or b"{}")
                 code, ctype, data = page.handle(method, self.path.split("?")[0], body)
             except Exception as e:  # report to the page, keep serving
                 code, ctype, data = 500, "application/json", json.dumps({"error": str(e)})
@@ -2617,10 +2700,10 @@ def serve(path):
 
 
 def page_url(path):
-    """URL of a live page server for this file, starting one if needed. None
-    if it does not come up."""
+    """URL of a live page server for this file (or UPLOAD, the upload page),
+    starting one if needed. None if it does not come up."""
     import urllib.request
-    path = Path(path).resolve()
+    path = path if path == UPLOAD else Path(path).resolve()
     pf = RUNS_DIR / "pages.json"
     for attempt in range(2):
         pages = json.loads(pf.read_text()) if pf.exists() else {}
@@ -2741,6 +2824,8 @@ def main():
                     help="write and open what changed in FILE since saved version N")
     ap.add_argument("--page", action="store_true",
                     help="open the review page for FILE's newest review (or the newest review here)")
+    ap.add_argument("--upload", action="store_true",
+                    help="open a page to upload a file (PDF, Markdown, text, TeX) and read its review")
     ap.add_argument("--serve", metavar="FILE", help=argparse.SUPPRESS)
     ap.add_argument("--factcheck-only", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args()
@@ -2757,6 +2842,10 @@ def main():
         return
     if a.serve:
         serve(a.serve)
+        return
+    if a.upload:
+        if not open_page(UPLOAD):
+            sys.exit("error: the upload page did not start")
         return
     if a.page:
         target = Path(a.files[0]).resolve() if a.files else Path(json.loads(

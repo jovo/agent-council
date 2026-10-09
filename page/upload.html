@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unified review</title>
+<style>
+@font-face{font-family:"NewCM Body";font-weight:400;font-style:normal;src:url(/fonts/NewCM10-Book.woff2) format("woff2")}
+@font-face{font-family:"NewCM Body";font-weight:400;font-style:italic;src:url(/fonts/NewCM10-BookItalic.woff2) format("woff2")}
+@font-face{font-family:"NewCM Body";font-weight:700;font-style:normal;src:url(/fonts/NewCM10-Bold.woff2) format("woff2")}
+@font-face{font-family:"NewCM Title";font-weight:700;src:url(/fonts/NewCMSans10-Bold.woff2) format("woff2")}
+:root{--xref:#1A4D8F;--bg:#fbfaf7;--panel:#fff;--ink:#1d1d1b;--muted:#6b6a65;--faint:#9a9890;--line:#e2e0d8;--crit-ink:#9b2c24;--del:#9a9890;--ins:#2f6b21}
+@media (prefers-color-scheme:dark){:root{--xref:#8AB4F0;--bg:#1b1b1a;--panel:#232322;--ink:#ecebe6;--muted:#a9a79f;--faint:#7c7a73;--line:#3a3936;--crit-ink:#f2b6b0;--del:#7c7a73;--ins:#9fd48f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "NewCM Body",Georgia,serif}
+h1,h2,h3{font-family:"NewCM Title","Helvetica Neue",Arial,sans-serif;font-weight:700}
+button{font:inherit;color:inherit;background:transparent;border:1px solid var(--line);border-radius:6px;padding:3px 11px;cursor:pointer;font-size:14px}
+button:hover{border-color:var(--muted)}
+header{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line);padding:10px 24px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.meta{color:var(--muted);font-size:14px}
+.spacer{flex:1}
+main{max-width:860px;margin:0 auto;padding:24px 16px 80px}
+#drop{border:2px dashed var(--line);border-radius:12px;padding:56px 24px;text-align:center;background:var(--panel);cursor:pointer}
+#drop.over{border-color:var(--ink)}
+#drop p{margin:0 0 8px}
+#status{margin-top:16px}
+pre{white-space:pre-wrap;font:13px/1.45 ui-monospace,Menlo,monospace;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.err{color:var(--crit-ink)}
+#result{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:24px 32px}
+#result h1{font-size:24px;margin:.2em 0 .6em}#result h2{font-size:20px;margin:1.2em 0 .5em}#result h3{font-size:17px;margin:1em 0 .4em}
+#result blockquote{margin:0 0 .9em;padding-left:12px;border-left:3px solid var(--line);color:var(--muted)}
+#result a{color:var(--xref)}
+#result del{color:var(--del)}#result strong{color:inherit}
+#result table{border-collapse:collapse;font-size:14px}#result th,#result td{border-bottom:1px solid var(--line);padding:4px 8px;text-align:left}
+@media (max-width:600px){header{padding:10px 16px}#result{padding:16px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1 style="font-size:20px;margin:0">Unified review</h1>
+    <span class="meta" id="name"></span>
+    <span class="spacer"></span>
+    <button id="download" hidden>Download unified.md</button>
+    <button id="again" hidden>Review another file</button>
+  </div>
+</header>
+<main>
+  <div id="drop">
+    <p>Drop a file here, or click to choose one.</p>
+    <div class="meta">PDF, Markdown, text, or TeX. The panel reviews a copy, which takes a few minutes.</div>
+    <input type="file" id="pick" accept=".pdf,.md,.txt,.tex" hidden>
+  </div>
+  <div id="status"></div>
+  <article id="result" hidden></article>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = t => (t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+let started = null, markdown = "", name = "";
+
+async function upload(file) {
+  $("status").innerHTML = `<div class="meta">Uploading ${esc(file.name)}…</div>`;
+  try {
+    const r = await fetch("/api/upload/" + encodeURIComponent(file.name), {method: "POST", body: file});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    location.hash = j.id;
+  } catch (e) { $("status").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+
+async function poll() {
+  const id = location.hash.slice(1);
+  if (!id) return show(null);
+  let j;
+  try { const r = await fetch("/api/job/" + encodeURIComponent(id)); j = await r.json(); if (!r.ok) throw new Error(j.error); }
+  catch (e) { show(null); $("status").innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  show(j);
+  if (j.running) setTimeout(poll, 3000);
+}
+
+function show(j) {
+  const idle = !j;
+  $("drop").hidden = !idle;
+  $("again").hidden = idle;
+  $("download").hidden = !(j && j.markdown);
+  $("result").hidden = !(j && j.markdown);
+  name = j ? j.name : ""; $("name").textContent = name;
+  if (idle) { $("status").innerHTML = ""; return; }
+  const log = j.log.length ? `<pre>${esc(j.log.join("\n"))}</pre>` : "";
+  if (j.running) {
+    started = started || Date.now();
+    $("status").innerHTML = `<div class="meta">Reviewing… ${Math.round((Date.now() - started) / 1000)} s</div>${log}`;
+  } else if (j.error) {
+    $("status").innerHTML = `<div class="err">${esc(j.error)}</div>${log}`;
+  } else {
+    $("status").innerHTML = "";
+    markdown = j.markdown;
+    $("result").innerHTML = j.html || `<pre>${esc(j.markdown)}</pre>`;
+  }
+}
+
+const drop = $("drop");
+drop.onclick = () => $("pick").click();
+$("pick").onchange = () => { if ($("pick").files[0]) upload($("pick").files[0]); };
+document.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+document.addEventListener("dragleave", e => { if (!e.relatedTarget) drop.classList.remove("over"); });
+document.addEventListener("drop", e => {
+  e.preventDefault(); drop.classList.remove("over");
+  if (!drop.hidden && e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
+});
+$("again").onclick = () => { location.hash = ""; $("pick").value = ""; };
+$("download").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([markdown], {type: "text/markdown"}));
+  a.download = name.replace(/\.[^.]+$/, "") + "-unified-review.md";
+  a.click();
+};
+window.onhashchange = () => { started = null; poll(); };
+poll();
+</script>
+</body>
+</html>

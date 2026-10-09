@@ -246,6 +246,16 @@ class Rendering(unittest.TestCase):
         self.assertIn("*Whole draft*", md)
         self.assertNotIn("Warning", md)
 
+    def test_locate_pdf_quote_across_table_columns(self):
+        pdf = self.tmp / "report.pdf"
+        pdf.write_bytes(b"%PDF")
+        page = ("Intro.\f GeCo-SRT          training on corrections; focuses on geometry\n"
+                "                   reaches 56.7% success versus 43.3% from scratch\n")
+        with mock.patch.object(ur, "doc_text", lambda p: page):
+            self.assertEqual(ur.locate("GeCo-SRT          reaches 56.7% success versus 43.3% from scratch", [pdf]),
+                             (pdf, 2, "page"))
+            self.assertIsNone(ur.locate("GeCo-SRT          reaches 99% success", [pdf]))
+
     def test_failures_and_warning(self):
         self.results([], reviewers=("claude",), voters=("claude", "gpt"),
                      failures=[{"stage": "review", "model": "gpt", "reason": "timed out after 900 s after one retry"}])
@@ -934,6 +944,31 @@ class ReviewPage(unittest.TestCase):
             err = ur.edit_block(doc, "First paragraph.", "Again.", 8)  # stale copy
             self.assertIn("changed", err)
             self.assertEqual(doc.read_text(), "# Memo\n\nFirst, rewritten.\n\nSecond paragraph.\n")
+
+    def test_upload_reviews_a_copy_and_returns_unified(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d)):
+            page = ur.UploadServer()
+            code, _, _ = page.handle("POST", "/api/upload/notes.docx", b"x")
+            self.assertEqual(code, 400)
+            with mock.patch.object(ur.subprocess, "Popen") as popen:
+                popen.return_value.poll.return_value = None
+                code, _, data = page.handle("POST", "/api/upload/my%20paper.pdf", b"%PDF-1.4")
+                uid = json.loads(data)["id"]
+                folder = Path(d) / "uploads" / uid
+                self.assertEqual((folder / "upload" / "my paper.pdf").read_bytes(), b"%PDF-1.4")
+                self.assertEqual(popen.call_args[0][0][-1], str(folder / "upload" / "my paper.pdf"))
+                self.assertTrue(json.loads(page.handle("GET", "/api/job/" + uid, b"")[2])["running"])
+                popen.return_value.poll.return_value = 0
+                st = json.loads(page.handle("GET", "/api/job/" + uid, b"")[2])
+                self.assertIn("did not finish", st["error"])
+            unified = Path(d) / "run" / "unified.md"
+            unified.parent.mkdir()
+            unified.write_text("# my paper.pdf\n\n### 1. A finding\n")
+            (folder / "stdout.log").write_text(f"{unified}\n")
+            st = json.loads(page.handle("GET", "/api/job/" + uid, b"")[2])
+            self.assertEqual(st["markdown"], unified.read_text())
+            self.assertEqual(st["name"], "my paper.pdf")
+            self.assertEqual(page.handle("GET", "/api/job/nope", b"")[0], 404)
 
 
 if __name__ == "__main__":
