@@ -2129,7 +2129,7 @@ def churn(g, text, history):
 
 # ---------------------------------------------------------------- review page
 # A local page for one reviewed file: the draft with each finding in place, and
-# Accept, Edit, Decline, and Update. It runs from `unified-review --serve FILE`.
+# Accept, Edit, Decline, and Re-review. It runs from `unified-review --serve FILE`.
 
 PAGE_DIR = Path(__file__).resolve().parent.parent / "page"
 FONT_DIR = Path(__file__).resolve().parent.parent / "slides" / "theme" / "fonts"
@@ -2814,12 +2814,12 @@ def edit_block(path, old, new, start=None):
 class PageServer:
     def __init__(self, path):
         self.path = Path(path).resolve()
-        self.job = None  # the running Update, if any
+        self.job = None  # the running Re-review, if any
         self.last = time.time()
 
     def open_file(self, target):
         """Reply for a file chosen to open: its review page if it was reviewed
-        before (Update there runs a new review), else a background review of it, in place."""
+        before (Re-review there runs a new review), else a background review of it, in place."""
         if target.suffix.lower() not in UPLOAD_TYPES:
             return 400, "application/json", json.dumps({"error": f"choose a {', '.join(UPLOAD_TYPES)} file"})
         reviewed = converted_path(target) if is_pdf(target) else target
@@ -3455,7 +3455,7 @@ def main():
     log(f"review done in {round(time.time() - t)} s." + (
         " Fact-check still running; factcheck.md opens when it finishes." if a.verify else ""))
     # One Markdown file opens its review page; a PDF, several files, or an
-    # Update from the page itself keep to unified.md.
+    # Re-review from the page itself keep to unified.md.
     page = (len(files) == 1 and not is_pdf(files[0]) and not os.environ.get("UNIFIED_REVIEW_NO_PAGE")
             and open_page(files[0]))
     if not page and not os.environ.get("UNIFIED_REVIEW_NO_PAGE"):

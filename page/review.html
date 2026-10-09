@@ -93,11 +93,11 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
   <div class="row">
     <h1 id="name" style="font-size:20px;margin:0">Unified review</h1>
     <span class="meta" id="meta" style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
-    <span style="position:relative"><button id="panelbtn" title="Models used for Update and Ask"></button><div id="panelmenu" class="menu" hidden></div></span>
+    <span style="position:relative"><button id="panelbtn" title="Models used for Re-review and Ask"></button><div id="panelmenu" class="menu" hidden></div></span>
     <span class="meta" id="tally"></span>
     <button id="mdbtn" title="Download this review as Markdown: every finding with its proposed change">Download</button>
     <button id="openbtn" title="Choose another file in Finder and review it in a new tab">Open…</button>
-    <button id="update" title="Run a new review of the current text">Update</button>
+    <button id="update" title="Run a new review of the current text">Re-review</button>
   </div>
   <div class="row meta" id="fail" style="margin-top:4px"></div>
   <div class="row" style="margin-top:8px">
@@ -357,7 +357,7 @@ function renderCard() {
   if (!f) {
     const done = S.findings.filter(x => x.status).length;
     el.innerHTML = S.findings.length && done === S.findings.length && filt.status === "Open"
-      ? `<div class="meta">All ${done} findings are done (${S.findings.filter(x => x.status === "accepted").length} accepted, ${S.findings.filter(x => x.status === "declined").length} declined). <a id="showdone" style="cursor:pointer">Show them</a> or click Update for a new review.</div>`
+      ? `<div class="meta">All ${done} findings are done (${S.findings.filter(x => x.status === "accepted").length} accepted, ${S.findings.filter(x => x.status === "declined").length} declined). <a id="showdone" style="cursor:pointer">Show them</a> or click Re-review for a new review.</div>`
       : '<div class="meta">No findings match these filters.</div>';
     const sd = document.getElementById("showdone"); if (sd) sd.onclick = () => { filt.status = "All"; render(); };
     return;
@@ -423,7 +423,7 @@ function thread(f) {
 }
 
 function commentThreads() {
-  return (S.comments || []).map((c, k) => `<div class="qa"><div class="q">You: ${esc(c.comment)}${c.focus ? " <span class='meta'>(focus for the next Update)</span>" : ""}</div>` +
+  return (S.comments || []).map((c, k) => `<div class="qa"><div class="q">You: ${esc(c.comment)}${c.focus ? " <span class='meta'>(focus for the next Re-review)</span>" : ""}</div>` +
     Object.entries(c.answers).map(([m, a]) => `<div class="ans"><div class="who">${esc(a.model || m)}${a.seconds ? ` · ${a.seconds} s` : ""}</div>` +
       (a.status === "pending" ? `<div class="meta">Thinking…</div>` : a.status === "failed" ? `<div class="err">No answer: ${esc(a.reason || "the model call failed")}</div>` :
         `<div>${inline(a.text)}</div>` + (a.changes || []).map((ch, i) => `<div class="diff" style="margin-top:6px">${revHtml(ch)}</div>` +
@@ -503,7 +503,7 @@ function renderSide() {
   const ov = S.findings.filter(f => shown(f) && !f.span);
   const openLogic = S.findings.filter(f => f.kind === "logic" && !f.status).length;
   const untyped = S.findings.length && S.findings.every(f => !f.kind);
-  const banner = untyped ? `<div class="overview banner" style="margin-bottom:12px">This review has no type labels, so it cannot show logic findings first. Click Update for a new review that has them.</div>`
+  const banner = untyped ? `<div class="overview banner" style="margin-bottom:12px">This review has no type labels, so it cannot show logic findings first. Click Re-review for a new review that has them.</div>`
     : logicAuto ? `<div class="overview banner" style="margin-bottom:12px">Logic first: ${openLogic} logic finding${openLogic === 1 ? "" : "s"} open. Other findings are hidden until these are done, since a passage whose argument fails may be rewritten anyway. <a id="showall">Show everything now</a></div>` : "";
   const box = document.getElementById("commentbox");
   const keep = box ? {text: box.querySelector("textarea").value, focus: box.querySelector("input").checked, active: document.activeElement === box.querySelector("textarea")} : null;
@@ -513,7 +513,7 @@ function renderSide() {
     `<div class="card" id="commentbox"><div class="row" style="margin-bottom:6px"><span class="title" style="font-size:15px">Ask about the whole draft</span><span class="spacer"></span><a id="closecomment" class="meta" style="cursor:pointer">Close</a></div><div class="meta" style="font-size:13px;margin-bottom:6px">Goes to ${S.chosen.map(c => c.label).join(", ")}</div>
       <textarea placeholder="A question, a comment, or a request: Is the hypothesis falsifiable as written? Tighten the wedge section." style="min-height:60px"></textarea>
       <div class="row" style="margin-top:6px"><button id="sendc">Ask all panelists</button>
-      <label class="meta"><input type="checkbox"> Use as focus for the next Update</label><span class="err" id="cerr"></span></div>
+      <label class="meta"><input type="checkbox"> Use as focus for the next Re-review</label><span class="err" id="cerr"></span></div>
       ${commentThreads()}</div>`);
   const oc = document.getElementById("opencomment");
   if (oc) oc.onclick = () => { commentOpen = true; renderSide(); document.querySelector("#commentbox textarea").focus(); };
@@ -549,7 +549,7 @@ function render() {
   const acc = S.findings.filter(f => f.status === "accepted").length, dec = S.findings.filter(f => f.status === "declined").length;
   document.getElementById("tally").textContent = `${acc} accepted · ${dec} declined · ${S.findings.length - acc - dec} open`;
   const job = S.job && S.job.running;
-  const up = document.getElementById("update"); up.textContent = job ? "Reviewing…" : "Update"; up.disabled = !!job;
+  const up = document.getElementById("update"); up.textContent = job ? "Reviewing…" : "Re-review"; up.disabled = !!job;
   const openLogic = S.findings.filter(f => f.kind === "logic" && !f.status).length;
   if (logicAuto === null) { logicAuto = openLogic > 0; if (logicAuto) filt.kind = "Logic"; }
   if (logicAuto && !openLogic) { logicAuto = false; filt.kind = "All"; }
@@ -605,7 +605,7 @@ function drawPanelMenu() {
         }).join(""));
       }).join(""));
     }).join("");
-  el.innerHTML = `<div class="mi meta" style="cursor:default">Used for Update and Ask</div>` +
+  el.innerHTML = `<div class="mi meta" style="cursor:default">Used for Re-review and Ask</div>` +
     S.chosen.map(c => `<div class="mi">${esc(c.label)}<span class="arrow rm" data-spec="${esc(c.spec)}" title="Remove">✕</span></div>`).join("") +
     `<div class="sep"></div>${add}<div class="mi" id="resetpanel">Reset to default</div>`;
   el.querySelectorAll(".tog").forEach(x => x.onclick = e => { e.stopPropagation(); const k = x.dataset.k;
