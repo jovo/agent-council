@@ -379,9 +379,10 @@ its face, and say why. A separate fact-check pass verifies claims. Otherwise
 follow the Review section of the house rules for each finding's content: state
 the point, then show its inline diff. Ignore the house rules' cap on findings
 and their ordering rule: report every finding worth making, in any order. This
-script places findings in draft order.
+script places findings in draft order. Report nothing you would not change: if
+the draft needs no change, reply with the single line NO FINDINGS.
 {extra}
-Output only findings, each in exactly this form, and nothing else:
+Otherwise output only findings, each in exactly this form, and nothing else:
 
 === FINDING
 severity: Critical | Substantive | Polish
@@ -483,7 +484,12 @@ def strip_end(body):
     return END_MARK.sub("", body or "").strip()
 
 
+NO_FINDINGS = re.compile(r"^\s*NO FINDINGS\s*$", re.M)
+
+
 def parse_findings(text):
+    """Findings in a reviewer's reply. An empty list when the reply says NO
+    FINDINGS, and also when it has no findings in the expected format."""
     out = []
     for block in re.split(r"^\s*=+\s*FINDING\s*=*\s*$", text, flags=re.M)[1:]:
         head, sep, body = block.partition("\n---")
@@ -668,22 +674,27 @@ def median_severity(sevs):
 
 
 def score_group(members, votes, voters, owner):
+    """Score a group of duplicate findings. A model's vote on a finding its own
+    review raised is shown but not counted, since models favor their own text."""
     for f in members:
-        cast = [votes[m][f["id"]] for m in voters if f["id"] in votes[m]]
+        cast = [votes[m][f["id"]] for m in voters if f["id"] in votes[m] and m != owner.get(f["id"][0])]
         f["score"] = sum(VOTE_SCORE[v["vote"]] for v in cast)
         f["n_votes"] = len(cast)
         f["frac"] = f["score"] / len(cast) if cast else 0
     rep = max(members, key=lambda f: (f["frac"], -SEVERITIES.index(f["severity"]), -f["pos"]))
     rep_votes = {m: votes[m][rep["id"]] for m in voters if rep["id"] in votes[m]}
-    n_dis = sum(v["vote"] == "disagree" for v in rep_votes.values())
-    n_agree = sum(v["vote"] == "agree" for v in rep_votes.values())
+    raiser = owner.get(rep["id"][0])
+    judged = {m: v for m, v in rep_votes.items() if m != raiser}
+    n_dis = sum(v["vote"] == "disagree" for v in judged.values())
+    n_agree = sum(v["vote"] == "agree" for v in judged.values())
     return {
         "rep": rep, "members": [f["id"] for f in members],
         "raised_by": sorted({owner[f["id"][0]] for f in members}, key=list(PANELISTS).index),
-        "votes": rep_votes, "score": rep["score"], "n_votes": rep["n_votes"], "frac": rep["frac"],
-        "severity": median_severity([v["severity"] for v in rep_votes.values()] or [rep["severity"]]),
-        "kind": majority_kind([v.get("kind", "") for v in rep_votes.values()], rep.get("kind", "")),
-        "rejected": bool(rep_votes) and n_dis > len(rep_votes) / 2,
+        "votes": rep_votes, "self_voter": raiser,
+        "score": rep["score"], "n_votes": rep["n_votes"], "frac": rep["frac"],
+        "severity": median_severity([v["severity"] for v in judged.values()] or [rep["severity"]]),
+        "kind": majority_kind([v.get("kind", "") for v in judged.values()], rep.get("kind", "")),
+        "rejected": bool(judged) and n_dis > len(judged) / 2,
         # Split vote: at least one model agreed and at least one disagreed.
         "contested": n_agree > 0 and n_dis > 0,
         "pos": min(f["pos"] for f in members),
@@ -899,19 +910,73 @@ def locate(quote, files):
     return None
 
 
+def osa_distance(a, b):
+    """Edit distance counting a swap of two neighboring letters as one edit."""
+    d = [[i + j if not i * j else 0 for j in range(len(b) + 1)] for i in range(len(a) + 1)]
+    for i in range(1, len(a) + 1):
+        for j in range(1, len(b) + 1):
+            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] != b[j - 1]))
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                d[i][j] = min(d[i][j], d[i - 2][j - 2] + 1)
+    return d[-1][-1]
+
+
+def typo_change(old, new):
+    """(before, after) when a change only fixes a typo: one misspelled or
+    miscapitalized word, or a doubled word. None for anything else, including
+    changes to numbers or punctuation."""
+    if not old or not new or old == new:
+        return None
+    a, b = old.split(), new.split()
+    ops = [o for o in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes() if o[0] != "equal"]
+    if len(ops) != 1:
+        return None
+    op, i1, i2, j1, j2 = ops[0]
+    if op == "replace" and i2 - i1 == 1 and j2 - j1 == 1:
+        x, y = a[i1], b[j1]
+        core = lambda w: w.strip(".,;:!?\"'()[]*_")
+        if re.search(r"\d", x + y) or core(x) == core(y):  # numbers, or punctuation only
+            return None
+        n, dist = max(len(core(x)), len(core(y))), osa_distance(x, y)
+        swap = dist == 1 and sorted(x) == sorted(y)
+        if (n >= 7 and dist <= 2) or (n >= 4 and dist == 1) or (n >= 3 and swap):
+            return x, y
+        return None
+    if op == "delete" and i2 - i1 == 1 and any(0 <= k < len(a) and a[k].lower() == a[i1].lower()
+                                               for k in (i1 - 1, i1 + 1)):
+        return f"{a[i1]} {a[i1]}", a[i1]
+    return None
+
+
+def is_typo(g):
+    """A finding in the draft whose diff only fixes a typo, and that no voter
+    other than the one that raised it disagreed with."""
+    if g.get("where") != "draft":
+        return False
+    if any(v["vote"] == "disagree" for m, v in g.get("votes", {}).items() if m != g.get("self_voter")):
+        return False
+    old, new = diff_parts(g["rep"]["body"])
+    return old is not None and typo_change(old, new) is not None
+
+
+ORDER = SEVERITIES + ["Typo"]  # typos come last, listed together
+
+
 def ordered_findings(r):
     """Findings as numbered in unified.md: [(n, severity, where label, group)].
-    Grouped by severity. Within each: whole-draft findings, then the draft
-    from top to bottom, then findings on the author's focus material."""
+    Grouped by severity, with typos last. Within each: whole-draft findings,
+    then the draft from top to bottom, then findings on the author's focus
+    material. Findings held back to stop churn are left out."""
     out = []
-    for g in (g for g in r["groups"] if not g["rejected"] and not g.get("declined")):
+    for g in (g for g in r["groups"] if not g["rejected"] and not g.get("declined") and not g.get("held")):
         if g["where"] == "overview":
             spot, label = (0, -g["frac"]), "Whole draft"
         elif g["where"] == "draft":
             spot, label = (1, g["pos"]), section_of(g["pos"], r["headings"])
         else:
             spot, label = (2, g.get("fpos", 0)), "Focus or supporting material"
-        out.append(((SEVERITIES.index(g["severity"]),) + spot, g["severity"], label, g))
+        sev = "Typo" if is_typo(g) else g["severity"]
+        out.append(((ORDER.index(sev),) + spot, sev, label, g))
     out.sort(key=lambda x: x[0])
     return [(n, sev, label, g) for n, (_, sev, label, g) in enumerate(out, 1)]
 
@@ -1027,8 +1092,12 @@ def render(outdir):
                            "Agreement, duplicate grouping, and rejection by vote mean little in this run.")
     if r["verify"]:
         parts.append("*Fact-check running. Results go to factcheck.md.*")
-    current = None
+    current, typos = None, []
     for n, sev, where_label, g in ordered_findings(r):
+        if sev == "Typo":
+            before, after = typo_change(*diff_parts(g["rep"]["body"]))
+            typos.append(f"- **{n}.** ~~{before}~~ → {after} ({where_label})")
+            continue
         if sev != current:
             current = sev
             parts.append(f"## {sev}")
@@ -1037,12 +1106,20 @@ def render(outdir):
         tag = (f" ({g['kind']})" if g.get("kind") else "") + (" (contested)" if g.get("contested") else "")
         parts.append(f"### {n}. {g['rep']['title']}{tag}\n\n"
                      f"{quoted(g, r['files'], where_label)}{body}\n\n{vote_line(g, voters)}")
+    if typos:
+        parts.append("## Typos\n\nOne-word fixes that no other voter disputed. Accept them together on "
+                     "the review page, or by number.\n\n" + "\n".join(typos))
     held = [g for g in r["groups"] if g.get("declined") and not g["rejected"]]
     if held:
         parts.append("## Previously declined\n\nHeld back because you declined the same point before. "
                      "To see one again, run `unified-review --unignore D<n>`.\n\n" + "\n".join(
                          f"- {g['rep']['title']} (matches {g['declined']['id']}: {g['declined']['title']})"
                          for g in held))
+    settled = [g for g in r["groups"] if g.get("held") and not g["rejected"] and not g.get("declined")]
+    if settled:
+        parts.append("## Held back to stop churn\n\nThese would change a passage that changed recently, "
+                     "or restore wording from an earlier version.\n\n" + "\n".join(
+                         f"- {g['rep']['title']} ({g['severity']}: {g['held']})" for g in settled))
     if rejected:
         parts.append("## Rejected by vote\n\n" + "\n".join(
             f"- **{g['rep']['title']}** [{names(g['raised_by'])}]" + (" (contested)" if g.get("contested") else "")
@@ -1159,19 +1236,23 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
             fs = parse_findings(r) if r else None
             if fs or r is None:
                 break
+            if NO_FINDINGS.search(r):  # a review that found nothing to change
+                fs = []
+                break
+            fs = None
             if attempt == 2:
                 fail("review", m, "reply had no findings in the expected format, after one retry")
         timings[f"review_{m}"] = round(time.time() - t, 1)
         return fs
-    found = {m: fs for m, fs in parallel(review, panel).items() if fs}
+    found = {m: fs for m, fs in parallel(review, panel).items() if fs is not None}
     if len(found) < len(panel) and STANDIN not in panel:
         log(f"  {STANDIN} stands in for {', '.join(m for m in panel if m not in found)}")
         panel = panel + [STANDIN]
         fs = review(STANDIN)
-        if fs:
+        if fs is not None:
             found[STANDIN] = fs
     if not found:
-        sys.exit("error: no reviewer produced findings")
+        sys.exit("error: no reviewer produced a review")
     ok = [m for m in panel if m in found]
 
     # Anonymize: random letter per reviewer, findings interleaved by draft position.
@@ -1202,7 +1283,11 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
                 fail("vote", m, "reply had no vote lines in the expected format, after one retry")
         timings[f"vote_{m}"] = round(time.time() - t, 1)
         return v or None
-    votes = {m: v for m, v in parallel(vote, ok).items() if v}
+    if not flat:  # every reviewer found nothing to change: nothing to vote on
+        log("  no findings to vote on")
+        votes = {m: {} for m in ok}
+    else:
+        votes = {m: v for m, v in parallel(vote, ok).items() if v}
     if len(votes) < len(ok) and STANDIN not in panel:
         log(f"  {STANDIN} stands in to vote for {', '.join(m for m in ok if m not in votes)}")
         panel = panel + [STANDIN]
@@ -1228,10 +1313,20 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
                         and norm(d["quote"]) == norm(g["rep"]["quote"])), None)
         if hit:
             g["declined"] = {"id": hit, "title": ids[hit]["title"]}
+    if len(files) == 1 and not is_pdf(files[0]):
+        text = files[0].read_text()
+        history = reviewed_history(files[0], text)
+        for g in groups:
+            if not g["rejected"] and not g.get("declined"):
+                why = churn(g, text, history)
+                if why:
+                    g["held"] = why
     n_rej = sum(g["rejected"] for g in groups)
     n_dec = sum(bool(g.get("declined")) for g in groups)
+    n_held = sum(bool(g.get("held")) for g in groups)
     log(f"3/3 render: {len(flat)} findings in {len(groups)} groups, {n_rej} rejected by vote"
-        + (f", {n_dec} held back as previously declined" if n_dec else ""))
+        + (f", {n_dec} held back as previously declined" if n_dec else "")
+        + (f", {n_held} held back to stop churn" if n_held else ""))
 
     (outdir / "results.json").write_text(json.dumps({
         "files": [str(p) for p in files], "versions": versions, "context": ctx_names,
@@ -1426,6 +1521,89 @@ def write_changes(p, start):
     return out
 
 
+# ---------------------------------------------------------------- churn
+# A passage that each round rewrites again, or a change that undoes an earlier
+# one, is held back. The history is the reviewed copy each earlier run kept.
+
+def reviewed_history(path, current):
+    """Earlier reviewed texts of a file, oldest first, one per version, not
+    counting the current text."""
+    seen, out = {fingerprint(current)}, []
+    for run in reversed(runs_for(Path(path).resolve())):
+        copy = run / "reviewed" / Path(path).name
+        if copy.exists():
+            t = copy.read_text()
+            if fingerprint(t) not in seen:
+                seen.add(fingerprint(t))
+                out.append(t)
+    return out
+
+
+def paragraphs(text):
+    return [p for p in re.split(r"\n\s*\n", text) if p.strip()]
+
+
+def times_changed(para, history):
+    """For each step back through the history, newest first, whether this
+    paragraph changed in that step. Stops where the paragraph did not exist."""
+    out, cur = [], norm(para)
+    for older in reversed(history):
+        olds = [norm(p) for p in paragraphs(older)]
+        if cur in olds:
+            out.append(False)
+            continue
+        best = max(olds, key=lambda p: difflib.SequenceMatcher(None, p, cur, autojunk=False).ratio(), default=None)
+        if best is None or difflib.SequenceMatcher(None, best, cur, autojunk=False).ratio() < 0.5:
+            break
+        out.append(True)
+        cur = best
+    return out
+
+
+def sentence_bounds(text, a, b):
+    """Start and end of the sentences that text[a:b] touches."""
+    starts = [m.end() for m in re.finditer(r"[.!?]\s+|\n", text[:a])]
+    m = re.compile(r"[.!?](?=\s|$)|\n").search(text, b)
+    return (starts[-1] if starts else 0), (m.end() if m else len(text))
+
+
+def restores_earlier(text, edits, history):
+    """True when applying the edits would bring back a sentence an earlier
+    version had, replacing one that version did not have: an undo."""
+    s, e = sentence_bounds(text, edits[0][0], edits[-1][1])
+    new = text
+    for a, b, n in sorted(edits, reverse=True):
+        new = new[:a] + n + new[b:]
+    before, after = norm(text[s:e]), norm(new[s:e + len(new) - len(text)])
+    if len(after) < 20 or before == after:
+        return False
+    return any(after in norm(t) and before not in norm(t) for t in history)
+
+
+def churn(g, text, history):
+    """Why a finding should be held back to stop churn, or None. A change that
+    restores earlier wording is held. On a passage that changed in the last
+    step, only Critical and Substantive findings show. On one that changed in
+    two of the last three steps, only Critical findings show. Typos always show."""
+    if g["where"] != "draft" or not history or is_typo(g):
+        return None
+    old, new = diff_parts(g["rep"]["body"])
+    edits = locate_edits(text, old, new, g["rep"]["quote"]) if old else None
+    if edits and restores_earlier(text, edits, history):
+        return "it would restore wording from an earlier version"
+    anchor = find_span(text, g["rep"]["quote"]) if g["rep"]["quote"] else None
+    anchor = anchor or (edits[0][:2] if edits else None)
+    if not anchor:
+        return None
+    para = next((p for p in paragraphs(text) if norm(text[anchor[0]:anchor[1]])[:60] in norm(p)), None)
+    steps = times_changed(para, history)[:3] if para else []
+    if sum(steps) >= 2 and g["severity"] != "Critical":
+        return f"the passage changed in {sum(steps)} of the last {len(steps)} versions"
+    if steps[:1] == [True] and g["severity"] == "Polish":
+        return "the passage changed since the last review"
+    return None
+
+
 
 # ---------------------------------------------------------------- review page
 # A local page for one reviewed file: the draft with each finding in place, and
@@ -1536,7 +1714,7 @@ def runs_for(path):
 
 
 def vote_tag(g):
-    vs = [v["vote"] for v in g["votes"].values()]
+    vs = [v["vote"] for m, v in g["votes"].items() if m != g.get("self_voter")]
     agree = sum(v == "agree" for v in vs)
     if vs and agree == len(vs):
         return "Unanimous"

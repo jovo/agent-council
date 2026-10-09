@@ -94,12 +94,29 @@ class GroupingAndScoring(unittest.TestCase):
         rejected = ur.score_group([finding("A1")], {"claude": {"A1": vote("agree")}, "gpt": {"A1": vote("disagree")},
                                                     "gemini": {"A1": vote("disagree")}}, voters, owner)
         self.assertTrue(rejected["rejected"])
-        self.assertTrue(rejected["contested"])
+        # Claude raised A1, so its agree does not count: no other model agreed.
+        self.assertFalse(rejected["contested"])
         kept = ur.score_group([finding("A1")], {"claude": {"A1": vote("agree")}, "gpt": {"A1": vote("partial")},
                                                 "gemini": {"A1": vote("agree")}}, voters, owner)
         self.assertFalse(kept["rejected"])
         self.assertFalse(kept["contested"])
-        self.assertEqual(kept["score"], 2.5)
+        self.assertEqual(kept["score"], 1.5)
+        split = ur.score_group([finding("A1")], {"claude": {"A1": vote("agree")}, "gpt": {"A1": vote("agree")},
+                                                 "gemini": {"A1": vote("disagree")}}, voters, owner)
+        self.assertTrue(split["contested"])
+
+    def test_score_group_does_not_count_the_raisers_vote(self):
+        owner = {"A": "claude", "B": "gpt"}
+        voters = ["claude", "gpt", "gemini"]
+        # Gemini did not vote. Counting Claude's vote on its own finding would make
+        # this 1 disagree of 2, not a majority. Without it, 1 of 1 rejects.
+        g = ur.score_group([finding("A1")], {"claude": {"A1": vote("agree", severity="Critical")},
+                                             "gpt": {"A1": vote("disagree", severity="Polish")}, "gemini": {}},
+                           voters, owner)
+        self.assertTrue(g["rejected"])
+        self.assertEqual(g["severity"], "Polish")
+        self.assertIn("claude", g["votes"])  # still shown
+        self.assertEqual(ur.vote_tag(g), "No majority")
 
     def test_score_group_takes_median_severity_and_raisers(self):
         owner = {"A": "claude", "B": "gpt"}
@@ -422,7 +439,7 @@ class PdfExtras(unittest.TestCase):
 class Pipeline(unittest.TestCase):
     """A whole review with fake model calls."""
 
-    def run_review(self, panel, fails=(), draft_text="The sky is green today. Grass grows slowly."):
+    def run_review(self, panel, fails=(), draft_text="The sky is green today. Grass grows slowly.", reply=None):
         prompts = {}
 
         def fake_call(m, prompt, out, workdir, web=False, stage=""):
@@ -430,6 +447,8 @@ class Pipeline(unittest.TestCase):
             if m in fails or (stage, m) in fails:
                 ur.fail(stage, m, "fake failure")
                 return None
+            if stage == "review" and reply is not None:
+                return reply
             if stage == "review":
                 return (f"=== FINDING\nseverity: Substantive\ntitle: Sky color by {m}\n"
                         "quote: The sky is green today.\n---\nThe sky is blue.")
@@ -469,6 +488,93 @@ class Pipeline(unittest.TestCase):
         prompts, r, _ = self.run_review(["claude", "gpt", "gemini"])
         self.assertNotIn("grok", r["panel"])
         self.assertNotIn("grok", prompts["review"])
+
+
+    def test_a_review_may_find_nothing(self):
+        prompts, r, md = self.run_review(["claude", "gpt", "gemini"], reply="NO FINDINGS")
+        self.assertEqual(sorted(r["reviewers_ok"]), ["claude", "gemini", "gpt"])
+        self.assertNotIn("grok", r["panel"])  # finding nothing is not a failure
+        self.assertNotIn("vote", prompts)
+        self.assertEqual(r["groups"], [])
+        self.assertNotIn("Failed", md)
+
+    def test_a_reply_in_the_wrong_format_still_fails(self):
+        with self.assertRaises(SystemExit):  # every reviewer, and the stand-in, fails after a retry
+            self.run_review(["claude", "gpt", "gemini"], reply="Looks fine to me.")
+
+
+def typo_group(old, new, votes=None, where="draft"):
+    body = f"Fix it.\n\n~~{old}~~ 🟢 **{new}**"
+    return {"rep": {"body": body, "quote": old, "title": "t"}, "where": where, "self_voter": "claude",
+            "votes": votes or {"claude": vote("agree"), "gpt": vote("agree"), "gemini": vote("partial")},
+            "severity": "Polish", "rejected": False, "frac": 1, "pos": 0}
+
+
+class Typos(unittest.TestCase):
+    def test_typo_change(self):
+        self.assertEqual(ur.typo_change("the recieve step", "the receive step"), ("recieve", "receive"))
+        self.assertEqual(ur.typo_change("teh cortex", "the cortex"), ("teh", "the"))
+        self.assertEqual(ur.typo_change("in the the cortex", "in the cortex"), ("the the", "the"))
+        self.assertEqual(ur.typo_change("english prose", "English prose"), ("english", "English"))
+        self.assertIsNone(ur.typo_change("not here", "now here"))  # short words: a real change
+        self.assertIsNone(ur.typo_change("in 2019 we", "in 2018 we"))  # numbers
+        self.assertIsNone(ur.typo_change("However we", "However, we"))  # punctuation
+        self.assertIsNone(ur.typo_change("a large effect", "a modest effect"))
+        self.assertIsNone(ur.typo_change("the recieve and teh", "the receive and the"))  # two words
+
+    def test_typo_needs_no_dissent(self):
+        self.assertTrue(ur.is_typo(typo_group("recieve", "receive")))
+        disputed = typo_group("recieve", "receive", {"claude": vote("agree"), "gpt": vote("disagree")})
+        self.assertFalse(ur.is_typo(disputed))
+        own = typo_group("recieve", "receive", {"claude": vote("disagree"), "gpt": vote("agree")})
+        self.assertTrue(ur.is_typo(own))  # only the raiser's own vote disagrees
+
+    def test_typos_are_numbered_last(self):
+        polish = typo_group("a large effect", "a modest effect")
+        typo = typo_group("recieve", "receive")
+        polish["pos"], typo["pos"] = 50, 10
+        r = {"groups": [typo, polish], "headings": []}
+        self.assertEqual([sev for _, sev, _, _ in ur.ordered_findings(r)], ["Polish", "Typo"])
+
+
+class Churn(unittest.TestCase):
+    def test_times_changed(self):
+        history = ["Alpha one.\n\nBeta one.", "Alpha two.\n\nBeta one.", "Alpha three.\n\nBeta one."]
+        self.assertEqual(ur.times_changed("Alpha four.", history), [True, True, True])
+        self.assertEqual(ur.times_changed("Beta one.", history), [False, False, False])
+        self.assertEqual(ur.times_changed("Something entirely unrelated here.", history), [])
+
+    def test_restores_earlier(self):
+        text = "The model predicts spikes well. Next sentence."
+        history = ["The model predicts spikes accurately. Next sentence."]
+        undo = ur.locate_edits(text, "spikes well", "spikes accurately")
+        other = ur.locate_edits(text, "spikes well", "spikes reliably")
+        self.assertTrue(ur.restores_earlier(text, undo, history))
+        self.assertFalse(ur.restores_earlier(text, other, history))
+
+    def test_churn_holds_polish_on_a_passage_that_just_changed(self):
+        text = "Alpha four words here.\n\nBeta stays the same."
+        history = ["Alpha three words here.\n\nBeta stays the same."]
+        g = typo_group("Alpha four words", "Alpha five words")
+        self.assertIn("changed since the last review", ur.churn(g, text, history))
+        g["severity"] = "Substantive"
+        self.assertIsNone(ur.churn(g, text, history))
+        steady = typo_group("Beta stays", "Beta remains")
+        self.assertIsNone(ur.churn(steady, text, history))
+
+    def test_churn_allows_only_critical_after_two_changes(self):
+        text = "Alpha four words here."
+        history = ["Alpha two words here.", "Alpha three words here."]
+        g = typo_group("Alpha four words", "Alpha five words")
+        g["severity"] = "Substantive"
+        self.assertIn("2 of the last 2", ur.churn(g, text, history))
+        g["severity"] = "Critical"
+        self.assertIsNone(ur.churn(g, text, history))
+
+    def test_typos_are_never_held(self):
+        text = "Alpha recieve words here."
+        history = ["Alpha two words here.", "Alpha three words here."]
+        self.assertIsNone(ur.churn(typo_group("recieve", "receive"), text, history))
 
 
 class Iterating(unittest.TestCase):

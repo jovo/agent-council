@@ -102,7 +102,7 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
 </header>
 <main>
   <div><div id="overview"></div><article id="draft"></article></div>
-  <aside id="side"><div id="askpanel"></div><div class="card" id="card"></div><div class="card list" id="list"></div>
+  <aside id="side"><div id="askpanel"></div><div class="card" id="card"></div><div class="card" id="typos" hidden></div><div class="card list" id="list"></div>
     <div class="meta" style="font-size:13px"><kbd>j</kbd> <kbd>k</kbd> next and previous · <kbd>a</kbd> accept · <kbd>e</kbd> edit · <kbd>d</kbd> decline · <kbd>q</kbd> ask · double-click a paragraph to edit it, <kbd>⌘</kbd><kbd>Enter</kbd> saves</div></aside>
 </main>
 <script>
@@ -122,7 +122,7 @@ function diffHtml(body) {
     .replace(/\*\*🟢\s*([\s\S]+?)\*\*|🟢\s*\*\*([\s\S]+?)\*\*/g, (m, a, b) => "<ins>" + (a || b) + "</ins>");
 }
 const kindOf = f => f.kind ? f.kind[0].toUpperCase() + f.kind.slice(1) : "";
-const shown = f => (filt.kind === "All" || kindOf(f) === filt.kind) && (filt.sev === "All" || f.severity === filt.sev) && (filt.tag === "All" || f.tag === filt.tag)
+const shown = f => f.severity !== "Typo" && (filt.kind === "All" || kindOf(f) === filt.kind) && (filt.sev === "All" || f.severity === filt.sev) && (filt.tag === "All" || f.tag === filt.tag)
   && (filt.status === "All" || (filt.status === "Open" ? !f.status : !!f.status));
 
 async function api(route, body) {
@@ -295,7 +295,23 @@ function commentThreads() {
       `</div>`).join("") + `</div>`).join("");
 }
 
+function renderTypos() {
+  // Typos are listed together, all checked, and accepted in one step instead of one by one in the draft.
+  const el = document.getElementById("typos"), ty = S.findings.filter(f => f.severity === "Typo" && !f.status && f.applicable);
+  el.hidden = !ty.length;
+  if (!ty.length) return;
+  el.innerHTML = `<div class="listhead"><span class="title">Typos</span> <span class="meta">${ty.length} one-word fixes no other voter disputed · uncheck any to keep</span></div>` +
+    ty.map(f => `<label style="display:flex;gap:8px;align-items:baseline;margin:4px 0;font-size:14px"><input type="checkbox" checked data-n="${f.n}"><span>${f.n}. ${diffHtml(f.body)} <span class="meta">${esc(f.section)}</span></span></label>`).join("") +
+    `<div class="row" style="margin-top:6px"><button id="acctypos">Accept checked</button><span class="err" id="typoerr"></span></div>`;
+  document.getElementById("acctypos").onclick = async () => {
+    const ns = [...el.querySelectorAll("input:checked")].map(x => +x.dataset.n);
+    for (const n of ns) { try { await api("/api/accept", {n}); } catch (e) { document.getElementById("typoerr").textContent = e.message; } }
+    load();
+  };
+}
+
 function renderSide() {
+  renderTypos();
   const el = document.getElementById("list"), fs = S.findings.filter(shown);
   el.innerHTML = `<div class="listhead"><span class="title">Findings</span> <span class="meta">${fs.length} shown by the filters above · click one to jump to it</span></div>` +
     fs.map(f => `<div data-n="${f.n}" class="${f.n === cur ? "cur" : ""}">${f.n}. <span class="sev ${f.severity}">${f.severity}</span>${f.kind ? " · " + kindOf(f) : ""} · ${esc(f.title)}${f.status ? " · " + f.status : ""}</div>`).join("");
