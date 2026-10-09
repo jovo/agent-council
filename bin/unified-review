@@ -2887,6 +2887,11 @@ class PageServer:
                 if not url:
                     st["error"] = "the review finished, but its page did not start"
             return 200, "application/json", json.dumps(st)
+        if method == "POST" and route.startswith("/api/transcribe/"):
+            try:
+                return 200, "application/json", json.dumps({"text": transcribe(body, Path(route).name)})
+            except (ValueError, OSError) as e:
+                return 502, "application/json", json.dumps({"error": f"Transcription failed: {e}"})
         if method == "POST" and route in ("/api/accept", "/api/decline", "/api/done"):
             run = self.run_folder()
             st = page_state(self.path, run)
@@ -2970,6 +2975,32 @@ class PageServer:
             return None
         code = self.job.poll()
         return {"running": code is None, "ok": code == 0 if code is not None else None}
+
+
+def transcribe(audio, ext):
+    """Speech to text for the page's mic buttons: ElevenLabs Scribe v2, with the
+    key from ELEVENLABS_API_KEY. Returns the transcript."""
+    import urllib.error
+    import urllib.request
+    key = os.environ.get("ELEVENLABS_API_KEY")
+    if not key:
+        raise ValueError("set ELEVENLABS_API_KEY and restart unified-review to use the mic")
+    if not audio:
+        raise ValueError("no audio was recorded")
+    boundary = "unified-review-" + hashlib.sha1(audio).hexdigest()
+    ext = re.sub(r"[^a-z0-9]", "", ext.lower()) or "webm"
+    form = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"model_id\"\r\n\r\nscribe_v2\r\n"
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"tag_audio_events\"\r\n\r\nfalse\r\n"
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.{ext}\"\r\n"
+            f"Content-Type: application/octet-stream\r\n\r\n").encode() + audio + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request("https://api.elevenlabs.io/v1/speech-to-text", data=form, method="POST", headers={
+        "xi-api-key": key, "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return json.loads(r.read()).get("text", "").strip()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")[:300]
+        raise ValueError(f"ElevenLabs returned {e.code}: {detail}") from None
 
 
 def static(method, route):
@@ -3175,7 +3206,7 @@ def serve(path):
             n = int(self.headers.get("Content-Length") or 0)
             try:
                 raw = self.rfile.read(n) if method == "POST" else b""
-                body = raw if self.path.startswith(("/api/upload/", "/api/locate/")) else json.loads(raw or b"{}")
+                body = raw if self.path.startswith(("/api/upload/", "/api/locate/", "/api/transcribe/")) else json.loads(raw or b"{}")
                 code, ctype, data = page.handle(method, self.path.split("?")[0], body)
             except Exception as e:  # report to the page, keep serving
                 code, ctype, data = 500, "application/json", json.dumps({"error": str(e)})

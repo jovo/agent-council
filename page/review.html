@@ -53,6 +53,7 @@ main{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);gap:2
 .card .title{font-size:18px;margin:4px 0 8px;line-height:1.3}
 .point{color:var(--muted);margin:0 0 12px}
 .diff{background:var(--bg);border-radius:8px;padding:10px 12px;margin:0 0 12px;white-space:pre-wrap}
+.mic.rec{color:var(--del)}
 del{color:var(--del);text-decoration:line-through}ins{color:var(--ins);text-decoration:none}.slot{background:var(--subs);color:var(--subs-ink);border-radius:3px;padding:0 3px}
 .votes{font-size:14px;color:var(--muted);margin-bottom:12px}.votes b{color:var(--ink);font-weight:700}
 .status{font-size:14px;margin-top:10px}.status.accepted{color:var(--ok-ink)}.status.declined{color:var(--muted)}
@@ -153,6 +154,58 @@ async function api(route, body) {
   const j = await r.json();
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
+}
+
+// Mic: record speech, transcribe it on the server (ElevenLabs Scribe v2), and insert it at the cursor.
+let rec = null, micBusy = false;
+const MIC_BOXES = "#edtext, #qtext, #commentbox textarea, textarea.blockedit";
+function micLabel(b) {
+  b.textContent = micBusy ? "Transcribing…" : rec ? "■ Stop" : "🎙 Speak";
+  b.classList.toggle("rec", !!rec); b.disabled = micBusy;
+}
+function addMics() {
+  document.querySelectorAll(MIC_BOXES).forEach(ta => {
+    const row = ta.nextElementSibling;
+    if (!row || row.querySelector(".mic")) return;
+    const b = document.createElement("button");
+    b.className = "mic"; b.title = "Speak instead of typing. Click again to stop.";
+    const bs = row.querySelectorAll("button");
+    bs.length ? bs[0].after(b) : row.prepend(b);
+    micLabel(b);
+    b.onclick = () => toggleMic(ta);
+  });
+}
+new MutationObserver(addMics).observe(document.body, {childList: true, subtree: true});
+async function toggleMic(ta) {
+  if (rec) { rec.stop(); return; }
+  // Find the box again when the text comes back, since a re-render may have replaced it.
+  const key = ta.id ? "#" + ta.id : ta.closest("#commentbox") ? "#commentbox textarea" : "textarea.blockedit";
+  const box = () => document.querySelector(key) || ta;
+  const fail = msg => { const t = box(), e = (t.nextElementSibling && t.nextElementSibling.querySelector(".err")) || document.getElementById("err"); if (e) e.textContent = msg; };
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({audio: true}); }
+  catch (e) { fail("The microphone is blocked: " + e.message); return; }
+  const chunks = [];
+  rec = new MediaRecorder(stream);
+  rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  rec.onstop = async () => {
+    stream.getTracks().forEach(t => t.stop());
+    rec = null; micBusy = true; document.querySelectorAll(".mic").forEach(micLabel);
+    try {
+      const type = (chunks[0] && chunks[0].type) || "audio/webm";
+      const ext = type.includes("mp4") ? "mp4" : type.includes("ogg") ? "ogg" : "webm";
+      const r = await fetch("/api/transcribe/" + ext, {method: "POST", body: new Blob(chunks, {type})});
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.statusText);
+      const t = box(), at = t.selectionStart ?? t.value.length, pre = t.value.slice(0, at);
+      const text = (pre && !/\s$/.test(pre) ? " " : "") + j.text;
+      t.value = pre + text + t.value.slice(t.selectionEnd ?? at);
+      t.focus(); t.selectionStart = t.selectionEnd = at + text.length;
+    } catch (e) { fail(e.message); }
+    micBusy = false; document.querySelectorAll(".mic").forEach(micLabel);
+  };
+  rec.start();
+  document.querySelectorAll(".mic").forEach(micLabel);
 }
 
 function chips(id, key, opts, allLabel) {

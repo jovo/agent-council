@@ -901,6 +901,11 @@ class ReviewPage(unittest.TestCase):
         self.assertIsNone(ur.diff_parts("Point.\n\nx ~~a~~ 🟢 **[name the barrier]**")[0])
         self.assertIsNone(ur.diff_parts("Point.\n\nRECAP 🟢 **{{citation: Author, year}}** works.")[0])
 
+    def test_transcribe_needs_a_key(self):
+        with mock.patch.dict(ur.os.environ, {}, clear=True):
+            with self.assertRaisesRegex(ValueError, "ELEVENLABS_API_KEY"):
+                ur.transcribe(b"audio", "webm")
+
     def test_find_span_and_fuzzy(self):
         text = "Records stay local.  The person\u2019s data stays home."
         s = ur.find_span(text, "The person's data stays home.")
