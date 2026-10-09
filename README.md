@@ -26,7 +26,7 @@ A file to review can be a PDF. If it is plain prose, the panel gets its text (fr
 2. **Vote.** Each panelist votes agree, partial, or disagree on every finding, sees reviewers only as A, B, C, and flags duplicates.
 A model call that times out, errors, or returns nothing gets one retry, except after a login error. A login error is recognized only from the CLI's own messages at the end of its log ("not logged in", "401 Unauthorized", and the like), since CLIs copy the prompt into that log and a draft may say "authorized" or "log in" anywhere. A reply in the wrong format also gets one retry.
 
-3. **Render.** The script groups duplicates (two voters calling them duplicates, or one voter plus overlapping quoted text), keeps the best-voted version of each, sets aside findings a majority rejects, and writes `unified.md`. The file opens where you ran the command: in Cursor or VS Code if you ran it there, in your default Markdown app from a terminal. Inside the Claude or Codex app, the script prints `OPEN IN APP: <path>` and the skill has the agent show the file. Set `UNIFIED_REVIEW_OPEN_APP` to always use one app.
+3. **Render.** The script groups duplicates (two voters calling them duplicates, or one voter plus overlapping quoted text), keeps the best-voted version of each, sets aside findings a majority rejects, and writes `unified.md`. For one Markdown file, the [review page](#the-review-page) opens in your browser. Otherwise `unified.md` opens where you ran the command: in Cursor or VS Code if you ran it there, in your default Markdown app from a terminal. Inside the Claude or Codex app, the script prints `OPEN IN APP: <path>` and the skill has the agent show the file. Set `UNIFIED_REVIEW_OPEN_APP` to always use one app.
 4. **Fact-check (optional, `--verify`).** A detached background process lists the draft's checkable claims, has each panelist check them with web search, keeps the most cautious verdict per claim, writes `factcheck.md`, and opens it. A claim that the last fact-check of the same file confirmed, with its sentence unchanged, keeps that verdict and is marked as carried over instead of being checked again. Everything else is checked from scratch.
 
 The default panel is one model per lab, chosen for speed: Claude Sonnet (via `claude`), GPT-5.6 Luna at low effort (via `codex`), and Gemini 3.8 Flash Low (via `cursor-agent`). If a panelist is unavailable or fails to review or vote, Grok 4.7 Low Fast (via `cursor-agent`) stands in, so three models still vote and ties can be broken. Grok cannot stand in for Gemini when `cursor-agent` itself is down, since both run through it. The fact-check uses stronger Claude and GPT models, since it runs in the background. Edit `PANELISTS` and `FACTCHECK_PANELISTS` at the top of `bin/unified-review` to change them.
@@ -44,6 +44,19 @@ Each run writes a folder under `~/.local/share/unified-review/runs/`, outside ev
 - `reviewed/`: an exact copy of the text reviewed. The title of `unified.md` gives its version number, and `results.json` its fingerprint and git commit.
 - `results.json`, `factcheck.json`: findings, votes, groups, verdicts, and per-stage timings.
 - `review-<model>.md`, `votes-<model>.txt`, `*.err`: raw panel output and logs.
+
+## The review page
+
+For one Markdown file, `unified-review` opens a local page in your browser (`http://127.0.0.1:<port>/`). It shows the current draft, set in New Computer Modern like the PDFs and decks, with each finding highlighted in place by severity, and a card for the selected finding: its point, its diff, and the votes.
+
+- **Accept** writes the change into the file and records it as applied. **Edit** lets you change the proposed text first. **Decline** records the decision with an optional note. These are the same records `--applied` and `--ignore` write.
+- Before writing, Accept re-reads the file and finds the passage the change targets, allowing for small misquotes by the reviewers. If you have since changed that passage, it refuses and leaves the file alone.
+- A finding with no exact diff, such as one about the whole draft or one whose new text has a blank to fill in, cannot be accepted on the page. Its card says why and copies a request you can paste to an agent.
+- Filters select findings by severity, by vote (unanimous, majority, contested), and by status. **Accept all shown** applies every open finding the filters select. Keys: `j` and `k` move between findings, `a` accepts, `e` edits, `d` declines.
+- Double-click any paragraph or heading to edit its Markdown in place. Save writes that paragraph back, unless it changed in the file since the page loaded.
+- **Update** runs a new review of the current text and loads it into the page.
+
+The page is served by a small server inside `unified-review`, using only Python's standard library. It listens only on your machine, serves one file, and exits after 8 hours without use. `unified-review --page FILE` reopens it.
 
 ## Reading unified.md
 

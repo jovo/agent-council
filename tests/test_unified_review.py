@@ -508,5 +508,69 @@ class AuthErrors(unittest.TestCase):
             self.assertIsNotNone(ur.AUTH_ERROR.search(msg), msg)
 
 
+class ReviewPage(unittest.TestCase):
+    def test_diff_parts_variants(self):
+        body = "Point.\n\nThe sky ~~is green~~ 🟢 **is blue** today."
+        self.assertEqual(ur.diff_parts(body), ("The sky is green today.", "The sky is blue today."))
+        body = "Point.\n\nOur own eyes.**~~ .~~**"
+        self.assertEqual(ur.diff_parts(body), ("Our own eyes. .", "Our own eyes."))
+        body = "Point.\n\n~~Old sentence here.~~ **🟢 New sentence here.**"
+        self.assertEqual(ur.diff_parts(body), ("Old sentence here.", "New sentence here."))
+        body = "Point.\n\n```\n| Pillar | A |\n| Pillar or wedge | A |\n```"
+        self.assertEqual(ur.diff_parts(body), ("| Pillar | A |", "| Pillar or wedge | A |"))
+        self.assertIsNone(ur.diff_parts("Point only.")[0])
+        self.assertIsNone(ur.diff_parts("Point.\n\nx ~~a~~ 🟢 **[name the barrier]**")[0])
+
+    def test_find_span_and_fuzzy(self):
+        text = "Records stay local.  The person\u2019s data stays home."
+        s = ur.find_span(text, "The person's data stays home.")
+        self.assertEqual(text[s[0]:s[1]], "The person\u2019s data stays home.")
+        text = "We test voluntary initiation, intelligible feedback, interruptibility, and influence."
+        q = ur.find_span(text, "intelligible feedback, interruptibility")
+        old = "We test voluntary initiation, intelligible feedback, and interruptibility, and influence."
+        self.assertIsNone(ur.find_span(text, old))
+        f = ur.fuzzy_span(text, old, q)
+        self.assertEqual(text[f[0]:f[1]], text)
+        self.assertIsNone(ur.fuzzy_span(text, "Something else entirely about robots and pay.", q))
+
+    def test_accept_decline_and_conflict(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+            doc = Path(d).resolve() / "memo.md"
+            doc.write_text("# Memo\n\nThe sky is green today. Grass grows.\n\nWater is dry.\n")
+            run = Path(d) / "runs" / "r1"
+            run.mkdir(parents=True)
+            g = lambda t, q, body: {"rep": {"title": t, "quote": q, "body": body}, "severity": "Substantive",
+                                    "where": "draft", "pos": 0, "rejected": False, "votes": {"claude": {"vote": "agree"}},
+                                    "raised_by": ["claude"], "frac": 1.0}
+            (run / "results.json").write_text(json.dumps({
+                "files": [str(doc)], "labels": {"claude": "Claude Sonnet"}, "reviewers_ok": ["claude"],
+                "headings": [], "groups": [
+                    g("Sky", "The sky is green today.", "Wrong.\n\nThe sky ~~is green~~ 🟢 **is blue** today."),
+                    g("Water", "Water is dry.", "Wrong.\n\nWater is ~~dry~~ 🟢 **wet**.")]}))
+            page = ur.PageServer(doc)
+            code, _, out = page.handle("GET", "/api/state", {})
+            st = json.loads(out)
+            self.assertEqual([f["applicable"] for f in st["findings"]], [True, True])
+            self.assertEqual(page.handle("POST", "/api/accept", {"n": 1})[0], 200)
+            self.assertIn("The sky is blue today.", doc.read_text())
+            doc.write_text(doc.read_text().replace("Water is dry.", "Water is arid."))
+            code, _, out = page.handle("POST", "/api/accept", {"n": 2})
+            self.assertEqual(code, 409)
+            self.assertIn("Water is arid.", doc.read_text())
+            self.assertEqual(page.handle("POST", "/api/decline", {"n": 2, "note": "fine"})[0], 200)
+            st = json.loads(page.handle("GET", "/api/state", {})[2])
+            self.assertEqual([f["status"] for f in st["findings"]], ["accepted", "declined"])
+
+    def test_edit_block(self):
+        with tempfile.TemporaryDirectory() as d:
+            doc = Path(d) / "memo.md"
+            doc.write_text("# Memo\n\nFirst paragraph.\n\nSecond paragraph.\n")
+            self.assertIsNone(ur.edit_block(doc, "First paragraph.", "First, rewritten.", 8))
+            self.assertIn("First, rewritten.", doc.read_text())
+            err = ur.edit_block(doc, "First paragraph.", "Again.", 8)  # stale copy
+            self.assertIn("changed", err)
+            self.assertEqual(doc.read_text(), "# Memo\n\nFirst, rewritten.\n\nSecond paragraph.\n")
+
+
 if __name__ == "__main__":
     unittest.main()

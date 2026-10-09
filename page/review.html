@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unified review</title>
+<style>
+@font-face{font-family:"NewCM Body";font-weight:400;font-style:normal;src:url(/fonts/NewCM10-Book.woff2) format("woff2")}
+@font-face{font-family:"NewCM Body";font-weight:400;font-style:italic;src:url(/fonts/NewCM10-BookItalic.woff2) format("woff2")}
+@font-face{font-family:"NewCM Body";font-weight:700;font-style:normal;src:url(/fonts/NewCM10-Bold.woff2) format("woff2")}
+@font-face{font-family:"NewCM Title";font-weight:700;src:url(/fonts/NewCMSans10-Bold.woff2) format("woff2")}
+:root{--bg:#fbfaf7;--panel:#fff;--ink:#1d1d1b;--muted:#6b6a65;--faint:#9a9890;--line:#e2e0d8;
+--crit:#fbe3e1;--crit-ink:#9b2c24;--subs:#faeccc;--subs-ink:#7a4e08;--pol:#e3eefa;--pol-ink:#1d4f86;
+--ok:#e2f1df;--ok-ink:#2f6b21;--del:#9a9890;--ins:#2f6b21;--focus:#1d1d1b}
+@media (prefers-color-scheme:dark){:root{--bg:#1b1b1a;--panel:#232322;--ink:#ecebe6;--muted:#a9a79f;--faint:#7c7a73;--line:#3a3936;
+--crit:#4a2422;--crit-ink:#f2b6b0;--subs:#45371a;--subs-ink:#f0cf86;--pol:#1f3349;--pol-ink:#a9cbf0;
+--ok:#233a1f;--ok-ink:#b4dea8;--del:#7c7a73;--ins:#9fd48f;--focus:#ecebe6}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "NewCM Body",Georgia,serif}
+h1,h2,h3,.title{font-family:"NewCM Title","Helvetica Neue",Arial,sans-serif;font-weight:700}
+button,textarea,input{font:inherit;color:inherit}
+button{background:transparent;border:1px solid var(--line);border-radius:6px;padding:3px 11px;cursor:pointer;font-size:14px}
+button:hover{border-color:var(--muted)}
+button.on{background:var(--panel);border-color:var(--ink)}
+header{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line);padding:10px 24px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.meta{color:var(--muted);font-size:14px}
+.spacer{flex:1}
+main{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);gap:24px;padding:16px 24px 80px;max-width:1400px;margin:0 auto}
+#draft{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:24px 32px}
+#draft p{margin:0 0 .9em;white-space:pre-wrap}
+#draft h1{font-size:26px;margin:.2em 0 .6em}#draft h2{font-size:21px;margin:1.2em 0 .5em}#draft h3,#draft h4{font-size:17px;margin:1em 0 .4em}
+#draft .fm{color:var(--faint);font-size:13px;white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;margin-bottom:1em}
+.hl{border-radius:3px;cursor:pointer;padding:1px 0}
+.hl.Critical{background:var(--crit)}.hl.Substantive{background:var(--subs)}.hl.Polish{background:var(--pol)}
+.hl.declined{background:transparent;border-bottom:1px dotted var(--faint)}
+.hl.sel{outline:2px solid var(--focus);outline-offset:1px}
+#side{position:sticky;top:110px;align-self:start;display:flex;flex-direction:column;gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+.sev{font-size:13px}.sev.Critical{color:var(--crit-ink)}.sev.Substantive{color:var(--subs-ink)}.sev.Polish{color:var(--pol-ink)}
+.card .title{font-size:18px;margin:4px 0 8px;line-height:1.3}
+.point{color:var(--muted);margin:0 0 12px}
+.diff{background:var(--bg);border-radius:8px;padding:10px 12px;margin:0 0 12px;white-space:pre-wrap}
+del{color:var(--del);text-decoration:line-through}ins{color:var(--ins);text-decoration:none}
+.votes{font-size:14px;color:var(--muted);margin-bottom:12px}.votes b{color:var(--ink);font-weight:700}
+.status{font-size:14px;margin-top:10px}.status.accepted{color:var(--ok-ink)}.status.declined{color:var(--muted)}
+.reason{font-size:14px;color:var(--subs-ink);margin:0 0 10px}
+textarea.blockedit{font:inherit;line-height:1.55;min-height:80px}
+textarea{width:100%;min-height:110px;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--bg)}
+input.note{width:100%;border:1px solid var(--line);border-radius:6px;padding:4px 8px;background:var(--bg);margin:8px 0}
+.overview{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:15px}
+.overview a{cursor:pointer;text-decoration:underline;text-decoration-color:var(--faint)}
+.list{font-size:14px}.list div{padding:3px 0;cursor:pointer;color:var(--muted)}.list div.cur{color:var(--ink)}
+.err{color:var(--crit-ink);font-size:14px;margin-top:8px}
+kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var(--line);border-radius:4px;padding:0 4px}
+@media (max-width:900px){main{grid-template-columns:1fr}#side{position:static}}
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1 id="name" style="font-size:20px;margin:0">Unified review</h1>
+    <span class="meta" id="meta"></span>
+    <span class="spacer"></span>
+    <span class="meta" id="tally"></span>
+    <button id="update" title="Run a new review of the current text">Update</button>
+  </div>
+  <div class="row meta" id="fail" style="margin-top:4px"></div>
+  <div class="row" style="margin-top:8px">
+    <span id="f-sev"></span><span style="width:10px"></span><span id="f-tag"></span><span style="width:10px"></span><span id="f-status"></span>
+    <span class="spacer"></span>
+    <button id="acceptall">Accept all shown</button>
+  </div>
+</header>
+<main>
+  <div><div id="overview"></div><article id="draft"></article></div>
+  <aside id="side"><div class="card" id="card"></div><div class="card list" id="list"></div>
+    <div class="meta" style="font-size:13px"><kbd>j</kbd> <kbd>k</kbd> next and previous · <kbd>a</kbd> accept · <kbd>e</kbd> edit · <kbd>d</kbd> decline · double-click a paragraph to edit it, <kbd>⌘</kbd><kbd>Enter</kbd> saves</div></aside>
+</main>
+<script>
+const SEV = ["Critical", "Substantive", "Polish"];
+const TAGS = ["Unanimous", "Majority", "Contested"];
+let S = null, cur = null, filt = {sev: "All", tag: "All", status: "Open"}, mode = null, lastRun = null;
+
+const esc = t => (t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const inline = t => esc(t).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
+function diffHtml(body) {
+  const paras = body.split("\n\n").slice(1).filter(p => p.includes("~~") || p.includes("🟢"));
+  return esc(paras.join("\n\n"))
+    .replace(/\*\*~~([\s\S]+?)~~\*\*|~~([\s\S]+?)~~/g, (m, a, b) => "<del>" + (a || b) + "</del>")
+    .replace(/\*\*🟢\s*([\s\S]+?)\*\*|🟢\s*\*\*([\s\S]+?)\*\*/g, (m, a, b) => "<ins>" + (a || b) + "</ins>");
+}
+const shown = f => (filt.sev === "All" || f.severity === filt.sev) && (filt.tag === "All" || f.tag === filt.tag)
+  && (filt.status === "All" || (filt.status === "Open" ? !f.status : !!f.status));
+
+async function api(route, body) {
+  const r = await fetch(route, body ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)} : {});
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+function chips(id, key, opts) {
+  const el = document.getElementById(id);
+  el.innerHTML = "";
+  for (const o of ["All", ...opts]) {
+    const b = document.createElement("button");
+    b.textContent = o; b.className = filt[key] === o ? "on" : "";
+    b.onclick = () => { filt[key] = o; render(); };
+    el.appendChild(b); el.append(" ");
+  }
+}
+
+function renderDraft() {
+  const text = S.text, marks = new Array(text.length).fill(null);
+  const order = f => SEV.indexOf(f.severity) * 1000 + f.n;
+  for (const f of S.findings) {
+    if (!f.span || f.status === "accepted" || !shown(f)) continue;
+    for (let i = f.span[0]; i < f.span[1]; i++) if (!marks[i] || order(f) < order(marks[i])) marks[i] = f;
+  }
+  let html = "", pos = 0;
+  const fm = text.match(/^---\n[\s\S]*?\n---\n/);
+  if (fm) { html += '<div class="fm">' + esc(fm[0].trim()) + "</div>"; pos = fm[0].length; }
+  const re = /\n\s*\n/g; let m, start = pos;
+  const blocks = [];
+  re.lastIndex = pos;
+  while ((m = re.exec(text))) { blocks.push([start, m.index]); start = m.index + m[0].length; }
+  blocks.push([start, text.length]);
+  for (let [a, b] of blocks) {
+    while (a < b && text[a] === "\n") a++;
+    if (a >= b) continue;
+    const raw = text.slice(a, b), h = raw.match(/^(#{1,4}) /);
+    let inner = "", i = a;
+    if (h) i += h[0].length;
+    while (i < b) {
+      const f = marks[i]; let j = i;
+      while (j < b && marks[j] === f) j++;
+      const seg = esc(text.slice(i, j));
+      inner += f ? `<span class="hl ${f.status === "declined" ? "declined" : f.severity}${cur === f.n ? " sel" : ""}" data-n="${f.n}">${seg}</span>` : seg;
+      i = j;
+    }
+    const at = ` data-a="${a}" data-b="${b}" title="Double-click to edit"`;
+    html += h ? `<h${h[1].length}${at}>${inner}</h${h[1].length}>` : `<p${at}>${inner}</p>`;
+  }
+  const d = document.getElementById("draft");
+  d.innerHTML = html;
+  d.querySelectorAll(".hl").forEach(e => e.onclick = () => select(+e.dataset.n, false));
+  d.querySelectorAll("[data-a]").forEach(e => e.ondblclick = () => editBlock(e));
+}
+
+function editBlock(el) {
+  const a = +el.dataset.a, b = +el.dataset.b, old = S.text.slice(a, b);
+  const box = document.createElement("div");
+  box.innerHTML = `<textarea class="blockedit">${esc(old)}</textarea>
+    <div class="row" style="margin:6px 0 14px"><button class="bsave">Save</button><button class="bcancel">Cancel</button>
+    <span class="meta">Edits the Markdown of this paragraph · Esc cancels</span><span class="err berr"></span></div>`;
+  el.replaceWith(box);
+  const ta = box.querySelector("textarea");
+  ta.style.height = Math.max(80, ta.scrollHeight + 4) + "px";
+  ta.focus();
+  const cancel = () => renderDraft();
+  const save = async () => {
+    try { await api("/api/edit", {old, new: ta.value, start: a}); await load(); }
+    catch (e) { box.querySelector(".berr").textContent = e.message; }
+  };
+  box.querySelector(".bsave").onclick = save;
+  box.querySelector(".bcancel").onclick = cancel;
+  ta.onkeydown = e => { if (e.key === "Escape") cancel(); if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) save(); };
+}
+
+function renderCard() {
+  const el = document.getElementById("card"), f = S.findings.find(x => x.n === cur);
+  if (!f) { el.innerHTML = '<div class="meta">No findings match these filters.</div>'; return; }
+  const votes = f.votes.map(v => (v.raised ? `<b>${v.model}</b>` : v.model) + " " + ({agree: "✓", partial: "~", disagree: "✗"}[v.vote] || "?")).join(" · ");
+  let actions = "";
+  if (!f.status) {
+    if (mode === "edit") actions = `<textarea id="edtext">${esc(f.new || "")}</textarea><div class="row" style="margin-top:8px"><button id="save">Apply edited text</button><button id="cancel">Cancel</button></div>`;
+    else if (mode === "decline") actions = `<input class="note" id="note" placeholder="Reason, optional"><div class="row"><button id="savedecl">Decline</button><button id="cancel">Cancel</button></div>`;
+    else actions = (f.applicable ? `<button id="acc">Accept</button> <button id="edt">Edit</button> ` : "") + `<button id="dec">Decline</button>` + (f.applicable ? "" : ` <button id="copy">Copy for agent</button>`);
+  }
+  el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity} · ${esc(f.section)} · ${f.tag}</div>
+    <div class="title">${esc(f.title)}</div><p class="point">${inline(f.point)}</p>
+    ${f.body.includes("~~") || f.body.includes("🟢") ? `<div class="diff">${diffHtml(f.body)}</div>` : ""}
+    <div class="votes">${votes}</div>
+    ${!f.status && !f.applicable ? `<p class="reason">Cannot apply here: ${esc(f.reason || "it is about the whole draft")}.</p>` : ""}
+    <div class="row">${actions}</div>
+    ${f.status ? `<div class="status ${f.status}">${f.status === "accepted" ? "Accepted and written to the file" : "Declined" + (f.note ? ": " + esc(f.note) : "")}</div>` : ""}
+    <div class="err" id="err"></div>`;
+  const on = (id, fn) => { const b = document.getElementById(id); if (b) b.onclick = fn; };
+  on("acc", () => act("/api/accept", {n: f.n}));
+  on("edt", () => { mode = "edit"; renderCard(); document.getElementById("edtext").focus(); });
+  on("dec", () => { mode = "decline"; renderCard(); document.getElementById("note").focus(); });
+  on("save", () => act("/api/accept", {n: f.n, text: document.getElementById("edtext").value}));
+  on("savedecl", () => act("/api/decline", {n: f.n, note: document.getElementById("note").value}));
+  on("cancel", () => { mode = null; renderCard(); });
+  on("copy", () => { navigator.clipboard.writeText(`Address finding ${f.n} from the unified review of ${S.file} (run ${S.run}).`); document.getElementById("err").textContent = "Copied. Paste it to an agent."; });
+}
+
+function renderSide() {
+  const el = document.getElementById("list"), fs = S.findings.filter(shown);
+  el.innerHTML = fs.map(f => `<div data-n="${f.n}" class="${f.n === cur ? "cur" : ""}">${f.n}. <span class="sev ${f.severity}">${f.severity[0]}</span> ${esc(f.title)}${f.status ? " · " + f.status : ""}</div>`).join("") || "";
+  el.querySelectorAll("div").forEach(e => e.onclick = () => select(+e.dataset.n, true));
+  const ov = S.findings.filter(f => shown(f) && !f.span);
+  document.getElementById("overview").innerHTML = ov.length ? `<div class="overview" style="margin-bottom:12px">Whole draft: ${ov.map(f => `<a data-n="${f.n}">${f.n}. ${esc(f.title)}</a>`).join(" · ")}</div>` : "";
+  document.querySelectorAll("#overview a").forEach(e => e.onclick = () => select(+e.dataset.n, false));
+}
+
+function render() {
+  document.getElementById("name").textContent = S.name;
+  document.getElementById("meta").textContent = `version ${S.version ?? "?"} · ${S.started} · ${S.panel.join(", ")}`;
+  document.getElementById("fail").textContent = S.failures.length ? "Failed: " + S.failures.map(x => `${x.model} ${x.stage} (${x.reason})`).join("; ") : "";
+  const acc = S.findings.filter(f => f.status === "accepted").length, dec = S.findings.filter(f => f.status === "declined").length;
+  document.getElementById("tally").textContent = `${acc} accepted · ${dec} declined · ${S.findings.length - acc - dec} open`;
+  const job = S.job && S.job.running;
+  const up = document.getElementById("update"); up.textContent = job ? "Reviewing…" : "Update"; up.disabled = !!job;
+  chips("f-sev", "sev", SEV); chips("f-tag", "tag", TAGS);
+  const st = document.getElementById("f-status"); st.innerHTML = "";
+  for (const o of ["Open", "Done", "All"]) { const b = document.createElement("button"); b.textContent = o; b.className = filt.status === o ? "on" : ""; b.onclick = () => { filt.status = o; render(); }; st.appendChild(b); st.append(" "); }
+  const vis = S.findings.filter(shown);
+  if (!vis.some(f => f.n === cur)) cur = vis.length ? vis[0].n : null;
+  renderDraft(); renderCard(); renderSide();
+}
+
+function select(n, scroll) {
+  cur = n; mode = null; render();
+  const e = document.querySelector(`.hl[data-n="${n}"]`);
+  if (scroll && e) e.scrollIntoView({block: "center", behavior: "smooth"});
+}
+
+async function load() {
+  S = await api("/api/state");
+  if (lastRun && S.run !== lastRun) cur = null;
+  lastRun = S.run;
+  render();
+  if (S.job && S.job.running) setTimeout(load, 3000);
+}
+
+async function act(route, body) {
+  try {
+    await api(route, body);
+    const next = S.findings.filter(shown).find(f => f.n > body.n && !f.status);
+    mode = null; await load();
+    if (next) select(next.n, true);
+  } catch (e) { document.getElementById("err").textContent = e.message; }
+}
+
+document.getElementById("update").onclick = async () => { await api("/api/update", {}); load(); };
+document.getElementById("acceptall").onclick = async () => {
+  const todo = S.findings.filter(f => shown(f) && !f.status && f.applicable);
+  if (!todo.length) return;
+  if (!confirm(`Apply ${todo.length} change${todo.length > 1 ? "s" : ""} to ${S.name}?`)) return;
+  for (const f of todo) { try { await api("/api/accept", {n: f.n}); } catch (e) {} }
+  load();
+};
+document.addEventListener("keydown", e => {
+  if (["TEXTAREA", "INPUT"].includes(e.target.tagName) || !S) return;
+  const vis = S.findings.filter(shown), i = vis.findIndex(f => f.n === cur);
+  const f = vis[i];
+  if (e.key === "j" && i < vis.length - 1) select(vis[i + 1].n, true);
+  else if (e.key === "k" && i > 0) select(vis[i - 1].n, true);
+  else if (e.key === "a" && f && !f.status && f.applicable) act("/api/accept", {n: f.n});
+  else if (e.key === "e" && f && !f.status && f.applicable) { mode = "edit"; renderCard(); }
+  else if (e.key === "d" && f && !f.status) { mode = "decline"; renderCard(); }
+});
+load().catch(e => { document.getElementById("draft").textContent = "Could not load the review: " + e.message; });
+</script>
+</body>
+</html>

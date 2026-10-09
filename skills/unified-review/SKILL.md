@@ -67,7 +67,16 @@ findings. There is no cap on findings.
   cause: the CLI is not logged in (`claude` then `/login`, `cursor-agent login`,
   `codex login`).
 
-The script opens `unified.md` where it was run from: in Cursor or VS Code it
+For one Markdown file, the script opens the review page in the user's browser
+and prints `Review page: http://127.0.0.1:<port>/`. The page shows the draft
+with each finding in place, and the user accepts, edits, or declines findings
+there, which writes to the file and records the decision. Give the user that
+link and say how many findings there are by severity. Do not paste
+`unified.md` unless asked. Run `unified-review --page FILE` to reopen the page.
+Decisions made on the page are in the same log as `--applied` and `--ignore`,
+so `--item` and later reviews see them.
+
+For a PDF or several files, the script opens `unified.md` where it was run from: in Cursor or VS Code it
 opens in the editor, and from a terminal in the default Markdown app. Inside an
 agent app that cannot open a file from outside (the Claude app, the Codex app),
 it prints `OPEN IN APP: <path>` instead. When you see that line, show the file
@@ -77,7 +86,7 @@ first). Where you cannot show files, give the user the path as a link. The
 fact-check prints the same line for `factcheck.md` when it finishes, in its
 log (`factcheck.log` in the run folder).
 
-When it finishes, show the user the contents of `unified.md` verbatim. Do not
+When no review page opened, show the user the contents of `unified.md` verbatim. Do not
 re-summarize or re-order the findings. With `--verify`, say whether the
 fact-check has finished or is still running.
 
