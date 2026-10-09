@@ -1557,14 +1557,97 @@ BIB = Path(os.environ.get("BIB_DIR") or Path.home() / "github" / "bib") / "refer
 _BIB_KEYS = {}
 
 
-def bib_keys(text, path):
-    """Citation keys in the draft's bibliography: a local file named in its front
-    matter, else the shared bibliography. None when neither can be read."""
+def bib_file(text, path):
+    """The draft's bibliography: a local file named in its front matter, else the
+    shared bibliography."""
     m = re.match(r"---\n(.*?)\n---", text, re.S)
     named = re.search(r"^bibliography:\s*(\S+)", m.group(1), re.M) if m else None
-    bib = BIB
     if named and "://" not in named.group(1):
-        bib = (Path(path).parent / named.group(1)).expanduser()
+        return (Path(path).parent / named.group(1)).expanduser()
+    return BIB
+
+
+CITATION = re.compile(r"\[([^\[\]]*@[^\[\]]*)\]")
+CITE_KEY = re.compile(r"(?<![\w@])-?@([A-Za-z0-9_][\w:.#$%&+?<>~/-]*[\w])")
+
+
+def cited_keys(text):
+    """Citation keys in [@Key] and [@A; @B] citations, in order of first use."""
+    body = re.sub(r"\A---\n.*?\n---\n", "", text, flags=re.S)
+    keys = []
+    for m in CITATION.finditer(body):
+        for k in CITE_KEY.findall(m.group(1)):
+            if k not in keys:
+                keys.append(k)
+    return keys
+
+
+def bib_field(entry, name):
+    """One field of a BibTeX entry, braces and LaTeX quoting removed."""
+    m = re.search(r"^\s*" + name + r"\s*=\s*\{(.*)\},?\s*$", entry, re.M | re.I)
+    return re.sub(r"[{}]", "", m.group(1)).replace("\\&", "&").replace("--", "–").strip() if m else ""
+
+
+PLOS_CSL = Path(__file__).resolve().parent.parent / "typeset" / "plos.csl"
+_REFS_HTML = {}
+
+
+def pandoc_refs(entries, keys):
+    """{key: html} for the cited entries, formatted by pandoc in the book's PLOS
+    style with DOIs linked. Empty when pandoc is not installed or fails."""
+    if not shutil.which("pandoc") or not PLOS_CSL.exists():
+        return {}
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "refs.bib").write_text("\n\n".join(entries))
+        md = "\n\n".join(f"[@{k}]" for k in keys)
+        r = subprocess.run(["pandoc", "--citeproc", "-t", "html", "--bibliography", str(Path(d) / "refs.bib"),
+                            "--csl", str(PLOS_CSL), "-M", "link-bibliography=true"],
+                           input=md, capture_output=True, text=True, timeout=60)
+    return {m.group(1): m.group(2).strip() for m in re.finditer(
+        r'<div id="ref-([^"]+)" class="csl-entry"[^>]*>\s*<div class="csl-left-margin">.*?</div>'
+        r'<div\s+class="csl-right-inline">(.*?)</div>\s*</div>', r.stdout, re.S)}
+
+
+def cited_refs(text, path):
+    """The draft's references in order of first citation: [{key, html, text, url}].
+    html is the book's PLOS format from pandoc; text and url are a plain
+    fallback. An entry not in the bibliography has empty text and html."""
+    keys = cited_keys(text)
+    try:
+        src = bib_file(text, path).read_text(errors="replace") if keys else ""
+    except OSError:
+        src = ""
+    found = {k: m for k in keys if (m := re.search(r"^@\w+\{" + re.escape(k) + r",(.*?)^\}", src, re.M | re.S))}
+    cache_key = tuple((k, found[k].group(0) if k in found else "") for k in keys)
+    if cache_key not in _REFS_HTML:
+        _REFS_HTML[cache_key] = pandoc_refs([m.group(0) for m in found.values()], list(found)) if found else {}
+    html = _REFS_HTML[cache_key]
+    out = []
+    for k in keys:
+        m = found.get(k)
+        if not m:
+            out.append({"key": k, "html": "", "text": "", "url": ""})
+            continue
+        e = m.group(1)
+        names = [a.strip() for a in bib_field(e, "author").split(" and ") if a.strip()]
+        def short(a):
+            last, _, first = a.partition(",")
+            return (last.strip() + " " + "".join(w[0] for w in re.split(r"[\s.-]+", first) if w)).strip()
+        who = ", ".join(map(short, names[:3])) + (" et al." if len(names) > 3 else "")
+        year = (bib_field(e, "date") or bib_field(e, "year"))[:4]
+        venue = bib_field(e, "journaltitle") or bib_field(e, "journal") or bib_field(e, "booktitle") or bib_field(e, "publisher")
+        doi = bib_field(e, "doi")
+        parts = [p for p in [f"{who} ({year})." if who else (f"({year})." if year else ""),
+                             bib_field(e, "title").rstrip(".") + ".", venue + "." if venue else ""] if p and p != "."]
+        out.append({"key": k, "html": html.get(k, ""), "text": " ".join(parts),
+                    "url": f"https://doi.org/{doi}" if doi else bib_field(e, "url")})
+    return out
+
+
+def bib_keys(text, path):
+    """Citation keys in the draft's bibliography. None when it cannot be read."""
+    bib = bib_file(text, path)
     try:
         stamp = bib.stat().st_mtime
     except OSError:
@@ -2028,7 +2111,7 @@ def page_state(path, run):
             "chosen": [{"spec": m, "label": label(panelist(m))} for m in page_panel(path)],
             "comments": comment_state(run, text), "checks": checks(text, path),
             "started": r.get("started", ""), "panel": [labels.get(m, m) for m in r["reviewers_ok"]],
-            "failures": r.get("failures", []), "text": text, "findings": out}
+            "failures": r.get("failures", []), "text": text, "findings": out, "refs": cited_refs(text, path)}
 
 
 ELLIPSIS = re.compile(r"\s*(?:\.\.\.|…)\s*")

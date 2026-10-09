@@ -869,6 +869,21 @@ class ReviewPage(unittest.TestCase):
         self.assertIn("not in the draft as reviewed",
                       why(fixed, "and it leaves", "and the data leaves"))
 
+    def test_cited_refs_in_order_of_first_citation(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "refs.bib").write_text(
+                "@article{Cohen80,\n  title = {{Preserved learning}},\n  author = {Cohen, Neal J and Squire, Larry R},\n"
+                "  date = {1980},\n  journaltitle = {{Science}},\n  doi = {10.1126/science.7414331}\n}\n")
+            text = "---\nbibliography: refs.bib\n---\nA [@Missing; @Cohen80]. B [@Cohen80].\n"
+            refs = ur.cited_refs(text, Path(d) / "m.md")
+        self.assertEqual([r["key"] for r in refs], ["Missing", "Cohen80"])
+        self.assertEqual(refs[0]["text"], "")
+        self.assertEqual(refs[1]["text"], "Cohen NJ, Squire LR (1980). Preserved learning. Science.")
+        self.assertEqual(refs[1]["url"], "https://doi.org/10.1126/science.7414331")
+        if shutil.which("pandoc"):  # the book's PLOS format, DOI linked
+            self.assertIn('Science</span>. 1980. doi:<a href="https://doi.org/10.1126/science.7414331">',
+                          " ".join(refs[1]["html"].split()))
+
     def test_settled_findings_show_as_done(self):
         """A finding is done when another review's decision covered its sentence (as
         when you accept while Update runs), or when its change is already in the file."""

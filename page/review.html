@@ -9,10 +9,10 @@
 @font-face{font-family:"NewCM Body";font-weight:400;font-style:italic;src:url(/fonts/NewCM10-BookItalic.woff2) format("woff2")}
 @font-face{font-family:"NewCM Body";font-weight:700;font-style:normal;src:url(/fonts/NewCM10-Bold.woff2) format("woff2")}
 @font-face{font-family:"NewCM Title";font-weight:700;src:url(/fonts/NewCMSans10-Bold.woff2) format("woff2")}
-:root{--bg:#fbfaf7;--panel:#fff;--ink:#1d1d1b;--muted:#6b6a65;--faint:#9a9890;--line:#e2e0d8;
+:root{--xref:#1A4D8F;--cite:#2E7D5B;--bg:#fbfaf7;--panel:#fff;--ink:#1d1d1b;--muted:#6b6a65;--faint:#9a9890;--line:#e2e0d8;
 --crit:#fbe3e1;--crit-ink:#9b2c24;--subs:#faeccc;--subs-ink:#7a4e08;--pol:#e3eefa;--pol-ink:#1d4f86;
 --ok:#e2f1df;--ok-ink:#2f6b21;--del:#9a9890;--ins:#2f6b21;--focus:#1d1d1b}
-@media (prefers-color-scheme:dark){:root{--bg:#1b1b1a;--panel:#232322;--ink:#ecebe6;--muted:#a9a79f;--faint:#7c7a73;--line:#3a3936;
+@media (prefers-color-scheme:dark){:root{--xref:#8AB4F0;--cite:#7CC9A4;--bg:#1b1b1a;--panel:#232322;--ink:#ecebe6;--muted:#a9a79f;--faint:#7c7a73;--line:#3a3936;
 --crit:#4a2422;--crit-ink:#f2b6b0;--subs:#45371a;--subs-ink:#f0cf86;--pol:#1f3349;--pol-ink:#a9cbf0;
 --ok:#233a1f;--ok-ink:#b4dea8;--del:#7c7a73;--ins:#9fd48f;--focus:#ecebe6}}
 *{box-sizing:border-box}
@@ -34,10 +34,14 @@ main{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);gap:2
 #draft{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:24px 32px}
 #draft p{margin:0 0 .9em;white-space:pre-wrap}
 #draft h1{font-size:26px;margin:.2em 0 .6em}#draft h2{font-size:21px;margin:1.2em 0 .5em}#draft h3,#draft h4{font-size:17px;margin:1em 0 .4em}
+#draft a{color:var(--xref);text-decoration:none}#draft a:hover{text-decoration:underline}#draft a.cite{color:var(--cite)}#draft a.xref{cursor:help}
+#draft ul{list-style-type:disc;padding-left:1.6em;margin:0 0 .9em}#draft ul ul{list-style-type:circle;margin:0}#draft ul ul ul{list-style-type:square}#draft ul ul ul ul{list-style-type:"·  "}
+#draft ol{padding-left:1.8em;margin:0 0 .9em}#draft ol ol{list-style-type:lower-alpha;margin:0}#draft ol ol ol{list-style-type:lower-roman}#draft li{margin:0 0 .3em;white-space:pre-wrap}#draft .block>p{margin:0 0 .5em}
+#draft ol.refs{font-size:15px;padding-left:1.8em;list-style-type:decimal}#draft ol.refs li{margin:0 0 .4em;white-space:normal}
 #draft table{border-collapse:collapse;width:100%;font-size:14px;margin:0 0 1em}
 #draft th,#draft td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
 #draft th{font-family:"NewCM Title","Helvetica Neue",Arial,sans-serif}
-#draft a{color:inherit;text-decoration:underline;text-decoration-color:var(--faint)}
+
 #draft .fm{color:var(--faint);font-size:13px;white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;margin-bottom:1em}
 .hl{border-radius:3px;cursor:pointer;padding:1px 0}
 .hl.Critical{background:var(--crit)}.hl.Substantive{background:var(--subs)}.hl.Polish{background:var(--pol)}
@@ -139,26 +143,96 @@ function chips(id, key, opts, allLabel) {
   el.onchange = () => { filt[key] = el.value; if (key === "kind") logicAuto = false; render(); };
 }
 
+// Pandoc's identifier for a heading, so [text](#section-name) links resolve.
+const slug = t => t.toLowerCase().replace(/<[^>]+>|\[@[^\]]*\]|[*_`]/g, "").replace(/[^\p{L}\p{N}_\-.\s]/gu, "")
+  .trim().replace(/\s+/g, "-").replace(/^[^\p{L}]+/u, "") || "section";
+
 function renderDraft() {
-  const text = S.text, marks = new Array(text.length).fill(null);
+  const text = S.text, N = text.length, marks = new Array(N).fill(null);
   const order = f => SEV.indexOf(f.severity) * 1000 + f.n;
   for (const f of S.findings) {
     if (!f.span || f.status === "accepted" || !shown(f)) continue;
     const [ms, me] = f.mark || f.span;  // the words the change touches, else the whole passage
     for (let i = ms; i < me; i++) if (!marks[i] || order(f) < order(marks[i])) marks[i] = f;
   }
+  // Markdown is rendered character by character, so highlights and double-click
+  // edits keep working on the raw text. Markup characters are hidden, and a few
+  // spans (citations, anchors) are drawn as a token in place of their source.
+  const hide = new Array(N).fill(false), tok = new Array(N).fill(""), bold = new Array(N).fill(false),
+    ital = new Array(N).fill(false), link = new Array(N).fill(null);
+  const taken = (a, b) => { for (let k = a; k < b; k++) if (hide[k]) return true; return false; };
+  const hideRange = (a, b) => { for (let k = a; k < b; k++) hide[k] = true; };
+  const refNum = Object.fromEntries((S.refs || []).map((r, k) => [r.key, k + 1]));
+  const citeLink = n => `<a class="cite" href="#ref-${n}">${n}</a>`;
+  for (const m of text.matchAll(/\[([^\[\]]*@[^\[\]]*)\]/g)) {  // [@Key] and [@A; @B]
+    const nums = [...new Set([...m[1].matchAll(/(?<![\w@])-?@([A-Za-z0-9_][\w:.#$%&+?<>~/-]*\w)/g)].map(k => refNum[k[1]]).filter(Boolean))].sort((a, b) => a - b);
+    if (!nums.length) continue;
+    const runs = [];  // three or more consecutive numbers collapse to a range, as citeproc does
+    for (let k = 0; k < nums.length; ) {
+      let e = k; while (e + 1 < nums.length && nums[e + 1] === nums[e] + 1) e++;
+      if (e - k >= 2) runs.push(citeLink(nums[k]) + "–" + citeLink(nums[e]));
+      else for (let q = k; q <= e; q++) runs.push(citeLink(nums[q]));
+      k = e + 1;
+    }
+    tok[m.index] = "[" + runs.join(", ") + "]";
+    hideRange(m.index, m.index + m[0].length);
+  }
+  for (const m of text.matchAll(/<a\s+(?:id|name)="([^"]+)"\s*>\s*<\/a>/g)) {  // anchors for cross-references
+    tok[m.index] = `<span id="${esc(m[1])}"></span>`;
+    hideRange(m.index, m.index + m[0].length);
+  }
+  for (const m of text.matchAll(/(?<!!)\[([^\[\]]+)\]\(([^()\s]+)\)/g)) {  // [text](target)
+    if (taken(m.index, m.index + m[0].length)) continue;
+    const a = m.index, b = a + m[0].length, t1 = a + 1 + m[1].length;
+    hide[a] = true; hideRange(t1, b);
+    for (let k = a + 1; k < t1; k++) link[k] = m[2];
+  }
+  for (const m of text.matchAll(/\*\*(?=\S)([^\n]*?\S)\*\*/g)) {
+    const a = m.index, b = a + m[0].length;
+    if (taken(a, a + 2) || taken(b - 2, b)) continue;
+    hideRange(a, a + 2); hideRange(b - 2, b);
+    for (let k = a + 2; k < b - 2; k++) bold[k] = true;
+  }
+  for (const m of text.matchAll(/(?<![*\w\\])([*_])(?![\s*_])([^\n]*?[^\s\\])\1(?![*\w])/g)) {
+    const a = m.index, b = a + m[0].length;
+    if (hide[a] || hide[b - 1] || (m[1] === "_" && /\w_\w/.test(m[0]))) continue;
+    hide[a] = hide[b - 1] = true;
+    for (let k = a + 1; k < b - 1; k++) ital[k] = true;
+  }
+  const href = t => t.startsWith("#") || /^https?:\/\//.test(t) ? t : null;
   const segs = (i, b) => {
     let out = "";
     while (i < b) {
-      const f = marks[i]; let j = i;
-      while (j < b && marks[j] === f) j++;
-      const seg = esc(text.slice(i, j));
+      const f = marks[i], bo = bold[i], it = ital[i], ln = link[i]; let j = i;
+      while (j < b && marks[j] === f && bold[j] === bo && ital[j] === it && link[j] === ln) j++;
+      let seg = "";
+      for (let k = i; k < j; k++) seg += tok[k] + (hide[k] ? "" : esc(text[k]));
+      if (it && seg) seg = `<i>${seg}</i>`;
+      if (bo && seg) seg = `<b>${seg}</b>`;
+      if (ln && seg) {
+        const h = href(ln);
+        seg = h ? `<a href="${esc(h)}"${h.startsWith("#") ? "" : ' target="_blank" rel="noopener"'}>${seg}</a>`
+                : `<a class="xref" title="${esc(ln)}">${seg}</a>`;  // a link to another file
+      }
       out += f ? `<span class="hl ${f.status === "declined" ? "declined" : f.severity}${cur === f.n ? " sel" : ""}" data-n="${f.n}">${seg}</span>` : seg;
       i = j;
     }
     return out;
   };
-  const links = h => h.replace(/\[([^\]<@][^\]<]*)\]\((https?:\/\/[^)<\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // A list, nested by indent, with Google Docs markers: disc, circle, square.
+  const listHtml = (items) => {
+    let html = "", stack = [];
+    for (const it of items) {
+      while (stack.length && stack[stack.length - 1].indent > it.indent) html += `</li></${stack.pop().tag}>`;
+      const top = stack[stack.length - 1];
+      if (!top || it.indent > top.indent) { stack.push({indent: it.indent, tag: it.tag}); html += `<${it.tag}>`; }
+      else html += "</li>";
+      html += `<li>${segs(it.a, it.b)}`;
+    }
+    while (stack.length) html += `</li></${stack.pop().tag}>`;
+    return html;
+  };
+  const ITEM = /^(\s*)([-*+]|\d+[.)])\s+/;
   let html = "", pos = 0;
   const fm = text.match(/^---\n[\s\S]*?\n---\n/);
   if (fm) pos = fm[0].length;  // front matter stays in the file, not on the page
@@ -166,12 +240,16 @@ function renderDraft() {
   const blocks = [];
   re.lastIndex = pos;
   while ((m = re.exec(text))) { blocks.push([start, m.index]); start = m.index + m[0].length; }
-  blocks.push([start, text.length]);
+  blocks.push([start, N]);
+  const at = (a, b) => ` data-a="${a}" data-b="${b}" title="Double-click to edit"`;
   for (let [a, b] of blocks) {
     while (a < b && text[a] === "\n") a++;
     if (a >= b) continue;
     const raw = text.slice(a, b), h = raw.match(/^(#{1,4}) /);
-    if (/^(\s*<[^>]+>\s*)+$/.test(raw)) continue;  // HTML-only lines, such as a table anchor
+    if (/^(\s*<[^>]+>\s*)+$/.test(raw)) {  // HTML-only lines, such as a table anchor: keep the anchors
+      html += [...raw.matchAll(/\b(?:id|name)="([^"]+)"/g)].map(x => `<span id="${esc(x[1])}"></span>`).join("");
+      continue;
+    }
     if (/^\s*\|/.test(raw) && raw.split("\n").filter(l => l.trim()).every(l => /^\s*\|/.test(l))) {
       let rows = "", off = a, first = true;
       for (const line of raw.split("\n")) {
@@ -182,23 +260,35 @@ function renderDraft() {
         for (let c = 0; c + 1 < bars.length; c++) cells += (first ? "<th>" : "<td>") + segs(bars[c] + 1, bars[c + 1]) + (first ? "</th>" : "</td>");
         rows += `<tr>${cells}</tr>`; first = false;
       }
-      html += `<table data-a="${a}" data-b="${b}" title="Double-click to edit">${links(rows)}</table>`;
+      html += `<table${at(a, b)}>${rows}</table>`;
       continue;
     }
-    let inner = "", i = a;
-    if (h) i += h[0].length;
-    while (i < b) {
-      const f = marks[i]; let j = i;
-      while (j < b && marks[j] === f) j++;
-      const seg = esc(text.slice(i, j));
-      inner += f ? `<span class="hl ${f.status === "declined" ? "declined" : f.severity}${cur === f.n ? " sel" : ""}" data-n="${f.n}">${seg}</span>` : seg;
-      i = j;
+    if (h) {
+      const id = slug(text.slice(a + h[0].length, b));
+      html += `<h${h[1].length} id="${esc(id)}"${at(a, b)}>${segs(a + h[0].length, b)}</h${h[1].length}>`;
+      continue;
     }
-    const at = ` data-a="${a}" data-b="${b}" title="Double-click to edit"`;
-    html += h ? `<h${h[1].length}${at}>${links(inner)}</h${h[1].length}>` : `<p${at}>${links(inner)}</p>`;
+    // Lines before the first list item are a paragraph; list items follow, one per line.
+    let out = "", para = null, items = [], off = a;
+    for (const line of raw.split("\n")) {
+      const ls = off; off += line.length + 1;
+      const li = line.match(ITEM);
+      if (li) items.push({indent: li[1].replace(/\t/g, "    ").length, tag: /\d/.test(li[2]) ? "ol" : "ul", a: ls + li[0].length, b: ls + line.length});
+      else if (items.length) items[items.length - 1].b = ls + line.length;  // a wrapped item continues
+      else para = para ? [para[0], ls + line.length] : [ls, ls + line.length];
+    }
+    if (para) out += `<p>${segs(para[0], para[1])}</p>`;
+    if (items.length) out += listHtml(items);
+    html += items.length ? `<div class="block"${at(a, b)}>${out}</div>` : `<p${at(a, b)}>${segs(a, b)}</p>`;
+  }
+  if (S.refs && S.refs.length) {  // the book's format: PLOS style from pandoc, DOI linked
+    html += `<h2 id="references">References</h2><ol class="refs">` + S.refs.map((r, k) => `<li id="ref-${k + 1}">` +
+      (r.html || (r.text ? esc(r.text) + (r.url ? ` <a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a>` : "")
+                         : `${esc(r.key)} <span class="meta">(not in the bibliography)</span>`)) + `</li>`).join("") + `</ol>`;
   }
   const d = document.getElementById("draft");
   d.innerHTML = html;
+  d.querySelectorAll("ol.refs a[href^='http']").forEach(e => { e.target = "_blank"; e.rel = "noopener"; });
   d.querySelectorAll(".hl").forEach(e => e.onclick = () => select(+e.dataset.n, false));
   d.querySelectorAll("[data-a]").forEach(e => e.ondblclick = () => editBlock(e));
 }
