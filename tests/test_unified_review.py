@@ -1147,8 +1147,10 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual(block, "# draft.md\n\n## Summary\n\nThe draft's main weaknesses are:\n\n- **Logic**: Steps fail. (1, 3)\n"
                              "- **Style** (4)\n- **Other** (2, 5)\n\n")
 
-    def test_review_prompt_asks_for_double_brace_slots(self):
-        self.assertIn("{{one-line definition of F1}}", ur.review_prompt("draft", "", "rules"))
+    def test_review_prompt_proposes_text_and_keeps_slots_for_citations(self):
+        prompt = ur.review_prompt("draft", "", "rules")
+        self.assertIn("propose that content as the 🟢 text", prompt)
+        self.assertIn("{{citation: Author, year}}", prompt)
 
     def test_dropped_file_is_found_by_name_and_bytes(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \

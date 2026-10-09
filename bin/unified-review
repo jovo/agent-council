@@ -497,10 +497,14 @@ its face, and say why. A separate fact-check pass verifies claims. Otherwise
 follow the Review section of the house rules for each finding's content: state
 the point, then show its inline diff. The 🟢 text is literal text for the
 draft, never an instruction to the author ("add citations ..."). When the fix
-needs content you lack, such as a citation, number, or definition, write a slot
-in double braces where it goes, shaped like the final text, such as
-"RECAP {{{{citation: Author, year}}}}" or "{{{{one-line definition of F1}}}}", and say
-in the point what fills it. Use double braces only for slots. To add new text, such as a sentence or a
+needs new content, such as a definition, a metric and baseline, or a missing
+step, propose that content as the 🟢 text, worded as it would read in the draft,
+so the author can accept, edit, or decline it. Never describe what to add in
+place of proposing it. Only a citation or a measured value cannot be proposed
+truthfully: write it as a slot in double braces where it goes, shaped like the
+final text, such as "RECAP {{{{citation: Author, year}}}}" or
+"{{{{measured success rate}}}}", and say in the point what fills it. Use double
+braces only for slots. To add new text, such as a sentence or a
 table row, include the text just before it, unchanged, so the change can be
 placed. Ignore the house rules' cap on findings
 and their ordering rule: report every finding worth making, in any order. This
