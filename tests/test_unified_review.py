@@ -890,6 +890,13 @@ class ReviewPage(unittest.TestCase):
         self.assertEqual(ur.diff_parts(body), ("Old sentence here.", "New sentence here."))
         body = "Point.\n\n```\n| Pillar | A |\n| Pillar or wedge | A |\n```"
         self.assertEqual(ur.diff_parts(body), ("| Pillar | A |", "| Pillar or wedge | A |"))
+        body = "Point.\n\nA separate source, ~~much ~~like glasses."
+        self.assertEqual(ur.diff_parts(body), ("A separate source, much like glasses.", "A separate source, like glasses."))
+        body = "Point.\n\nKeep this ~~extra~~\nnext line."
+        self.assertEqual(ur.diff_parts(body), ("Keep this extra\nnext line.", "Keep this\nnext line."))
+        body = "Point.\n\n```markdown\nThe sky ~~is green~~ 🟢 **is blue** today.\n```"
+        self.assertEqual(ur.diff_parts(body), ("The sky is green today.", "The sky is blue today."))
+        self.assertIsNone(ur.diff_parts("Point.\n\n```markdown\nOur plan:~~ ~~\n```")[0])
         self.assertIsNone(ur.diff_parts("Point only.")[0])
         self.assertIsNone(ur.diff_parts("Point.\n\nx ~~a~~ 🟢 **[name the barrier]**")[0])
         self.assertIsNone(ur.diff_parts("Point.\n\nRECAP 🟢 **{{citation: Author, year}}** works.")[0])

@@ -2142,8 +2142,11 @@ def diff_parts(body):
     """(old, new) text of a finding's diff, or (None, reason) when it has none
     that can be applied as written."""
     body = strip_end(body)
-    paras = body.split("\n\n")[1:]
     fence = re.search(r"```[a-z]*\n(.*?)\n```", body, re.S)
+    if fence and ("~~" in fence.group(1) or "🟢" in fence.group(1)):
+        # A strike or 🟢 diff wrapped in a code block: read it as plain text.
+        body, fence = body.replace(fence.group(0), fence.group(1)), None
+    paras = body.split("\n\n")[1:]
     if fence:
         lines = [l for l in fence.group(1).splitlines() if l.strip()]
         if len(lines) == 2:
@@ -2153,15 +2156,19 @@ def diff_parts(body):
     if not text:
         return None, "the finding has no diff"
     # Removing a marked span takes the space before it too, so "a ~~b~~ 🟢 **c**."
-    # gives old "a b." and new "a c.", not "a b ." and "a  c.".
+    # gives old "a b." and new "a c.", not "a b ." and "a  c.". A struck span that
+    # held the only space, as in "source, ~~much ~~like", leaves a space behind.
     old = re.sub(r"[ \t]*(?:" + ADD.pattern + ")", "", DEL.sub(lambda m: m.group(1) or m.group(2), text))
-    new = re.sub(r"[ \t]*(?:" + DEL.pattern + ")", "", ADD.sub(lambda m: m.group(1) or m.group(2), text))
+    new = re.sub(r"[ \t]*(?:" + DEL.pattern + ")", lambda m: " " if m[0][0] in " \t" else "",
+                 ADD.sub(lambda m: m.group(1) or m.group(2), text))
     # Removing a marked span leaves doubled spaces. In the new text it can also
     # leave a space before punctuation. The old text keeps its punctuation as is.
     spaces = lambda t: re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t]{2,}", " ", t)).strip()
-    old, new = spaces(old), spaces(re.sub(r" +([.,;:])", r"\1", new))
+    old, new = spaces(old), spaces(re.sub(r"[ \t]+\n", "\n", re.sub(r" +([.,;:])", r"\1", new)))
     if "{{" in new or re.search(r"\[[^\]@]*(name|key|insert|N\b|M\b)[^\]]*\]", new, re.I):
         return None, "the new text has a placeholder to fill in"
+    if old == new:
+        return None, "the change only removes spaces at the end of a line, which Markdown does not show"
     return old, new
 
 
