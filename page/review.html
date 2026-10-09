@@ -80,6 +80,7 @@ input.note{width:100%;border:1px solid var(--line);border-radius:6px;padding:4px
 .qa{border-top:1px solid var(--line);margin-top:14px;padding-top:10px}
 .q{font-size:14px;margin-bottom:8px}.ans{margin:0 0 12px;font-size:15px}.who{font-size:13px;color:var(--muted)}
 .ans button{margin-top:6px}
+.slidebreak{font-size:13px;color:var(--faint);border-top:1px solid var(--line);margin:28px 0 10px;padding-top:6px}
 kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var(--line);border-radius:4px;padding:0 4px}
 @media (max-width:900px){main{grid-template-columns:1fr}#side{position:static}}
 </style>
@@ -118,12 +119,22 @@ let commentOpen = false;
 let logicAuto = null;  // the logic-first view, set when a review loads and lifted when no logic finding is open
 
 const esc = t => (t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const inline = t => esc(t).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
+const marks = h => h
+  .replace(/\*\*~~([\s\S]+?)~~\*\*|~~([\s\S]+?)~~/g, (m, a, b) => "<del>" + (a || b) + "</del>")
+  .replace(/\*\*🟢\s*([\s\S]+?)\*\*|🟢\s*\*\*([\s\S]+?)\*\*/g, (m, a, b) => "<ins>" + (a || b) + "</ins>");
+const inline = t => marks(esc(t)).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
+// A finding's body is its point, a blank line, then its diff. When a reviewer
+// runs the diff into the point's paragraph, split it where that sentence starts.
+function splitBody(body) {
+  const paras = body.split("\n\n"), first = paras[0], at = first.search(/(\*\*)?(~~|🟢)/);
+  if (at < 0) return paras;
+  const ends = [...first.slice(0, at).matchAll(/[.?!:]\s+/g)], cut = ends.length ? ends[ends.length - 1].index + ends[ends.length - 1][0].length : 0;
+  return [first.slice(0, cut).trim(), first.slice(cut), ...paras.slice(1)];
+}
+const pointOf = f => splitBody(f.body)[0] || "";
 function diffHtml(body) {
-  const paras = body.split("\n\n").slice(1).filter(p => p.includes("~~") || p.includes("🟢"));
-  return esc(paras.join("\n\n"))
-    .replace(/\*\*~~([\s\S]+?)~~\*\*|~~([\s\S]+?)~~/g, (m, a, b) => "<del>" + (a || b) + "</del>")
-    .replace(/\*\*🟢\s*([\s\S]+?)\*\*|🟢\s*\*\*([\s\S]+?)\*\*/g, (m, a, b) => "<ins>" + (a || b) + "</ins>");
+  const paras = splitBody(body).slice(1).filter(p => p.includes("~~") || p.includes("🟢"));
+  return marks(esc(paras.join("\n\n")));
 }
 const kindOf = f => f.kind ? f.kind[0].toUpperCase() + f.kind.slice(1) : "";
 const shown = f => f.severity !== "Typo" && (filt.kind === "All" || kindOf(f) === filt.kind) && (filt.sev === "All" || f.severity === filt.sev) && (filt.tag === "All" || f.tag === filt.tag)
@@ -179,6 +190,10 @@ function renderDraft() {
   }
   for (const m of text.matchAll(/<a\s+(?:id|name)="([^"]+)"\s*>\s*<\/a>/g)) {  // anchors for cross-references
     tok[m.index] = `<span id="${esc(m[1])}"></span>`;
+    hideRange(m.index, m.index + m[0].length);
+  }
+  for (const m of text.matchAll(/<br\s*\/?>/gi)) {  // a line break, as in a table cell
+    tok[m.index] = "<br>";
     hideRange(m.index, m.index + m[0].length);
   }
   for (const m of text.matchAll(/(?<!!)\[([^\[\]]+)\]\(([^()\s]+)\)/g)) {  // [text](target)
@@ -241,8 +256,24 @@ function renderDraft() {
   re.lastIndex = pos;
   while ((m = re.exec(text))) { blocks.push([start, m.index]); start = m.index + m[0].length; }
   blocks.push([start, N]);
+  if (S.deck) {  // a slide deck: a line of --- starts a new slide, as in Marp
+    const split = [];
+    for (const [a, b] of blocks) {
+      let s = a, off = a;
+      for (const line of text.slice(a, b).split("\n")) {
+        const ls = off; off += line.length + 1;
+        if (line.trim() === "---") { if (ls > s) split.push([s, ls]); split.push(null); s = off; }
+      }
+      if (s < b) split.push([s, b]);
+    }
+    blocks.length = 0; blocks.push(...split);
+    html += `<div class="slidebreak">Slide 1</div>`;
+  }
+  let slideNo = 1;
   const at = (a, b) => ` data-a="${a}" data-b="${b}" title="Double-click to edit"`;
-  for (let [a, b] of blocks) {
+  for (const blk of blocks) {
+    if (!blk) { html += `<div class="slidebreak">Slide ${++slideNo}</div>`; continue; }
+    let [a, b] = blk;
     while (a < b && text[a] === "\n") a++;
     if (a >= b) continue;
     const raw = text.slice(a, b), h = raw.match(/^(#{1,4}) /);
@@ -325,8 +356,8 @@ function renderCard() {
     else actions = (f.applicable ? `<button id="acc">Accept</button> <button id="edt">Edit</button> ` : "") + `<button id="dec">Decline</button> <button id="ask">Ask</button>` + (f.applicable ? "" : ` <button id="copy">Copy for agent</button>`);
   }
   el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity}${f.kind ? " · " + kindOf(f) : ""} · ${esc(f.section)} · ${f.tag}</div>
-    <div class="title">${esc(f.title)}</div><p class="point">${inline(f.point)}</p>
-    ${f.body.includes("~~") || f.body.includes("🟢") ? `<div class="diff">${diffHtml(f.body)}</div>` : ""}
+    <div class="title">${esc(f.title)}</div><p class="point">${inline(pointOf(f))}</p>
+    ${f.body.includes("~~") || f.body.includes("🟢") ? `<div class="diff">${f.old != null && f.new != null ? revHtml(f) : diffHtml(f.body)}</div>` : ""}
     <div class="votes">${votes}</div>
     ${!f.status && !f.applicable ? `<p class="reason">Cannot apply here: ${esc(f.reason || "it is about the whole draft")}.</p>` : ""}
     ${!f.status && f.changed ? `<div class="row" style="margin-bottom:6px"><button id="done">Mark done</button></div>` : ""}

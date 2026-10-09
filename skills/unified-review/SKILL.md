@@ -24,11 +24,16 @@ comments, a call for proposals, a source paper, a style guide), pass it with
 Text files and PDFs work. An attachment that exists only in the chat must be
 saved to a temporary file first. Images are not supported yet: say so.
 
-The file to review can itself be a PDF. The script decides how the panel reads
-it: plain prose goes as text, and a PDF with figures, tables, or equations is
-opened by each panelist directly. Findings on a PDF cite pages, not lines. You
-cannot edit a PDF, so apply accepted changes to its source document, or tell
-the user where they go.
+The file to review can itself be a PDF. The script first converts it to
+Markdown with Claude, keeping its links, under
+`~/.local/share/unified-review/runs/converted/`, and reviews the Markdown, so
+findings cite lines and the review page opens. It checks the conversion word by
+word against the PDF's text and prints what is missing or added. Report that
+line to the user. The same PDF reuses its Markdown, keeping the user's edits.
+The Markdown is a copy: edits there do not reach the PDF's source document.
+`--no-md` reviews the PDF as is: plain prose goes as text, and a PDF with
+figures, tables, or equations is opened by each panelist directly. Findings
+then cite pages, and accepted changes go in the source document.
 
 The default panel is `claude,gpt,gemini` (Claude Sonnet, GPT-5.6 Luna at low
 effort, Gemini 3.8 Flash Low via cursor-agent). If one fails, Grok 4.7 Low Fast stands in automatically, so three models
@@ -82,7 +87,7 @@ link and say how many findings there are by severity. Do not paste
 Decisions made on the page are in the same log as `--applied` and `--ignore`,
 so `--item` and later reviews see them.
 
-For a PDF or several files, the script opens `unified.md` where it was run from: in Cursor or VS Code it
+For a PDF reviewed with `--no-md` or several files, the script opens `unified.md` where it was run from: in Cursor or VS Code it
 opens in the editor, and from a terminal in the default Markdown app. Inside an
 agent app that cannot open a file from outside (the Claude app, the Codex app),
 it prints `OPEN IN APP: <path>` instead. When you see that line, show the file

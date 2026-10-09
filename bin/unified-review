@@ -25,6 +25,7 @@ Usage: unified-review [-o OUTDIR] [-n FOCUS] [-p PANEL] [--context FILE]... [--v
              claude, gpt, gemini, grok, or harness:model[@effort], such as
              claude:opus or codex:gpt-5.6-luna@medium or cursor:kimi-k3-low
   --verify   also fact-check the draft's claims with web search (background)
+  --no-md    review a PDF as is, instead of converting it to Markdown first
 
 Foreground:
   1. review   each panelist reviews the draft, no web search
@@ -277,9 +278,11 @@ def slides(text):
         body = text[a:b]
         t = re.search(r"^#\s+(.+)$", body, re.M)
         title = re.sub(r"<[^>]+>|\*+", "", t.group(1)).strip() if t else ""
-        if not title:
-            first = next((l.strip() for l in body.splitlines() if l.strip() and not l.strip().startswith("<!--")), "")
-            title = re.sub(r"<[^>]+>|[#*>!\[\]]", "", first).strip()[:40] or "untitled"
+        if not title:  # no # title: the first line of text, else a link's text, else "image"
+            plain = re.sub(r"!\[[^\]]*\]\([^)]*\)|<!--.*?-->|<[^>]+>", "", body, flags=re.S)
+            first = next((l.strip() for l in plain.splitlines() if l.strip()), "")
+            link = re.search(r"\[([^\]]+)\]\(", first)
+            title = (link.group(1) if link else re.sub(r"[#*>]", "", first)).strip()[:40] or "image"
         cls = re.search(r"<!--\s*_?class:\s*([\w -]+?)\s*-->", body)
         out.append((a, b, n, title, cls.group(1) if cls else ""))
     return out
@@ -301,8 +304,10 @@ def slide_headings(draft):
 
 def deck_checks(text):
     """Deck rules a script can check: [(position, what)]."""
-    out, run = [], []
+    out, run, backup = [], [], False
     for a, b, n, title, cls in slides(text):
+        listing = re.search(r"reference|reading|acknowledg|bibliograph", title, re.I)
+        backup = backup or bool(re.search(r"\bdivider\b", cls) and re.search(r"appendix|backup", title, re.I))
         body = text[a:b]
         lines = [l for l in body.splitlines() if not l.lstrip().startswith("```")]
         depth, items = 0, 0
@@ -310,7 +315,7 @@ def deck_checks(text):
             depth += len(re.findall(r"<div\b", l)) - len(re.findall(r"</div>", l))
             if depth == 0 and re.match(r"([-*+]|\d+[.)])\s", l):
                 items += 1
-        if items > 3 and not re.search(r"reference|acknowledg", title, re.I):
+        if items > 3 and not listing:
             out.append((a, f"Slide {n} has a plain list of {items} items. The deck rules allow three, "
                            "and longer parallel content goes in cols."))
         takeaways = len(re.findall(r"(?m)^>(?:[^\n]*\n>)*[^\n]*", body))
@@ -322,7 +327,7 @@ def deck_checks(text):
             out.append((a, f"Slide {n} uses {', '.join(bad)}, which the deck rules forbid."))
         content = not re.search(r"\b(cover|divider|full)\b", cls)
         figure = re.search(r"!\[|<img\b|<figure\b|<video\b", body)
-        run = run + [n] if content and not figure else []
+        run = run + [n] if content and not figure and not listing and not backup else []
         if len(run) == 3:
             out.append((a, f"Slides {run[0]}–{run[-1]} are three content slides in a row without a figure or image."))
     return out
@@ -1947,7 +1952,7 @@ def checks(text, path, deck=False):
 
     keys = bib_keys(text, path)
     if keys is not None:
-        for m in re.finditer(r"\[[^\[\]]*?@[^\[\]]*\]", prose):
+        for m in re.finditer(r"\[[^\[\]]*?@[^\[\]]*\](?!\()", prose):  # [@x](url) is a link
             for k in re.findall(r"@([\w:.#$%&+?<>~/'-]+)", m.group(0)):
                 k = k.rstrip(".,;:")
                 if k not in keys:

@@ -681,6 +681,83 @@ class CarryOver(unittest.TestCase):
         self.assertIn("same title", block)
 
 
+DECK = """---
+marp: true
+theme: base
+---
+
+<!-- _class: cover -->
+
+# Learning that looks ahead
+
+---
+
+# Models forget old tasks
+
+- One
+- Two
+- Three
+- Four
+
+> First takeaway
+
+> Second takeaway
+
+---
+
+# Prospective learners plan
+
+Fragments<br>here
+
+---
+
+<!-- _class: full -->
+
+![bg](https://example.com/thumb.jpg)
+
+[Play · 2:10](https://example.com/v)
+
+---
+
+# References
+
+- A
+- B
+- C
+- D
+"""
+
+
+class Decks(unittest.TestCase):
+    def test_detection(self):
+        self.assertTrue(ur.is_deck(Path("deck.md"), DECK))
+        self.assertFalse(ur.is_deck(Path("memo.md"), "# Memo\n\nText."))
+        self.assertFalse(ur.is_deck(Path("deck.txt"), DECK))
+
+    def test_slides_and_titles(self):
+        got = [(n, title, cls) for _, _, n, title, cls in ur.slides(DECK)]
+        self.assertEqual(got, [(1, "Learning that looks ahead", "cover"), (2, "Models forget old tasks", ""),
+                               (3, "Prospective learners plan", ""), (4, "Play · 2:10", "full"), (5, "References", "")])
+        heads = ur.slide_headings("===== deck.md =====\n" + DECK)
+        self.assertEqual([h for _, h in heads][:2], ["Slide 1: Learning that looks ahead", "Slide 2: Models forget old tasks"])
+
+    def test_deck_checks(self):
+        out = [w for _, w in ur.deck_checks(DECK)]
+        self.assertIn("Slide 2 has a plain list of 4 items. The deck rules allow three, and longer parallel "
+                      "content goes in cols.", out)
+        self.assertIn("Slide 2 has 2 takeaways. One per slide.", out)
+        self.assertIn("Slide 3 uses <br>, which the deck rules forbid.", out)
+        self.assertFalse(any("Slide 5" in w for w in out))  # a reference list may be long
+        self.assertFalse(any("in a row" in w for w in out))  # the full slide breaks the run
+
+    def test_a_handle_link_is_not_a_citation(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "refs.bib").write_text("@article{Friston10,\n}\n")
+            with mock.patch.object(ur, "BIB", Path(d) / "refs.bib"):
+                out = ur.checks("Play at [@Floyd](https://lichess.org/@/Floyd).", Path(d) / "x.md")
+        self.assertEqual(out, [])
+
+
 class Churn(unittest.TestCase):
     def test_times_changed(self):
         history = ["Alpha one.\n\nBeta one.", "Alpha two.\n\nBeta one.", "Alpha three.\n\nBeta one."]
