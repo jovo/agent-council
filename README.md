@@ -12,7 +12,7 @@ It drives the coding-agent CLIs you already use (Claude Code, Codex, and Cursor)
 Pick one of three ways in:
 
 1. [In the cloud](#in-the-cloud): click a button, paste three API keys, and drop a file on a web page. No install.
-2. [With Claude](#with-claude): the Claude desktop app installs it on your Mac and runs the commands for you.
+2. [With Claude](#with-claude): ask the Claude desktop app for a review, and it installs everything and runs the commands for you.
 3. [In a terminal](#in-a-terminal): clone, install, and run it yourself.
 
 ### In the cloud
@@ -23,11 +23,11 @@ The button opens GitHub's create page, which asks for three API keys: `ANTHROPIC
 
 ### With Claude
 
-In the Claude desktop app, open the Code tab, choose a folder, and paste:
+In the Claude desktop app, open the Code tab, choose the folder that holds your draft, and ask:
 
-> Clone https://github.com/jovo/agent-council, run its install.sh, and put ~/.local/bin on my PATH. Install whichever of the claude, codex, and cursor-agent CLIs are missing. Then run `claude auth login`, `codex login`, and `cursor-agent login` one at a time, and wait while I finish each sign-in in my browser. Then run `unified-review --upload`.
+> Install https://github.com/jovo/agent-council and give me a unified review of my-draft.md.
 
-Claude runs the commands and asks before each one. You click through three sign-ins in the browser, then drop a file on the upload page. Next time, ask Claude to run `unified-review --upload`.
+Claude reads this README, runs the install, and asks before each command. If a model CLI is missing or logged out, it says which one and opens the sign-in in your browser. The review page then opens, and **Accept** writes into your draft. After the first time, ask for "a unified review of my-draft.md."
 
 ### In a terminal
 
