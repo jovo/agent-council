@@ -846,6 +846,29 @@ class ReviewPage(unittest.TestCase):
             self.assertIsNotNone(ur.apply_change(f, old, new))  # a part is missing: refuse
             self.assertEqual(f.read_text(), "The kit combines cameras, and nothing else.")
 
+    def test_no_review_markup_reaches_the_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "m.md"
+            f.write_text("A because the model acts. B [@S04].  We explore. Keep **bold**.")
+            self.assertIsNone(ur.apply_change(f, "because the model", "because\n=== END FINDINGthe model"))
+            self.assertIsNone(ur.apply_change(f, "[@S04].  We", "[@S04].🟢 We"))
+            self.assertIsNone(ur.apply_change(f, "acts.", "~~acts~~ 🟢 **works**."))
+            self.assertEqual(f.read_text(), "A because the model works. B [@S04]. We explore. Keep **bold**.")
+            self.assertIsNone(ur.edit_block(f, "Keep **bold**.", "Keep **bold**. 🟢 More.\n=== END FINDING"))
+            self.assertNotRegex(f.read_text(), r"🟢|~~|FINDING")
+
+    def test_why_a_change_cannot_be_placed(self):
+        reviewed = "The archive keeps records local, and they leave only when exported. Other text."
+        why = lambda text, old, new: ur.unplaced_reason(text, reviewed, old, new, "")
+        fixed = "The archive keeps records local, and the records leave only when exported. Other text."
+        self.assertIn("already in the file",
+                      why(fixed, "and they leave", "and the records leave"))
+        self.assertIn('now reads: "The archive keeps records local, and the records leave only when exported."',
+                      why(fixed, "The archive keeps records local, and they leave only when exported.",
+                          "The archive keeps records local, and records then leave only when exported."))
+        self.assertIn("not in the draft as reviewed",
+                      why(fixed, "and it leaves", "and the data leaves"))
+
     def test_end_marker_dropped(self):
         fs = ur.parse_findings("=== FINDING\nseverity: Polish\ntitle: T\nquote: a b\n---\nPoint.\n\na ~~b~~ 🟢 **c**.\n=== END FINDING\n")
         self.assertNotIn("END FINDING", fs[0]["body"])

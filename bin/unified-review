@@ -1930,6 +1930,38 @@ def vote_tag(g):
     return "Majority" if agree * 2 > len(vs) else "No majority"
 
 
+def reviewed_text(run, path):
+    """The text this run reviewed (its copy in reviewed/), or None."""
+    f = run / "reviewed" / Path(path).name
+    return f.read_text() if f.exists() and not is_pdf(f) else None
+
+
+def unplaced_reason(text, reviewed, old, new, quote):
+    """Why a finding's diff cannot be placed in the current text: its new text is
+    already there, the reviewer misquoted the draft, or the passage changed."""
+    new = clean_markup(new)
+    if new.strip() and (find_span(text, new) or locate_edits(text, new, new, quote)):
+        return "this change is already in the file. Mark it done to record it"
+    if reviewed is not None and not locate_edits(reviewed, old, new, quote):
+        return "the reviewer quoted text that is not in the draft as reviewed, so the change cannot be placed. Apply it by hand, then mark it done"
+    now = closest_sentence(text, old)
+    if now:
+        return f"its passage changed after this review, and now reads: \"{now}\" If that already fixes it, mark it done"
+    return "its passage changed after this review. If you already fixed it, mark it done"
+
+
+def closest_sentence(text, old):
+    """The current sentence most like old, if one is close (ratio 0.6 or more)."""
+    import difflib
+    old = ELLIPSIS.sub(" ", old).strip()
+    best, score = None, 0.6
+    for s in re.split(r"(?<=[.!?])\s+|\n+", text):
+        r = difflib.SequenceMatcher(None, old, s.strip()).ratio()
+        if r >= score:
+            best, score = s.strip(), r
+    return best
+
+
 def page_state(path, run):
     """Everything the page shows: the current text and each finding in place."""
     r = json.loads((run / "results.json").read_text())
@@ -1948,7 +1980,7 @@ def page_state(path, run):
         edits = locate_edits(text, old, new, rep["quote"]) if old else None
         span = (edits[0][0], edits[-1][1]) if edits else None
         if old is not None and span is None:
-            reason = "its passage changed after this review. If you already fixed it, mark it done"
+            reason = unplaced_reason(text, reviewed_text(run, path), old, new, rep["quote"])
         d = decided.get(rep["title"])
         out.append({
             "n": n, "severity": sev, "kind": g.get("kind", ""), "section": where_label, "title": rep["title"], "where": g["where"],
@@ -2017,6 +2049,24 @@ def locate_edits(text, old, new, quote=""):
     return edits or None
 
 
+FINDING_MARK = re.compile(r"\s*=+[ \t]*(?:END[ \t]*(?:OF[ \t]*)?)?FINDING[ \t]*=*[ \t]*", re.I)
+
+
+def clean_markup(text):
+    """Review markup out of text bound for the draft: '=== FINDING' and '=== END
+    FINDING' markers, struck ~~deletions~~, and 🟢 addition marks, keeping the
+    added words. A marker between words becomes one space."""
+    out = FINDING_MARK.sub(lambda m: " " if m.start() and m.end() < len(m.string)
+                           and not m.string[m.end()].isspace() else "", text)
+    out = DEL.sub("", ADD.sub(lambda m: m.group(1) or m.group(2), out)).replace("🟢", "")
+    if out == text:
+        return text
+    out = re.sub(r"(?<=\S)[ \t]{2,}(?=\S)", " ", out)
+    # A removed mark at either end must not leave a space at the seam.
+    out = out if text[:1].isspace() else out.lstrip(" \t")
+    return out if text[-1:].isspace() else out.rstrip(" \t")
+
+
 def apply_change(path, old, new, quote=""):
     """Replace old with new in the file. Re-reads the file first, so edits made
     since the page loaded are kept. Returns an error message or None."""
@@ -2025,7 +2075,7 @@ def apply_change(path, old, new, quote=""):
     if not edits:
         return "the text this change targets is no longer in the file"
     for a, b, n in sorted(edits, reverse=True):  # from the end, so earlier offsets hold
-        text = text[:a] + n + text[b:]
+        text = text[:a] + clean_markup(n) + text[b:]
     Path(path).write_text(text)
     return None
 
@@ -2306,7 +2356,7 @@ def edit_block(path, old, new, start=None):
         at = text.index(old)
     else:
         return "this paragraph changed in the file since the page loaded. Reload the page and edit again"
-    Path(path).write_text(text[:at] + new.rstrip("\n") + text[at + len(old):])
+    Path(path).write_text(text[:at] + clean_markup(new.rstrip("\n")) + text[at + len(old):])
     return None
 
 
