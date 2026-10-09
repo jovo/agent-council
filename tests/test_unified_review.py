@@ -758,6 +758,29 @@ class Decks(unittest.TestCase):
         self.assertEqual(out, [])
 
 
+class Placement(unittest.TestCase):
+    TEXT = ("| A | Does not learn; task examples follow. |\n| B | Measures robustness; texture is not friction. |\n\n"
+            "Each method will have the same budget and safety limits.\n")
+
+    def test_same_fix_in_separate_cells(self):
+        body = ("Semicolons.\n\nDoes not learn~~;~~🟢 **.** ~~task~~ 🟢 **Task** examples follow.\n\n"
+                "Measures robustness~~;~~🟢 **.** ~~texture~~ 🟢 **Texture** is not friction.")
+        old, new, edits = ur.placed_diff(self.TEXT, body, "")
+        self.assertEqual(len(edits), 2)
+        self.assertIn("Does not learn. Task examples follow.", new)
+
+    def test_addition_bolded_without_marker(self):
+        body = "Budget.\n\nEach method will have the same budget~~ and~~🟢 **,** safety limits**, and compute.**"
+        self.assertIsNone(ur.locate_edits(self.TEXT, *ur.diff_parts(body)))
+        old, new, edits = ur.placed_diff(self.TEXT, body, "")
+        self.assertEqual(new, "Each method will have the same budget, safety limits, and compute.")
+        self.assertTrue(edits)
+
+    def test_addition_with_no_anchor(self):
+        reason = ur.unplaced_reason(self.TEXT, self.TEXT, "(no row)", "| C | new |", "")
+        self.assertTrue(reason.startswith("the change adds text without quoting where it goes"))
+
+
 class Churn(unittest.TestCase):
     def test_times_changed(self):
         history = ["Alpha one.\n\nBeta one.", "Alpha two.\n\nBeta one.", "Alpha three.\n\nBeta one."]

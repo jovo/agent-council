@@ -499,7 +499,9 @@ the point, then show its inline diff. The 🟢 text is literal text for the
 draft, never an instruction to the author ("add citations ..."). When the fix
 needs content you lack, such as a citation, number, or definition, write a slot
 shaped like the final text where it goes, such as "RECAP (Author, year)", and
-say in the point what fills it. Ignore the house rules' cap on findings
+say in the point what fills it. To add new text, such as a sentence or a
+table row, include the text just before it, unchanged, so the change can be
+placed. Ignore the house rules' cap on findings
 and their ordering rule: report every finding worth making, in any order. This
 script places findings in draft order. Report nothing you would not change: if
 the draft needs no change, reply with the single line NO FINDINGS.
@@ -2097,8 +2099,7 @@ def churn(g, text, history):
     two of the last three steps, only Critical findings show. Typos always show."""
     if g["where"] != "draft" or not history or is_typo(g):
         return None
-    old, new = diff_parts(g["rep"]["body"])
-    edits = locate_edits(text, old, new, g["rep"]["quote"]) if old else None
+    old, new, edits = placed_diff(text, g["rep"]["body"], g["rep"]["quote"])
     if edits and restores_earlier(text, edits, history):
         return "it would restore wording from an earlier version"
     anchor = find_span(text, g["rep"]["quote"]) if g["rep"]["quote"] else None
@@ -2151,6 +2152,36 @@ def diff_parts(body):
     if re.search(r"\[[^\]@]*(name|key|insert|N\b|M\b)[^\]]*\]", new, re.I):
         return None, "the new text has a placeholder to fill in"
     return old, new
+
+
+def lenient_diff(body):
+    """The diff as diff_parts reads it after fixing two slips reviewers make in
+    a diff paragraph: an addition bolded without 🟢, and 🟢 without bold (taken
+    to the end of its line)."""
+    def fix(para):
+        if "~~" not in para and "🟢" not in para:
+            return para
+        keep = []
+        stash = lambda m: keep.append(m[0]) or f"\0{len(keep) - 1}\0"
+        para = DEL.sub(stash, ADD.sub(stash, para))
+        para = re.sub(r"\*\*([^*\n\0]+?)\*\*", lambda m: stash([f"🟢 **{m[1]}**"]), para)
+        para = re.sub(r"🟢[ \t]*([^\n\0]+)", lambda m: f"🟢 **{m[1].rstrip()}**", para)
+        return re.sub(r"\0(\d+)\0", lambda m: keep[int(m[1])], para)
+    head, *rest = strip_end(body).split("\n\n")
+    return diff_parts("\n\n".join([head] + [fix(x) for x in rest]))
+
+
+def placed_diff(text, body, quote):
+    """(old, new, edits) for a finding's diff in text. When the diff as written
+    cannot be placed, tries it with lenient_diff's fixes."""
+    old, new = diff_parts(body)
+    edits = locate_edits(text, old, new, quote) if old else None
+    if old is not None and not edits:
+        o, n = lenient_diff(body)
+        e = locate_edits(text, o, n, quote) if o else None
+        if e:
+            return o, n, e
+    return old, new, edits
 
 
 def find_span(text, needle, near=None):
@@ -2245,6 +2276,8 @@ def unplaced_reason(text, reviewed, old, new, quote):
     new = clean_markup(new)
     if new.strip() and (find_span(text, new) or locate_edits(text, new, new, quote)):
         return "this change is already in the file. Mark it done to record it"
+    if not re.sub(r"\(.*\)", "", old).strip():  # empty, or a stand-in such as "(no row)"
+        return "the change adds text without quoting where it goes, so it cannot be placed. Add it by hand, then mark it done"
     if reviewed is not None and not locate_edits(reviewed, old, new, quote):
         return "the reviewer quoted text that is not in the draft as reviewed, so the change cannot be placed. Apply it by hand, then mark it done"
     now = closest_sentence(text, old)
@@ -2279,10 +2312,9 @@ def page_state(path, run):
     out = []
     for n, sev, where_label, g in ordered_findings(r):
         rep = g["rep"]
-        old, new = diff_parts(rep["body"])
+        old, new, edits = placed_diff(text, rep["body"], rep["quote"])
         reason = None if old is not None else new
         quote_span = find_span(text, rep["quote"]) if rep["quote"] else None
-        edits = locate_edits(text, old, new, rep["quote"]) if old else None
         span = (edits[0][0], edits[-1][1]) if edits else None
         if old is not None and span is None:
             reason = unplaced_reason(text, reviewed_text(run, path), old, new, rep["quote"])
@@ -2348,7 +2380,7 @@ def locate_edits(text, old, new, quote=""):
         return [(span[0], span[1], new)]
     olds, news = ELLIPSIS.split(old), ELLIPSIS.split(new)
     if len(olds) < 2 or len(olds) != len(news):
-        return None
+        return separate_edits(text, old, new, near)
     edits, pos = [], None
     for o, n in zip(olds, news):
         if not o.strip():
@@ -2363,6 +2395,26 @@ def locate_edits(text, old, new, quote=""):
         if o != n:
             edits.append((sp[0], sp[1], n))
         pos = sp[1]
+    return edits or None
+
+
+def separate_edits(text, old, new, near):
+    """A diff of several paragraphs that are separate passages in the draft (the
+    same fix in several places, or in several table cells): one edit per
+    paragraph, each found on its own. None unless every one is found, without overlap."""
+    olds, news = old.split("\n\n"), new.split("\n\n")
+    if len(olds) < 2 or len(olds) != len(news):
+        return None
+    edits = []
+    for o, n in zip(olds, news):
+        sp = find_span(text, o, near)
+        if sp is None:
+            return None
+        if o != n:
+            edits.append((sp[0], sp[1], n))
+    edits.sort()
+    if any(a[1] > b[0] for a, b in zip(edits, edits[1:])):
+        return None
     return edits or None
 
 
