@@ -118,7 +118,7 @@ Each decision goes into `decisions.json` in the runs folder, per reviewed file. 
 
 ## Install
 
-You need Python 3.9 or later, macOS (the script uses `open` and notifications), and these CLIs, logged in:
+You need Python 3.9 or later, macOS or Linux, and these CLIs, logged in:
 
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) (`claude`)
 - [Codex CLI](https://github.com/openai/codex) (`codex`, or the copy inside the ChatGPT app, which the script finds on its own)
@@ -132,7 +132,13 @@ cd agent-council
 ./install.sh
 ```
 
-`install.sh` links `unified-review` and `make-pdf` into `~/.local/bin`, links every skill into `~/.claude/skills`, `~/.codex/skills`, and `~/.cursor/skills`, and installs the fonts into `~/Library/Fonts`. It does not overwrite real files. If a CLI lives somewhere unusual, set `CLAUDE_BIN`, `CODEX_BIN`, or `CURSOR_BIN` to its path.
+`install.sh` links `unified-review` and `make-pdf` into `~/.local/bin`, links every skill into `~/.claude/skills`, `~/.codex/skills`, and `~/.cursor/skills`, and installs the fonts into `~/Library/Fonts` (`~/.local/share/fonts` on Linux). It does not overwrite real files. If a CLI lives somewhere unusual, set `CLAUDE_BIN`, `CODEX_BIN`, or `CURSOR_BIN` to its path.
+
+### In a GitHub Codespace
+
+This setup has not been tried in a live codespace yet. To run the tool in the cloud instead of on your Mac, name this repository as your dotfiles repository in your [GitHub Codespaces settings](https://github.com/settings/codespaces). Every codespace you create then runs `install.sh`, which also runs `codespaces/setup.sh`. That script installs the three CLIs, poppler, and Ghostscript, and sets `UNIFIED_REVIEW_PORT` to 8737 so the review page keeps one address. Log in to each CLI once per codespace. Or store a `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` and a `CURSOR_API_KEY` as Codespaces secrets. Codex has no such token for a subscription, so run `codex login`.
+
+In a codespace, `unified-review --page FILE` prints the page's forwarded address (`https://<codespace>-8737.app.github.dev/`), which only your GitHub account can open, and opens it in your browser. `unified.md` opens in the codespace's editor. Edits go to the checkout in the codespace, so commit and push them from there. The model calls use your subscriptions, as on a Mac. The codespace itself uses your monthly Codespaces allowance and stops after its idle timeout, which you can raise in the same settings.
 
 ## Review rules
 

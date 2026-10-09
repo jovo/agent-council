@@ -22,7 +22,8 @@ done
 link "$repo/bin/unified-review" "$bin_dir/unified-review"
 link "$repo/bin/make-pdf" "$bin_dir/make-pdf"
 # House fonts (New Computer Modern, GUST Font License) for PDFs, installed for the user.
-font_dir=${FONT_DIR:-$HOME/Library/Fonts}
+if [ "$(uname)" = Darwin ]; then default_fonts=$HOME/Library/Fonts; else default_fonts=$HOME/.local/share/fonts; fi
+font_dir=${FONT_DIR:-$default_fonts}
 mkdir -p "$font_dir"
 for f in "$repo"/typeset/fonts/*.otf; do
   cp -n "$f" "$font_dir/" 2>/dev/null && echo "installed font $(basename "$f")"
@@ -33,6 +34,12 @@ for skill in "$repo"/skills/*/; do
     link "$repo/skills/$name" "$HOME/$agent/skills/$name"
   done
 done
+
+# In a GitHub Codespace (for example with this repo as your Codespaces dotfiles repo),
+# also install the model CLIs and PDF tools.
+if [ -n "${CODESPACES:-}" ]; then
+  "$repo/codespaces/setup.sh"
+fi
 
 case ":$PATH:" in
   *":$bin_dir:"*) ;;

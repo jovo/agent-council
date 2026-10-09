@@ -299,6 +299,50 @@ class Opening(unittest.TestCase):
         self.assertEqual(self.opened("")[0], [["open", "/r/unified.md"]])
 
 
+class Linux(unittest.TestCase):
+    """Off macOS (e.g. a codespace) nothing calls `open` or `osascript`."""
+    def run_with(self, env, fn, which=lambda c: "/usr/bin/" + c):
+        cmds, out = [], []
+        with mock.patch.object(ur.sys, "platform", "linux"), \
+             mock.patch.dict(ur.os.environ, env, clear=True), \
+             mock.patch.object(ur.shutil, "which", which), \
+             mock.patch.object(ur.subprocess, "run", lambda cmd, **k: cmds.append(cmd) or SimpleNamespace(returncode=0)), \
+             mock.patch("builtins.print", lambda *a, **k: out.append(" ".join(map(str, a)))):
+            fn()
+        return cmds, out
+
+    def test_open_file(self):
+        f = lambda: ur.open_file("/r/unified.md")
+        self.assertEqual(self.run_with({"CODESPACES": "true"}, f)[0], [["code", "/r/unified.md"]])
+        self.assertEqual(self.run_with({}, f)[0], [["xdg-open", "/r/unified.md"]])
+        cmds, out = self.run_with({}, f, which=lambda c: None)
+        self.assertEqual(cmds, [])
+        self.assertEqual(out, ["Result: /r/unified.md"])
+
+    def test_page_opens_the_forwarded_url_in_a_codespace(self):
+        env = {"CODESPACE_NAME": "cs", "GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN": "app.github.dev",
+               "BROWSER": "/vscode/helpers/browser.sh"}
+        with mock.patch.object(ur, "page_url", lambda p: "http://127.0.0.1:8737/"):
+            cmds, out = self.run_with(env, lambda: ur.open_page("/d/memo.md"))
+        self.assertEqual(cmds, [["/vscode/helpers/browser.sh", "https://cs-8737.app.github.dev/"]])
+        self.assertEqual(out, ["Review page: https://cs-8737.app.github.dev/"])
+
+    def test_page_url_is_unchanged_outside_a_codespace(self):
+        with mock.patch.dict(ur.os.environ, {}, clear=True):
+            self.assertEqual(ur.public_url("http://127.0.0.1:5000/"), "http://127.0.0.1:5000/")
+
+
+class ChildEnv(unittest.TestCase):
+    def child_env(self, env):
+        with mock.patch.dict(ur.os.environ, env, clear=True):
+            mod = SourceFileLoader("ur_env", str(REPO / "bin" / "unified-review")).load_module()
+        return mod.CHILD_ENV
+
+    def test_oauth_token_kept_only_outside_claude_code(self):
+        self.assertEqual(self.child_env({"CLAUDE_CODE_OAUTH_TOKEN": "t"}), {"CLAUDE_CODE_OAUTH_TOKEN": "t"})
+        self.assertEqual(self.child_env({"CLAUDE_CODE_OAUTH_TOKEN": "t", "CLAUDECODE": "1"}), {})
+
+
 class Decisions(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
