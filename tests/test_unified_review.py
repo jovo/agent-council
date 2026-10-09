@@ -789,14 +789,14 @@ class Summary(unittest.TestCase):
         calls = []
         def call(name, prompt, out, workdir, stage=""):
             calls.append(prompt)
-            return 'Here: {"overview": "All agreed.", "themes": [{"theme": "Definitions", "gist": "F1 is undefined.", "findings": [1, "x"]}]}'
+            return 'Here: {"themes": [{"theme": "Definitions", "gist": "F1 is undefined.", "findings": [1, "x"]}]}'
         with mock.patch.object(ur, "call", call), mock.patch.object(ur, "load_rules", lambda p: ("rules", "")):
             self.assertEqual(ur.summary_state(run), {"status": "pending"})
             for _ in range(100):
                 if (run / "summary.json").exists():
                     break
                 time.sleep(0.01)
-            self.assertEqual(ur.summary_state(run), {"status": "done", "overview": "All agreed.", "themes": [
+            self.assertEqual(ur.summary_state(run), {"status": "done", "themes": [
                 {"theme": "Definitions", "gist": "F1 is undefined.", "findings": [1]}]})
         self.assertEqual(len(calls), 1)
         self.assertIn("F1 is never defined", calls[0])
@@ -1130,21 +1130,21 @@ class ReviewPage(unittest.TestCase):
             run = Path(d)
             (run / "unified.md").write_text("# draft.md, version 1\n\n## Critical\n\n### 1. A finding\n")
             self.assertEqual(ur.review_markdown(run), (run / "unified.md").read_text())
-            (run / "summary.json").write_text(json.dumps({"overview": "Two problems.", "themes": [
+            (run / "summary.json").write_text(json.dumps({"themes": [
                 {"theme": "Logic", "gist": "A step fails.", "findings": [1]}]}))
-            self.assertEqual(ur.review_markdown(run), "# draft.md, version 1\n\n## Summary\n\nTwo problems.\n\n"
+            self.assertEqual(ur.review_markdown(run), "# draft.md, version 1\n\n## Summary\n\nThe draft's main weaknesses are:\n\n"
                              "- **Logic**: A step fails. (1)\n\n## Critical\n\n### 1. A finding\n")
 
     def test_review_markdown_lists_each_themes_findings_after_it(self):
         with tempfile.TemporaryDirectory() as d:
             run = Path(d)
             (run / "unified.md").write_text("# draft.md\n\n## Critical\n\n" + "".join(f"### {n}. F\n\n" for n in range(1, 6)))
-            (run / "summary.json").write_text(json.dumps({"overview": "", "themes": [
+            (run / "summary.json").write_text(json.dumps({"themes": [
                 {"theme": "Logic", "gist": "Steps fail.", "findings": [3, 1, 9]},
                 {"theme": "Style", "gist": "", "findings": [1, 4]},
                 {"theme": "Gone", "gist": "Only repeats.", "findings": [3]}]}))
             block = ur.review_markdown(run).split("## Critical")[0]
-            self.assertEqual(block, "# draft.md\n\n## Summary\n\n- **Logic**: Steps fail. (1, 3)\n"
+            self.assertEqual(block, "# draft.md\n\n## Summary\n\nThe draft's main weaknesses are:\n\n- **Logic**: Steps fail. (1, 3)\n"
                              "- **Style** (4)\n- **Other** (2, 5)\n\n")
 
     def test_review_prompt_asks_for_double_brace_slots(self):

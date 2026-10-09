@@ -367,7 +367,6 @@ function renderCard() {
   if (!f.status) {
     if (mode === "edit") actions = `<textarea id="edtext">${esc(f.new || "")}</textarea><div class="row" style="margin-top:8px"><button id="save">Apply edited text</button><button id="cancel">Cancel</button></div>`;
     else if (mode === "ask") actions = `<textarea id="qtext" placeholder="Why this change? Would this alternative work?" style="min-height:70px"></textarea><div class="row" style="margin-top:8px"><button id="send">Ask all panelists</button><button id="cancel">Cancel</button><span class="meta">⌘Enter sends</span></div>`;
-    else if (mode === "decline") actions = `<input class="note" id="note" placeholder="Reason, optional"><div class="row"><button id="savedecl">Decline</button><button id="cancel">Cancel</button></div>`;
     else actions = (f.applicable ? `<button id="acc">Accept</button> <button id="edt">Edit</button> ` : "") + `<button id="dec">Decline</button> <button id="ask">Ask</button>` + (f.applicable ? "" : ` <button id="copy">Copy for agent</button>`);
   }
   el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity}${f.kind ? " · " + kindOf(f) : ""} · ${esc(f.section)} · ${f.tag}</div>
@@ -384,9 +383,8 @@ function renderCard() {
   on("acc", () => act("/api/accept", {n: f.n}));
   on("done", () => act("/api/done", {n: f.n}));
   on("edt", () => { mode = "edit"; renderCard(); document.getElementById("edtext").focus(); });
-  on("dec", () => { mode = "decline"; renderCard(); document.getElementById("note").focus(); });
+  on("dec", () => act("/api/decline", {n: f.n, note: ""}));
   on("save", () => act("/api/accept", {n: f.n, text: document.getElementById("edtext").value}));
-  on("savedecl", () => act("/api/decline", {n: f.n, note: document.getElementById("note").value}));
   on("cancel", () => { mode = null; renderCard(); });
   on("ask", () => { mode = "ask"; renderCard(); document.getElementById("qtext").focus(); });
   const sendQ = async () => {
@@ -481,7 +479,7 @@ function renderSummary() {
     const themes = sm.themes.map(t => ({...t, fs: t.findings.filter(n => byN[n] && !used.has(n) && used.add(n)).map(n => byN[n])}));
     const rest = S.findings.filter(f => !used.has(f.n));
     if (rest.length) themes.push({theme: "Other", gist: "", fs: rest});
-    body = (sm.overview ? `<p style="margin:8px 0">${esc(sm.overview)}</p>` : "") +
+    body = `<p style="margin:8px 0">The draft's main weaknesses are:</p>` +
       `<ul class="themes">${themes.filter(t => t.fs.length).map(t => `<li><details data-theme="${esc(t.theme)}"${openThemes.has(t.theme) ? " open" : ""}><summary><b>${esc(t.theme)}</b>${t.gist ? `: ${esc(t.gist)}` : ""}</summary>${outline(t.fs)}</details></li>`).join("")}</ul>`;
   } else {
     body = (sm.status === "pending" ? `<div class="meta" style="margin:8px 0">Grouping the reviews by theme…</div>`
@@ -698,7 +696,7 @@ document.addEventListener("keydown", e => {
   else if (e.key === "k" && i > 0) select(vis[i - 1].n, true);
   else if (e.key === "a" && f && !f.status && f.applicable) act("/api/accept", {n: f.n});
   else if (e.key === "e" && f && !f.status && f.applicable) { mode = "edit"; renderCard(); }
-  else if (e.key === "d" && f && !f.status) { mode = "decline"; renderCard(); }
+  else if (e.key === "d" && f && !f.status) act("/api/decline", {n: f.n, note: ""});
   else if (e.key === "q" && f && !f.status) { e.preventDefault(); mode = "ask"; renderCard(); document.getElementById("qtext").focus(); }
 });
 load().catch(e => { document.getElementById("draft").textContent = "Could not load the review: " + e.message; });

@@ -2559,10 +2559,9 @@ Summarize the reviews, not the draft, for the draft's author. Group the
 findings into two to six themes, and put every numbered finding in exactly one
 theme. Reply with only this JSON:
 
-{{"overview": "<one or two sentences: the reviewers' main conclusions about the draft>",
- "themes": [{{"theme": "<two to six words>", "gist": "<one sentence: what the reviewers found under this theme>", "findings": [<finding numbers>]}}]}}
+{{"themes": [{{"theme": "<two to six words naming a weakness of the draft>", "gist": "<one sentence: what the reviewers found under this theme>", "findings": [<finding numbers>]}}]}}
 
-Order themes by importance. In the overview and gists, write no finding
+Order themes by importance. In the gists, write no finding
 numbers, counts, or vote tallies, and say nothing about where reviewers agreed
 or split. Do not restate the draft's content.
 Follow the house rules for prose.
@@ -2579,7 +2578,7 @@ SUMMARIZING = set()
 
 def summary_state(run):
     """The summary of the run's reviews for the review page: {"status": "done",
-    "overview", "themes"}, "pending", or "failed" with a reason. The first
+    "themes"}, "pending", or "failed" with a reason. The first
     request starts writing it in the background, kept in summary.json."""
     done, failed = run / "summary.json", run / "summary.failed"
     if done.exists():
@@ -2609,7 +2608,7 @@ def summary_state(run):
             if not isinstance(d, dict) or not isinstance(d.get("themes"), list):
                 failed.write_text("the reply was not the summary JSON")
                 return
-            write_atomic(done, json.dumps({"overview": str(d.get("overview", "")), "themes": [
+            write_atomic(done, json.dumps({"themes": [
                 {"theme": str(t.get("theme", "")), "gist": str(t.get("gist", "")),
                  "findings": [int(n) for n in t.get("findings", []) if str(n).isdigit()]}
                 for t in d["themes"] if isinstance(t, dict)]}, indent=1, ensure_ascii=False) + "\n")
@@ -3048,7 +3047,7 @@ def review_markdown(run):
     rest = [n for n in ns if n not in used]
     if rest:
         themes.append(("Other", "", sorted(rest)))
-    block = "## Summary\n\n" + (sm["overview"] + "\n\n" if sm.get("overview") else "") + "".join(
+    block = "## Summary\n\nThe draft's main weaknesses are:\n\n" + "".join(
         f"- **{name}**" + (f": {gist}" if gist else "") + f" ({', '.join(map(str, fs))})\n"
         for name, gist, fs in themes)
     title, _, rest = md.partition("\n")
