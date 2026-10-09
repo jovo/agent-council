@@ -31,7 +31,7 @@ A single model reviewing a draft misses things another model catches. A single m
 
 So no single model decides. Each model reviews independently. Every model then votes on every finding, with reviewers anonymized, and a model's vote on its own finding is shown but not counted. The script, not a model, groups duplicates and sets aside findings most voters reject. Andrej Karpathy's [llm-council](https://github.com/karpathy/llm-council) is a precursor.
 
-That design follows the evidence above, but it has not been tested on its own output yet. No benchmark shows how many real errors the panel catches, or whether majority rejection sets aside real ones. [research/competitors-2026-10.md](research/competitors-2026-10.md) compares agent-council with other review tools and lists ways to measure it.
+That design follows the evidence above, but it has not been tested on its own output yet. No benchmark shows how many real errors the panel catches, or whether majority rejection sets aside real ones.
 
 ## The review page
 
