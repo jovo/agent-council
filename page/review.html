@@ -239,12 +239,14 @@ function renderCard() {
     ${f.body.includes("~~") || f.body.includes("🟢") ? `<div class="diff">${diffHtml(f.body)}</div>` : ""}
     <div class="votes">${votes}</div>
     ${!f.status && !f.applicable ? `<p class="reason">Cannot apply here: ${esc(f.reason || "it is about the whole draft")}.</p>` : ""}
+    ${!f.status && f.changed ? `<div class="row" style="margin-bottom:6px"><button id="done">Mark done</button></div>` : ""}
     <div class="row">${actions}</div>
-    ${f.status ? `<div class="status ${f.status}">${f.status === "accepted" ? "Accepted and written to the file" : "Declined" + (f.note ? ": " + esc(f.note) : "")}</div>` : ""}
+    ${f.status ? `<div class="status ${f.status}">${f.status === "accepted" ? (f.note === "fixed by hand" ? "Done: fixed by hand" : "Accepted and written to the file") : "Declined" + (f.note ? ": " + esc(f.note) : "")}</div>` : ""}
     ${thread(f)}
     <div class="err" id="err"></div>`;
   const on = (id, fn) => { const b = document.getElementById(id); if (b) b.onclick = fn; };
   on("acc", () => act("/api/accept", {n: f.n}));
+  on("done", () => act("/api/done", {n: f.n}));
   on("edt", () => { mode = "edit"; renderCard(); document.getElementById("edtext").focus(); });
   on("dec", () => { mode = "decline"; renderCard(); document.getElementById("note").focus(); });
   on("save", () => act("/api/accept", {n: f.n, text: document.getElementById("edtext").value}));
@@ -316,7 +318,8 @@ function renderChecks() {
   el.hidden = !cs.length;
   if (!cs.length) return;
   el.innerHTML = `<div class="listhead"><span class="title">Checks</span> <span class="meta">${cs.length} found by the script, not the panel · click one to jump to it</span></div>` +
-    cs.map(c => `<div class="chk" data-pos="${c.pos}" style="cursor:pointer;font-size:14px;margin:3px 0">${c.id}. <span class="meta">line ${c.line}</span> ${esc(c.what)}</div>`).join("");
+    cs.map(c => `<div class="chk" data-pos="${c.pos}" style="cursor:pointer;font-size:14px;margin:3px 0">${c.id}. <span class="meta">line ${c.line}</span> ${esc(c.what)}${c.fix ? ` <button class="fixc" data-fix="${c.fix}">Fix</button>` : ""}</div>`).join("");
+  el.querySelectorAll(".fixc").forEach(x => x.onclick = async e => { e.stopPropagation(); await api("/api/fix", {fix: x.dataset.fix}); load(); });
   el.querySelectorAll(".chk").forEach(x => x.onclick = () => {
     const pos = +x.dataset.pos;
     const b = [...document.querySelectorAll("#draft [data-a]")].find(e => +e.dataset.a <= pos && pos < +e.dataset.b);
@@ -329,7 +332,7 @@ function renderSide() {
   renderTypos();
   const el = document.getElementById("list"), fs = S.findings.filter(shown);
   el.innerHTML = `<div class="listhead"><span class="title">Findings</span> <span class="meta">${fs.length} shown by the filters above · click one to jump to it</span></div>` +
-    fs.map(f => `<div data-n="${f.n}" class="${f.n === cur ? "cur" : ""}">${f.n}. <span class="sev ${f.severity}">${f.severity}</span>${f.kind ? " · " + kindOf(f) : ""} · ${esc(f.title)}${f.status ? " · " + f.status : ""}</div>`).join("");
+    fs.map(f => `<div data-n="${f.n}" class="${f.n === cur ? "cur" : ""}">${f.n}. <span class="sev ${f.severity}">${f.severity}</span>${f.kind ? " · " + kindOf(f) : ""} · ${esc(f.title)}${f.seen > 1 ? ` <span class="meta">· in ${f.seen} reviews</span>` : ""}${f.status ? " · " + f.status : ""}</div>`).join("");
   el.querySelectorAll("div[data-n]").forEach(e => e.onclick = () => select(+e.dataset.n, true));
   const ov = S.findings.filter(f => shown(f) && !f.span);
   const openLogic = S.findings.filter(f => f.kind === "logic" && !f.status).length;

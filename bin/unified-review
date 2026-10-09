@@ -1115,9 +1115,15 @@ def render(outdir):
             parts.append(f"## {sev}")
         # Escape headings inside a reviewer's diff so they do not become sections here.
         body = re.sub(r"^(\s*(?:🟢\s*)?(?:\*\*)?)#", r"\1\\#", g["rep"]["body"], flags=re.M)
-        tag = (f" ({g['kind']})" if g.get("kind") else "") + (" (contested)" if g.get("contested") else "")
+        tag = ((f" ({g['kind']})" if g.get("kind") else "") + (" (contested)" if g.get("contested") else "")
+               + (f" (in {g['seen']} reviews)" if g.get("seen", 1) > 1 else ""))
         parts.append(f"### {n}. {g['rep']['title']}{tag}\n\n"
                      f"{quoted(g, r['files'], where_label)}{body}\n\n{vote_line(g, voters)}")
+    since = r.get("since_last") or {}
+    if since.get("resolved") or since.get("dropped"):
+        parts.append("## Since the last review\n\n" + "\n".join(
+            [f"- Resolved: {t} (its passage changed)" for t in since.get("resolved", [])]
+            + [f"- Not raised again: {t} (its passage is unchanged)" for t in since.get("dropped", [])]))
     if r.get("checks"):
         parts.append("## Checks\n\nFound by the script, not the panel: numbering, references, citation keys, and "
                      "terms spelled two ways.\n\n" + "\n".join(
@@ -1239,7 +1245,10 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     ctx_block, ctx_text, ctx_names = context or ("", "", [])
     if ctx_names:
         log(f"supporting material: {', '.join(ctx_names)}")
-    prompt = review_prompt(shown, focus, rules, decided, ctx_block)
+    prev = previous_open(files[0]) if len(files) == 1 and not is_pdf(files[0]) else []
+    if prev:
+        log(f"carrying {len(prev)} open findings from the last review")
+    prompt = review_prompt(shown, focus, rules, decided + open_block(prev), ctx_block)
     (outdir / "prompt.md").write_text(prompt)
     log(f"1/3 review (no web): {', '.join(panel)}")
 
@@ -1329,7 +1338,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
                         and norm(d["quote"]) == norm(g["rep"]["quote"])), None)
         if hit:
             g["declined"] = {"id": hit, "title": ids[hit]["title"]}
-    mech = []
+    mech, since = [], carry_over(groups, prev, dnorm)
     if len(files) == 1 and not is_pdf(files[0]):
         text = files[0].read_text()
         mech = checks(text, files[0])
@@ -1353,7 +1362,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         "labels": {m: label(m) for m in panel}, "verify": verify,
         "failures": FAILURES, "agreement": vote_agreement(flat, votes, owner),
         "anonymization": letters, "timings_s": timings, "headings": draft_headings(draft),
-        "findings": flat, "votes": votes, "groups": groups, "checks": mech}, indent=1, ensure_ascii=False) + "\n")
+        "findings": flat, "votes": votes, "groups": groups, "checks": mech, "since_last": since}, indent=1, ensure_ascii=False) + "\n")
     render(outdir)
     LAST_RUN.parent.mkdir(parents=True, exist_ok=True)
     LAST_RUN.write_text(str(outdir))
@@ -1570,6 +1579,30 @@ def blank(text, pattern, flags=0):
     return re.sub(pattern, lambda m: re.sub(r"[^\n]", " ", m.group(0)), text, flags=flags)
 
 
+DOUBLE_SPACE = re.compile(r"(?<=\S) {2,}(?=\S)")
+
+
+def double_spaces(text):
+    """Runs of spaces between two words or after punctuation, outside code and
+    table rows: [(start, end)]. Indentation and line-ending spaces are left alone."""
+    prose = blank(text, r"```.*?```|`[^`\n]*`", re.S)
+    rows = {m.start() for m in re.finditer(r"(?m)^[ \t]*\|.*$", text)}
+    starts = [m.start() for m in re.finditer(r"(?m)^", text)]
+    out = []
+    for m in DOUBLE_SPACE.finditer(text):
+        line_start = max(p for p in starts if p <= m.start())
+        if line_start in rows or text[m.start() - 1] != prose[m.start() - 1] or text[m.end()] != prose[m.end()]:
+            continue
+        out.append((m.start(), m.end()))
+    return out
+
+
+def fix_double_spaces(text):
+    for a, b in reversed(double_spaces(text)):
+        text = text[:a] + " " + text[b:]
+    return text
+
+
 def checks(text, path):
     """Problems a script can find without a model: [{"id", "line", "what"}],
     in draft order."""
@@ -1632,8 +1665,67 @@ def checks(text, path):
             first = re.search(rf"\b{closed}\b", lower).start()
             n_hyph = len(re.findall(rf"\b{re.escape(hyph)}\b", lower))
             add(first, f'"{hyph}" ({n_hyph}×) and "{closed}" ({n_closed}×) are both used.')
+    spaces = double_spaces(text)
+    if spaces:
+        lines = sorted({line(a) for a, _ in spaces})
+        found.append((spaces[0][0], f"Two or more spaces where one belongs ({len(spaces)}×, line"
+                                    f"{'s' if len(lines) > 1 else ''} {', '.join(map(str, lines[:12]))}"
+                                    f"{', …' if len(lines) > 12 else ''}).", "spaces"))
     found.sort(key=lambda x: x[0])
-    return [{"id": f"M{i}", "line": line(pos), "pos": pos, "what": what} for i, (pos, what) in enumerate(found, 1)]
+    return [{"id": f"M{i}", "line": line(x[0]), "pos": x[0], "what": x[1], "fix": x[2] if len(x) > 2 else None}
+            for i, x in enumerate(found, 1)]
+
+
+# ---------------------------------------------------------------- carry-over
+# Findings the last review showed and the author has not yet accepted or
+# declined go back to the panel, so a point that still applies keeps its wording
+# instead of returning reworded as a new one. Each finding keeps a key across
+# reviews, and one the new review does not repeat is reported as resolved.
+
+def previous_open(path):
+    """Open findings from the newest earlier review of this file:
+    [{key, title, quote, seen}]. Accepted, declined, and held findings are left out."""
+    runs = runs_for(Path(path).resolve())
+    if not runs:
+        return []
+    r = json.loads((runs[0] / "results.json").read_text())
+    decided = {d["title"] for d in load_decisions().get(str(Path(path).resolve()), []) if d.get("run") == runs[0].name}
+    return [{"key": g.get("key") or "K" + hashlib.sha256((g["rep"]["title"] + g["rep"]["quote"]).encode()).hexdigest()[:6],
+             "title": g["rep"]["title"], "quote": g["rep"]["quote"], "seen": g.get("seen", 1)}
+            for _, _, _, g in ordered_findings(r) if g["rep"]["title"] not in decided]
+
+
+def open_block(prev):
+    """Prompt text listing the last review's open findings."""
+    if not prev:
+        return ""
+    return ("\nThese findings from the last review of this draft are still open. If one still applies to "
+            "the text as it is now, raise it again with the same title and, where they still fit, the same "
+            "wording and diff. Do not reword it as a new point. If the text has changed so that it no longer "
+            "applies, leave it out.\n" + "\n".join(
+                f"- {p['title']}" + (f" (quote: {p['quote'][:120]})" if p["quote"] else "") for p in prev) + "\n")
+
+
+def carry_over(groups, prev, dnorm):
+    """Give each group the key of the earlier finding it repeats, or a new key,
+    and count the reviews it has appeared in. Returns the earlier findings not
+    repeated: {"resolved": passage changed, "dropped": passage unchanged}."""
+    left = list(prev)
+    for g in groups:
+        t, q = norm(g["rep"]["title"]), g["rep"]["quote"]
+        hit = next((p for p in left if norm(p["title"]) == t), None) or next(
+            (p for p in left if q and p["quote"] and quote_overlap(q, p["quote"])), None)
+        if hit:
+            left.remove(hit)
+            g["key"], g["seen"] = hit["key"], hit["seen"] + 1
+            if g["rejected"]:
+                left.append(hit)  # raised again but voted down: not repeated
+        else:
+            g["key"] = "K" + hashlib.sha256((g["rep"]["title"] + q).encode()).hexdigest()[:6]
+            g["seen"] = 1
+    gone = lambda p: p["quote"] and norm(p["quote"])[:60] not in dnorm
+    return {"resolved": [p["title"] for p in left if gone(p)],
+            "dropped": [p["title"] for p in left if not gone(p)]}
 
 
 # ---------------------------------------------------------------- churn
@@ -1856,16 +1948,17 @@ def page_state(path, run):
         edits = locate_edits(text, old, new, rep["quote"]) if old else None
         span = (edits[0][0], edits[-1][1]) if edits else None
         if old is not None and span is None:
-            reason = "the text this diff changes is no longer in the file"
+            reason = "its passage changed after this review. If you already fixed it, mark it done"
         d = decided.get(rep["title"])
         out.append({
             "n": n, "severity": sev, "kind": g.get("kind", ""), "section": where_label, "title": rep["title"], "where": g["where"],
             "point": strip_end(rep["body"]).split("\n\n")[0], "body": strip_end(rep["body"]), "quote": rep["quote"],
             "old": old, "new": new if old is not None else None, "reason": reason,
             "span": list(span or quote_span or []) or None, "applicable": span is not None,
+            "changed": old is not None and span is None,
             "mark": (change_mark(text, span, old, new) if len(edits) == 1
                      else [edits[0][0], edits[0][1]]) if span else None,
-            "tag": vote_tag(g),
+            "tag": vote_tag(g), "seen": g.get("seen", 1),
             "votes": [{"model": labels.get(m, m).split()[0], "vote": v["vote"], "raised": m in g["raised_by"]}
                       for m, v in g["votes"].items()],
             "status": {"applied": "accepted", "ignore": "declined"}.get(d["decision"]) if d else None,
@@ -2237,7 +2330,7 @@ class PageServer:
             return 200, "application/json", json.dumps(st)
         if method == "GET" and route == "/api/ping":
             return 200, "application/json", json.dumps({"file": str(self.path)})
-        if method == "POST" and route in ("/api/accept", "/api/decline"):
+        if method == "POST" and route in ("/api/accept", "/api/decline", "/api/done"):
             run = self.run_folder()
             st = page_state(self.path, run)
             f = next((f for f in st["findings"] if f["n"] == body.get("n")), None)
@@ -2253,9 +2346,18 @@ class PageServer:
                     return 409, "application/json", json.dumps({"error": err})
                 with contextlib.redirect_stdout(io.StringIO()):
                     record_decisions(str(f["n"]), "applied", body.get("note", ""), run)
+            elif route == "/api/done":  # fixed by hand: record it as applied, write nothing
+                with contextlib.redirect_stdout(io.StringIO()):
+                    record_decisions(str(f["n"]), "applied", "fixed by hand", run)
             else:
                 with contextlib.redirect_stdout(io.StringIO()):
                     record_decisions(str(f["n"]), "ignore", body.get("note", ""), run)
+            return 200, "application/json", json.dumps({"ok": True})
+        if method == "POST" and route == "/api/fix":  # a mechanical fix from Checks
+            if body.get("fix") != "spaces":
+                return 400, "application/json", json.dumps({"error": "no such fix"})
+            text = self.path.read_text()
+            self.path.write_text(fix_double_spaces(text))
             return 200, "application/json", json.dumps({"ok": True})
         if method == "POST" and route == "/api/ask":
             run = self.run_folder()

@@ -613,8 +613,52 @@ class MechanicalChecks(unittest.TestCase):
                                "Citation key @Nobody99 is not in the bibliography.",
                                '"multi-model" (1×) and "multimodel" (1×) are both used.'])
 
+    def test_double_spaces(self):
+        text = ("One sentence.  Two words  apart.\n\n| a  | b |\n|---|---|\n\nKeep `x  y` in code.  "
+                "Indented lines keep their indentation.\nHard break at the end  \nnext line.")
+        out = self.run_checks(text)
+        self.assertEqual(out, ["Two or more spaces where one belongs (3×, lines 1, 6)."])
+        fixed = ur.fix_double_spaces(text)
+        self.assertIn("One sentence. Two words apart.", fixed)
+        self.assertIn("| a  | b |", fixed)  # tables are aligned on purpose
+        self.assertIn("`x  y` in code. Indented", fixed)
+        self.assertIn("at the end  \n", fixed)
+
     def test_clean_draft_has_no_checks(self):
         self.assertEqual(self.run_checks("A plain paragraph with no numbering at all."), [])
+
+
+class CarryOver(unittest.TestCase):
+    def group(self, title, quote, rejected=False):
+        return {"rep": {"title": title, "quote": quote}, "rejected": rejected}
+
+    def test_keys_follow_a_repeated_finding(self):
+        prev = [{"key": "Kaaaaaa", "title": "Overclaim in intro", "quote": "The effect is large.", "seen": 2},
+                {"key": "Kbbbbbb", "title": "Vague term", "quote": "many things happen here", "seen": 1},
+                {"key": "Kccccc0", "title": "Missing baseline", "quote": "We beat the baseline easily.", "seen": 1}]
+        same_title = self.group("overclaim in intro", "The effect is big.")
+        same_quote = self.group("A different title", "many things happen here")
+        new = self.group("New point", "Something else entirely here.")
+        dnorm = ur.norm("The effect is big. many things happen here. Something else entirely here.")
+        since = ur.carry_over([same_title, same_quote, new], prev, dnorm)
+        self.assertEqual((same_title["key"], same_title["seen"]), ("Kaaaaaa", 3))
+        self.assertEqual((same_quote["key"], same_quote["seen"]), ("Kbbbbbb", 2))
+        self.assertEqual(new["seen"], 1)
+        self.assertTrue(new["key"].startswith("K"))
+        # The baseline sentence is gone from the draft, so its finding counts as resolved.
+        self.assertEqual(since, {"resolved": ["Missing baseline"], "dropped": []})
+
+    def test_unchanged_passage_not_raised_again_is_dropped(self):
+        prev = [{"key": "Kaaaaaa", "title": "Vague term", "quote": "many things happen here", "seen": 1}]
+        rejected = self.group("Vague term", "many things happen here", rejected=True)
+        since = ur.carry_over([rejected], prev, ur.norm("many things happen here."))
+        self.assertEqual(since, {"resolved": [], "dropped": ["Vague term"]})
+
+    def test_open_block(self):
+        self.assertEqual(ur.open_block([]), "")
+        block = ur.open_block([{"title": "Vague term", "quote": "many things", "key": "K1", "seen": 1}])
+        self.assertIn("Vague term (quote: many things)", block)
+        self.assertIn("same title", block)
 
 
 class Churn(unittest.TestCase):

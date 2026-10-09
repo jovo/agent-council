@@ -72,6 +72,10 @@ The page is served by a small server inside `unified-review`, using only Python'
 - **Contested** means at least one model other than the one that raised it agreed and at least one disagreed.
 - **Agreement** is ordinal Krippendorff's alpha over the votes (agree > partial > disagree), with a bootstrap 95% confidence interval over findings. Each model's votes on its own findings are left out. 1 is full agreement, 0 is chance level. Most votes are "agree", and that imbalance pulls alpha down even when raw agreement is high.
 - A "Failed" line or a warning appears only when a panelist failed or fewer than two models took part.
+- **Typos** come last, as one line each: a fix that changes one word by a letter or two, or removes a doubled word, and that no voter other than the one that raised it disputed. On the review page they sit in their own Typos card, all checked, with one Accept button, and are not highlighted in the draft.
+- **Checks** lists problems the script finds without a model: equation tags out of order or duplicated, references to missing equations or figures, uncited figures, links to missing anchors, citation keys not in the bibliography, and terms written both hyphenated and closed.
+- Each review gives the panel the last review's open findings, so a point that still applies comes back in the same words. A finding shows "(in N reviews)" once it has appeared more than once. **Since the last review** lists earlier findings this review did not repeat: resolved when their passage changed, not raised again when it did not.
+- **Held back to stop churn** lists findings that would restore wording from an earlier version, or change a passage that keeps changing: after one change only Critical and Substantive findings on it show, after two changes in the last three versions only Critical ones.
 
 ## Acting on findings
 
