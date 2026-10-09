@@ -906,6 +906,12 @@ class ReviewPage(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "ELEVENLABS_API_KEY"):
                 ur.transcribe(b"audio", "webm")
 
+    def test_slot_diff_is_placed_but_not_applicable(self):
+        body = "Point.\n\nWe test F1 🟢 **, defined as {{one-line definition}},** on data."
+        self.assertEqual(ur.diff_parts(body)[1], ur.SLOT)
+        old, new = ur.diff_parts(body, slots=True)
+        self.assertEqual((old, new), ("We test F1 on data.", "We test F1, defined as {{one-line definition}}, on data."))
+
     def test_find_span_and_fuzzy(self):
         text = "Records stay local.  The person\u2019s data stays home."
         s = ur.find_span(text, "The person's data stays home.")
@@ -1146,6 +1152,14 @@ class ReviewPage(unittest.TestCase):
                 {"theme": "Logic", "gist": "A step fails.", "findings": [1]}]}))
             self.assertEqual(ur.review_markdown(run), "# draft.md, version 1\n\n## Summary\n\nThe draft's main weaknesses are:\n\n"
                              "- **Logic**: A step fails. (1)\n\n## Critical\n\n### 1. A finding\n")
+
+    def test_review_markdown_says_when_there_is_nothing_to_list(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d)
+            (run / "unified.md").write_text("# draft.md\n\n## Rejected by vote\n\n- A point\n")
+            (run / "summary.json").write_text(json.dumps({"themes": []}))
+            self.assertEqual(ur.review_markdown(run), "# draft.md\n\n## Summary\n\nNo new findings on this version.\n\n"
+                             "## Rejected by vote\n\n- A point\n")
 
     def test_review_markdown_lists_each_themes_findings_after_it(self):
         with tempfile.TemporaryDirectory() as d:

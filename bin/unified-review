@@ -2138,9 +2138,12 @@ DEL = re.compile(r"\*\*~~(.+?)~~\*\*|~~(.+?)~~", re.S)
 ADD = re.compile(r"\*\*🟢\s*(.+?)\*\*|🟢\s*\*\*(.+?)\*\*", re.S)
 
 
-def diff_parts(body):
+SLOT = "the new text has a placeholder to fill in"
+
+
+def diff_parts(body, slots=False):
     """(old, new) text of a finding's diff, or (None, reason) when it has none
-    that can be applied as written."""
+    that can be applied as written. With slots, new text may keep {{…}} slots."""
     body = strip_end(body)
     fence = re.search(r"```[a-z]*\n(.*?)\n```", body, re.S)
     if fence and ("~~" in fence.group(1) or "🟢" in fence.group(1)):
@@ -2165,14 +2168,18 @@ def diff_parts(body):
     # leave a space before punctuation. The old text keeps its punctuation as is.
     spaces = lambda t: re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t]{2,}", " ", t)).strip()
     old, new = spaces(old), spaces(re.sub(r"[ \t]+\n", "\n", re.sub(r" +([.,;:])", r"\1", new)))
-    if "{{" in new or re.search(r"\[[^\]@]*(name|key|insert|N\b|M\b)[^\]]*\]", new, re.I):
-        return None, "the new text has a placeholder to fill in"
+    if not slots and has_slot(new):
+        return None, SLOT
     if old == new:
         return None, "the change only removes spaces at the end of a line, which Markdown does not show"
     return old, new
 
 
-def lenient_diff(body):
+def has_slot(new):
+    return "{{" in new or bool(re.search(r"\[[^\]@]*(name|key|insert|N\b|M\b)[^\]]*\]", new, re.I))
+
+
+def lenient_diff(body, slots=False):
     """The diff as diff_parts reads it after fixing two slips reviewers make in
     a diff paragraph: an addition bolded without 🟢, and 🟢 without bold (taken
     to the end of its line)."""
@@ -2186,16 +2193,16 @@ def lenient_diff(body):
         para = re.sub(r"🟢[ \t]*([^\n\0]+)", lambda m: f"🟢 **{m[1].rstrip()}**", para)
         return re.sub(r"\0(\d+)\0", lambda m: keep[int(m[1])], para)
     head, *rest = strip_end(body).split("\n\n")
-    return diff_parts("\n\n".join([head] + [fix(x) for x in rest]))
+    return diff_parts("\n\n".join([head] + [fix(x) for x in rest]), slots)
 
 
-def placed_diff(text, body, quote):
+def placed_diff(text, body, quote, slots=False):
     """(old, new, edits) for a finding's diff in text. When the diff as written
     cannot be placed, tries it with lenient_diff's fixes."""
-    old, new = diff_parts(body)
+    old, new = diff_parts(body, slots)
     edits = locate_edits(text, old, new, quote) if old else None
     if old is not None and not edits:
-        o, n = lenient_diff(body)
+        o, n = lenient_diff(body, slots)
         e = locate_edits(text, o, n, quote) if o else None
         if e:
             return o, n, e
@@ -2330,12 +2337,15 @@ def page_state(path, run):
     out = []
     for n, sev, where_label, g in ordered_findings(r):
         rep = g["rep"]
-        old, new, edits = placed_diff(text, rep["body"], rep["quote"])
+        # A {{…}} slot is placed like any change, so Edit can fill it in, but it cannot be accepted as is.
+        old, new, edits = placed_diff(text, rep["body"], rep["quote"], slots=True)
         reason = None if old is not None else new
         quote_span = find_span(text, rep["quote"]) if rep["quote"] else None
         span = (edits[0][0], edits[-1][1]) if edits else None
         if old is not None and span is None:
             reason = unplaced_reason(text, reviewed_text(run, path), old, new, rep["quote"])
+        elif span and has_slot(new):
+            reason = SLOT
         d = decided.get(rep["title"])
         if d is None and span is None and rep["quote"]:
             # The same sentence was accepted or declined from an earlier review: that settles it.
@@ -2353,7 +2363,8 @@ def page_state(path, run):
             "n": n, "severity": sev, "kind": g.get("kind", ""), "section": where_label, "title": rep["title"], "where": g["where"],
             "point": strip_end(rep["body"]).split("\n\n")[0], "body": strip_end(rep["body"]), "quote": rep["quote"],
             "old": old, "new": new if old is not None else None, "reason": reason,
-            "span": list(span or quote_span or []) or None, "applicable": span is not None,
+            "span": list(span or quote_span or []) or None, "editable": span is not None,
+            "applicable": span is not None and not has_slot(new or ""),
             "changed": old is not None and span is None,
             "mark": (change_mark(text, span, old, new) if len(edits) == 1
                      else [edits[0][0], edits[0][1]]) if span else None,
@@ -2903,6 +2914,8 @@ class PageServer:
                 new = body.get("text", f["new"])
                 if old is None:
                     return 409, "application/json", json.dumps({"error": f["reason"]})
+                if has_slot(new):
+                    return 409, "application/json", json.dumps({"error": "Fill in the {{…}} placeholder first."})
                 err = apply_change(self.path, old, new, f["quote"])
                 if err:
                     return 409, "application/json", json.dumps({"error": err})
@@ -3089,9 +3102,9 @@ def review_markdown(run):
     rest = [n for n in ns if n not in used]
     if rest:
         themes.append(("Other", "", sorted(rest)))
-    block = "## Summary\n\nThe draft's main weaknesses are:\n\n" + "".join(
+    block = "## Summary\n\n" + ("The draft's main weaknesses are:\n\n" + "".join(
         f"- **{name}**" + (f": {gist}" if gist else "") + f" ({', '.join(map(str, fs))})\n"
-        for name, gist, fs in themes)
+        for name, gist, fs in themes) if themes else "No new findings on this version.\n")
     title, _, rest = md.partition("\n")
     return f"{title}\n\n{block}\n{rest.lstrip(chr(10))}"
 

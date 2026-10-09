@@ -420,13 +420,13 @@ function renderCard() {
   if (!f.status) {
     if (mode === "edit") actions = `<textarea id="edtext">${esc(f.new || "")}</textarea><div class="row" style="margin-top:8px"><button id="save">Apply edited text</button><button id="cancel">Cancel</button></div>`;
     else if (mode === "ask") actions = `<textarea id="qtext" placeholder="Why this change? Would this alternative work?" style="min-height:70px"></textarea><div class="row" style="margin-top:8px"><button id="send">Ask all panelists</button><button id="cancel">Cancel</button><span class="meta">⌘Enter sends</span></div>`;
-    else actions = (f.applicable ? `<button id="acc">Accept</button> <button id="edt">Edit</button> ` : "") + `<button id="dec">Decline</button> <button id="ask">Ask</button>` + (f.applicable ? "" : ` <button id="copy">Copy for agent</button>`);
+    else actions = (f.applicable ? `<button id="acc">Accept</button> ` : "") + (f.editable ? `<button id="edt">Edit</button> ` : "") + `<button id="dec">Decline</button> <button id="ask">Ask</button>` + (f.editable ? "" : ` <button id="copy" title="Copy a one-line request to paste into Claude Code or Codex, which can make this change">Copy for agent</button>`);
   }
   el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity}${f.kind ? " · " + kindOf(f) : ""} · ${esc(f.section)} · ${f.tag}</div>
     <div class="title">${esc(f.title)}</div><p class="point">${inline(pointOf(f))}</p>
     ${f.body.includes("~~") || f.body.includes("🟢") ? `<div class="diff">${f.old != null && f.new != null ? revHtml(f) : diffHtml(f.body)}</div>` : ""}
     <div class="votes">${votes}</div>
-    ${!f.status && !f.applicable ? `<p class="reason">Cannot apply here: ${esc(f.reason || "it is about the whole draft")}.</p>` : ""}
+    ${!f.status && !f.applicable ? `<p class="reason">${f.editable ? "Fill in the {{…}} with Edit, then apply it." : `Cannot apply here: ${esc(f.reason || "it is about the whole draft")}.`}</p>` : ""}
     ${!f.status && f.changed ? `<div class="row" style="margin-bottom:6px"><button id="done">Mark done</button></div>` : ""}
     <div class="row">${actions}</div>
     ${f.status ? `<div class="status ${f.status}">${f.note.startsWith("Done: ") ? esc(f.note) : f.status === "accepted" ? (f.note === "fixed by hand" ? "Done: fixed by hand" : "Accepted and written to the file") : "Declined" + (f.note ? ": " + esc(f.note) : "")}</div>` : ""}
@@ -532,7 +532,8 @@ function renderSummary() {
     const themes = sm.themes.map(t => ({...t, fs: t.findings.filter(n => byN[n] && !used.has(n) && used.add(n)).map(n => byN[n])}));
     const rest = S.findings.filter(f => !used.has(f.n));
     if (rest.length) themes.push({theme: "Other", gist: "", fs: rest});
-    body = `<p style="margin:8px 0">The draft's main weaknesses are:</p>` +
+    body = !themes.some(t => t.fs.length) ? `<p style="margin:8px 0">No new findings on this version.</p>`
+      : `<p style="margin:8px 0">The draft's main weaknesses are:</p>` +
       `<ul class="themes">${themes.filter(t => t.fs.length).map(t => `<li><details data-theme="${esc(t.theme)}"${openThemes.has(t.theme) ? " open" : ""}><summary><b>${esc(t.theme)}</b>${t.gist ? `: ${esc(t.gist)}` : ""}</summary>${outline(t.fs)}</details></li>`).join("")}</ul>`;
   } else {
     body = (sm.status === "pending" ? `<div class="meta" style="margin:8px 0">Grouping the reviews by theme…</div>`
@@ -748,7 +749,7 @@ document.addEventListener("keydown", e => {
   if (e.key === "j" && i < vis.length - 1) select(vis[i + 1].n, true);
   else if (e.key === "k" && i > 0) select(vis[i - 1].n, true);
   else if (e.key === "a" && f && !f.status && f.applicable) act("/api/accept", {n: f.n});
-  else if (e.key === "e" && f && !f.status && f.applicable) { mode = "edit"; renderCard(); }
+  else if (e.key === "e" && f && !f.status && f.editable) { mode = "edit"; renderCard(); }
   else if (e.key === "d" && f && !f.status) act("/api/decline", {n: f.n, note: ""});
   else if (e.key === "q" && f && !f.status) { e.preventDefault(); mode = "ask"; renderCard(); document.getElementById("qtext").focus(); }
 });
