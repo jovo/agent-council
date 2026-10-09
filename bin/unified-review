@@ -1,29 +1,36 @@
 #!/usr/bin/env python3
 """unified-review: a panel of models from different labs reviews a draft, then
-votes on every finding. unified.md gives an overview, then the findings in the
-order of the draft, each with its votes. An optional web fact-check runs in the
-background and writes factcheck.md, also in draft order.
+votes on every finding. For one Markdown file, a local review page opens with
+the draft and each finding in place, where Accept writes a change into the
+file. unified.md gives the findings by severity, then in draft order, each with
+its votes. An optional web fact-check runs in the background and writes
+factcheck.md.
 
-Usage: unified-review [-o OUTDIR] [-n FOCUS] [-p PANEL] [--context FILE]... [--verify] FILE [FILE...]
+Usage: unified-review [-o OUTDIR] [-n FOCUS] [-p PANEL] [--context FILE]... [--verify] [--rules FILE] FILE [FILE...]
+       unified-review --page FILE                  open the review page for a file
        unified-review --item 3,7,K2 [--run DIR]   print items to act on
        unified-review --ignore 5,7 [--note WHY]    record declined findings
        unified-review --applied 3                  record applied findings
        unified-review --unignore D2                lift a past decline
        unified-review --decisions                  list decisions for this folder
+       unified-review --snapshot FILE              save FILE as FILE-v<N> beside it
+       unified-review --changes N FILE             write every change since version N
   -o OUTDIR  where to write output (default: <project>-<file>-v<N> under
              ~/.local/share/unified-review/runs, or $UNIFIED_REVIEW_RUNS)
   -n FOCUS   extra instructions appended to the reviewer prompt
   --context FILE  supporting material the panel reads but does not review
              (reviewer comments, a call, a source paper). Text or PDF. Repeatable.
-  -p PANEL   comma-separated panel (default: claude,gpt,gemini).
-             Known: claude, gpt, gemini, grok
+  -p PANEL   comma-separated panel (default: claude,gpt,gemini). Short names
+             claude, gpt, gemini, grok, or harness:model[@effort], such as
+             claude:opus or codex:gpt-5.6-luna@medium or cursor:kimi-k3-low
   --verify   also fact-check the draft's claims with web search (background)
 
 Foreground:
   1. review   each panelist reviews the draft, no web search
   2. vote     each panelist votes on every finding, reviewers anonymized
-  3. render   this script groups duplicates, sets aside findings most voters
-              reject, writes unified.md in draft order, and opens it.
+  3. merge    this script groups duplicates, sets aside findings most voters
+              reject, runs mechanical checks, writes unified.md, and opens the
+              review page (one Markdown file) or unified.md.
 Background (only with --verify; detached, started first):
   4. claims   the first panelist lists the draft's checkable claims
   5. verify   each panelist checks every claim with web search, using

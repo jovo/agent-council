@@ -1,124 +1,154 @@
 # agent-council
 
-agent-council has models from different labs review the same document, vote on each other's findings, and merge the result into one review you read top to bottom. It drives the coding-agent CLIs you already use (Claude Code, Codex, and Cursor), so it needs no API keys beyond your existing logins.
+[![Tests](https://github.com/jovo/agent-council/actions/workflows/tests.yml/badge.svg)](https://github.com/jovo/agent-council/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/github/license/jovo/agent-council)](LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/jovo/agent-council)](https://github.com/jovo/agent-council/commits/main)
+![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
+![macOS | Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Dependencies: standard library](https://img.shields.io/badge/dependencies-standard%20library-brightgreen)
+![Panel: Claude, GPT, Gemini](https://img.shields.io/badge/panel-Claude%20%C2%B7%20GPT%20%C2%B7%20Gemini-8A2BE2)
+![Runs through Claude Code, Codex, Cursor](https://img.shields.io/badge/runs%20through-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Cursor-blue)
+![API keys: none](https://img.shields.io/badge/API%20keys-none-success)
 
-The command is `unified-review`. A skill of the same name lets Claude Code, Codex, and Cursor run it and act on its findings by number ("address 3", "apply 2, 4, 7", "fix K5").
+agent-council has models from three labs review the same draft, vote on each other's findings, and merge them into one review. You work through the review in a local web page that shows your draft with each finding highlighted in place. **Accept** writes the change into your file.
+
+It drives the coding-agent CLIs you already use (Claude Code, Codex, and Cursor), so it runs on your existing subscriptions and needs no API keys. The command is `unified-review`. The repo also holds the writing skills its reviewers apply, and the house style for PDFs and slide decks.
+
+## Quick start
+
+```
+git clone https://github.com/jovo/agent-council
+cd agent-council
+./install.sh
+unified-review memo.md
+```
+
+A review of a 1,300-word memo takes 40 to 120 seconds. For a Markdown file, the review page then opens in your browser. Click a highlighted passage to see its finding, then Accept, Edit, or Decline it. Click **Update** to review the revised text. [Install](#install) lists what you need first.
 
 ## Why a panel that votes
 
-A single model reviewing a draft misses things another model catches. A single model merging several reviews favors its own findings. LLM evaluators recognize their own outputs and rate them higher (Panickssery et al. 2024, [arXiv:2404.13076](https://arxiv.org/abs/2404.13076)). A panel of judges from different model families tracks human judgments more closely than one large judge and shows less intra-model bias (Verga et al. 2024, [arXiv:2404.18796](https://arxiv.org/abs/2404.18796)).
+A single model reviewing a draft misses things another model catches. A single model merging several reviews favors its own findings: LLM evaluators recognize their own outputs and rate them higher (Panickssery et al. 2024, [arXiv:2404.13076](https://arxiv.org/abs/2404.13076)). A panel of judges from different model families tracks human judgments more closely than one large judge and shows less intra-model bias (Verga et al. 2024, [arXiv:2404.18796](https://arxiv.org/abs/2404.18796)).
 
-So agent-council does not let any one model decide. Each model reviews independently. Every model then votes on every finding, with reviewers anonymized. The script, not a model, groups duplicates and sets aside findings most voters reject. Andrej Karpathy's [llm-council](https://github.com/karpathy/llm-council) is a precursor to this.
+So no single model decides. Each model reviews independently. Every model then votes on every finding, with reviewers anonymized, and a model's vote on its own finding is shown but not counted. The script, not a model, groups duplicates and sets aside findings most voters reject. Andrej Karpathy's [llm-council](https://github.com/karpathy/llm-council) is a precursor.
 
-## How it works
+That design follows the evidence above, but it has not been tested on its own output yet. No benchmark shows how many real errors the panel catches, or whether majority rejection sets aside real ones. [research/competitors-2026-10.md](research/competitors-2026-10.md) compares agent-council with other review tools and lists ways to measure it.
+
+## The review page
+
+The page shows the current draft, set in New Computer Modern like the PDFs and decks. Front matter and HTML-only lines are hidden, and tables are drawn as tables. Bold, italics, links, and lists render as in the PDFs: cross-references and URLs in blue, citations in green, and nested bullets as filled disc, open circle, and filled square. Citations show as numbers linked to a References list below the draft, formatted by pandoc in the PLOS style the book uses (`typeset/plos.csl`), with DOIs linked. Each finding is highlighted by severity on the words its change touches. The card for the selected finding shows its type, point, diff, and votes. Clicking the card scrolls the draft to its passage.
+
+**Acting on a finding**
+
+- **Accept** writes the change into the file and records it as applied. It re-reads the file first and finds the passage, allowing for small misquotes by the reviewers. If you have since changed that passage, it refuses and leaves the file alone. A diff that skips text with "…" applies part by part and keeps the skipped text.
+- **Edit** lets you change the proposed text before writing it. **Decline** records the decision with an optional note, and later reviews do not raise that point again while its text stands.
+- **Mark done** appears when the passage changed after the review, for a finding you already fixed by hand. It records the finding as applied without writing anything.
+- **Ask** sends a question about the finding to every panelist in parallel. Answers appear as each model finishes. An answer that revises the change gets its own **Accept this version**.
+- A finding with no exact diff, such as one about the whole draft, cannot be accepted. Its card says why and copies a request you can paste to an agent.
+
+**Typos and checks**
+
+- **Typos** are fixes that change one word by a letter or two, or remove a doubled word, that no voter other than the one that raised them disputed. They are listed together in their own card, all checked, with one Accept, and are not highlighted in the draft.
+- **Checks** lists problems the script finds without a model: equation tags out of order or duplicated, references to missing equations or figures, uncited figures, links to missing anchors, citation keys not in the bibliography, terms written both hyphenated and closed, and double spaces. Double spaces have a **Fix** button. Checks are recomputed from the current text each time the page loads.
+
+**Choosing what to see**
+
+- When a review has open logic findings, the page shows only those at first, since a passage whose argument fails may be rewritten anyway. A banner says so and links to everything.
+- Dropdowns filter by type (logic, evidence, clarity, style), severity, agreement (unanimous, majority, contested), and status. **Accept all shown** applies every open finding the filters select.
+- A finding the panel has raised before shows "in N reviews".
+
+**Working on the whole draft**
+
+- **Ask** beside **Accept all shown** sends a question, comment, or request about the whole draft ("tighten the wedge section") to every panelist. Edits they propose appear with their own Accept. Tick "Use as focus for the next Update" to pass the comment to the next review.
+- Double-click any paragraph, heading, or table to edit its Markdown in place. Save writes it back, unless it changed in the file since the page loaded.
+- **Panel** chooses the models for Update and Ask, saved per file. Its menu lists models by lab, model, version, and setting: those Claude Code and Codex run directly, and every model `cursor-agent models` lists.
+- **Update** runs a new review of the current text and loads it. The header gives when the review ran and says "edited since" once the file differs.
+- Keys: `j` and `k` move between findings, `a` accepts, `e` edits, `d` declines, `q` asks, and ⌘Enter saves an edit or sends a question.
+
+The page is served by a small server inside `unified-review`, using only Python's standard library. It listens only on your machine, serves one file, and exits after 8 hours without use. `unified-review --page FILE` reopens it.
+
+## How a review runs
 
 ```
 unified-review [-n FOCUS] [-p PANEL] [--context FILE]... [--verify] [--rules FILE] [-o OUTDIR] FILE [FILE...]
 ```
 
-Before starting, the script checks that each CLI is installed and logged in, using its status command. A panelist whose CLI is missing or logged out is dropped and listed as failed in `unified.md`, so a model never drops out silently.
+1. **Preflight.** The script checks that each CLI is installed and logged in. A panelist that is missing or logged out is dropped and listed as failed, never silently.
+2. **Review.** Each panelist reviews the draft without web search and returns findings in a fixed format: severity (Critical, Substantive, Polish), kind (logic, evidence, clarity, style), title, the exact text targeted, the point, and an inline diff. A reviewer that finds nothing worth changing says so. Each review also receives the last review's open findings, so a point that still applies comes back in the same words, and the points you declined or applied.
+3. **Vote.** Each panelist votes agree, partial, or disagree on every finding, sees reviewers only as A, B, and C, flags duplicates, and votes on severity and kind.
+4. **Merge.** The script groups duplicates (two voters calling them duplicates, or one voter plus overlapping quoted text) and keeps the best-voted version of each. It sets aside findings a majority rejects, and takes the median severity and majority kind, leaving out the raiser's own vote. It holds back findings that would restore earlier wording, or change a passage that keeps changing: after one change, only Critical and Substantive findings on that passage show, and after two changes in the last three versions, only Critical ones. It then runs the checks and writes `unified.md`.
+5. **Fact-check (optional, `--verify`).** A background process lists the draft's checkable claims, has each panelist check them with web search, keeps the most cautious verdict per claim, and writes `factcheck.md`. A claim the last fact-check confirmed keeps that verdict while its sentence is unchanged.
 
-`--context FILE` adds supporting material that every panelist reads but does not review, such as reviewer comments, a call for proposals, or a source paper. Text files and PDFs work (PDFs through `pdftotext`). Very long material is trimmed to fit the prompt. Voters see it too, and a finding that quotes it is listed under the focus or supporting material.
+A model call that times out, errors, or returns nothing gets one retry, except after a login error, and so does a reply in the wrong format.
 
-A file to review can be a PDF. If it is plain prose, the panel gets its text (from `pdftotext`). If it has anything the text would lose, such as figures, images, ruled tables, or equations, each panelist opens the PDF itself. Findings on a PDF cite page numbers, and edits go in its source document. The check needs Ghostscript and poppler (`brew install ghostscript poppler`).
+The default panel is one model per lab, chosen for speed: Claude Sonnet (via `claude`), GPT-5.6 Luna at low effort (via `codex`), and Gemini 3.8 Flash Low (via `cursor-agent`). If a panelist fails, Grok 4.7 Low Fast (via `cursor-agent`) stands in, so three models still vote. Grok cannot stand in for Gemini when `cursor-agent` itself is down. The fact-check uses stronger Claude and GPT models, since it runs in the background. Choose other models with `-p`, for example `-p claude:opus,codex:gpt-5.6-luna@medium,cursor:kimi-k3-low`, or with **Panel** on the page.
 
-1. **Review.** Each panelist reviews the draft without web search. Findings come back in a fixed format: severity, kind, title, the exact text targeted, then the point and an inline diff. The kind is logic (a step that does not follow, or an inference the evidence does not support), evidence (an unsupported or wrong factual claim), clarity, or style. Voters vote on the kind too, and each finding takes the majority's.
-2. **Vote.** Each panelist votes agree, partial, or disagree on every finding, sees reviewers only as A, B, C, and flags duplicates.
-A model call that times out, errors, or returns nothing gets one retry, except after a login error. A login error is recognized only from the CLI's own messages at the end of its log ("not logged in", "401 Unauthorized", and the like), since CLIs copy the prompt into that log and a draft may say "authorized" or "log in" anywhere. A reply in the wrong format also gets one retry.
+A review adds no per-call cost, since the CLIs run on their subscriptions. An October 2026 test of cheaper pay-per-token models on the same memo found none that replaced the panel. DeepSeek V4 Flash and gpt-oss-120b on Together AI cost about $0.004 per model per round. They returned 3 and 6 findings, where the panel's models returned 5 to 21, and 2 of gpt-oss-120b's 6 quotes did not match the draft. Open-weight models through `cursor-agent` (GLM 5.2, Kimi K3) took 60 to 270 seconds per review, against 13 to 22 for Gemini and GPT.
 
-3. **Render.** The script groups duplicates (two voters calling them duplicates, or one voter plus overlapping quoted text), keeps the best-voted version of each, sets aside findings a majority rejects, and writes `unified.md`. For one Markdown file, the [review page](#the-review-page) opens in your browser. Otherwise `unified.md` opens where you ran the command: in Cursor or VS Code if you ran it there, in your default Markdown app from a terminal. Inside the Claude or Codex app, the script prints `OPEN IN APP: <path>` and the skill has the agent show the file. Set `UNIFIED_REVIEW_OPEN_APP` to always use one app.
-4. **Fact-check (optional, `--verify`).** A detached background process lists the draft's checkable claims, has each panelist check them with web search, keeps the most cautious verdict per claim, writes `factcheck.md`, and opens it. A claim that the last fact-check of the same file confirmed, with its sentence unchanged, keeps that verdict and is marked as carried over instead of being checked again. Everything else is checked from scratch.
+## What you can review
 
-The default panel is one model per lab, chosen for speed: Claude Sonnet (via `claude`), GPT-5.6 Luna at low effort (via `codex`), and Gemini 3.8 Flash Low (via `cursor-agent`). If a panelist is unavailable or fails to review or vote, Grok 4.7 Low Fast (via `cursor-agent`) stands in, so three models still vote and ties can be broken. Grok cannot stand in for Gemini when `cursor-agent` itself is down, since both run through it. The fact-check uses stronger Claude and GPT models, since it runs in the background. Edit `PANELISTS` and `FACTCHECK_PANELISTS` at the top of `bin/unified-review` to change them.
-
-The panel runs on the CLIs' subscriptions, so a review adds no per-call cost. An October 2026 test compared cheaper pay-per-token models with this panel on the same memo. None replaced it. On Together AI, DeepSeek V4 Flash and gpt-oss-120b cost about $0.004 per model per round and answered in 20 to 65 seconds, but returned 3 and 6 findings where the panel's models returned 5 to 21, and 2 of gpt-oss-120b's 6 quotes did not match the draft. Open-weight models served through `cursor-agent` (GLM 5.2, Kimi K3) took 60 to 270 seconds per review, against 13 to 22 seconds for Gemini and GPT.
-
-On one 1,300-word memo, a review took 40 to 120 seconds and the fact-check about 2 more minutes. Times depend on the models, the draft, and the providers' load.
+- **Markdown** gets the full treatment: the page, checks, carry-over, and churn guards. Several files can be reviewed together, and the review then goes to `unified.md` only.
+- **PDF.** A plain-prose PDF reaches the panel as text. One with figures, images, ruled tables, or equations is opened by each panelist directly. Findings cite pages, and edits go in the source document. This needs Ghostscript and poppler (`brew install ghostscript poppler`).
+- **Supporting material** (`--context FILE`, repeatable): reviewer comments, a call for proposals, or a source paper that every panelist and voter reads but does not review. Text or PDF.
+- **Focus** (`-n "..."`): extra instructions for this review.
+- **Review rules.** The first found wins: `--rules FILE`, then `$UNIFIED_REVIEW_RULES`, then the `# Writing and review guidelines` section of `~/.claude/CLAUDE.md`, then the same section of this repo's [`CLAUDE.md`](CLAUDE.md). The script reads `~/.claude/CLAUDE.md` as plain text and does not follow its `@` imports. Reviewers also apply the `logic`, `statistics`, `figures`, and `documents` skills. The script tells reviewers to ignore any cap on findings or ordering rule, because it orders findings itself.
 
 ## Output
 
-Each run writes a folder under `~/.local/share/unified-review/runs/`, outside every project, named `<date>-<time>-<project>-<file>-v<N>`, such as `2026-10-08-1342-myproject-memo-v7`, so the folders sort by when each run was made, with `-run2` for a second run in the same minute, so nothing is added to the project you review. Set `UNIFIED_REVIEW_RUNS` to put runs elsewhere. Each run folder holds:
+Each run writes a folder under `~/.local/share/unified-review/runs/` (or `$UNIFIED_REVIEW_RUNS`), outside the project, named `<date>-<time>-<project>-<file>-v<N>`, such as `2026-10-08-1342-myproject-memo-v7`. Versions count up like SVN revisions: version 1 is the first text of a file reviewed, and unchanged text keeps its number. Each folder holds:
 
-- `unified.md`: the review. See [Reading unified.md](#reading-unifiedmd).
-- `factcheck.md` (with `--verify`): each claim in draft order, with its sentence, each checker's verdict, notes, and sources.
-- `reviewed/`: an exact copy of the text reviewed. The title of `unified.md` gives its version number, and `results.json` its fingerprint and git commit.
-- `results.json`, `factcheck.json`: findings, votes, groups, verdicts, and per-stage timings.
+- `unified.md`: the review.
+- `factcheck.md` (with `--verify`): each claim in draft order, with each checker's verdict, notes, and sources.
+- `reviewed/`: an exact copy of the text reviewed.
+- `results.json`, `factcheck.json`: findings, votes, groups, verdicts, checks, the text's fingerprint and git commit, and per-stage timings.
 - `review-<model>.md`, `votes-<model>.txt`, `*.err`: raw panel output and logs.
 
-## The review page
+`unified.md` gives findings by severity. Within each severity, findings about the whole draft come first, then findings in draft order, then findings about the focus material. Each shows its section, file, and line, the quoted text, the point, an inline diff (~~deleted~~ and 🟢 **added**), and the votes, as in `Claude ✓ · **GPT** ✓ · Gemini ~` (✓ agree, ~ partial, ✗ disagree, bold for the model that raised it). **Contested** means at least one model other than the raiser agreed and at least one disagreed. Then come these sections, each only when it has entries:
 
-For one Markdown file, `unified-review` opens a local page in your browser (`http://127.0.0.1:<port>/`). It shows the current draft, set in New Computer Modern like the PDFs and decks, with front matter and HTML-only lines hidden and tables drawn as tables. Each finding is highlighted in place by severity, on the words its change replaces or deletes, or on the word before an insertion. A card shows the selected finding: its type, point, diff, and votes. Clicking a card scrolls the draft to its passage.
+- **Since the last review:** earlier findings this review did not repeat, resolved if their passage changed.
+- **Checks** and **Typos**, as on the page.
+- **Previously declined:** new findings that match a point you declined.
+- **Held back to stop churn**, with the reason for each.
+- **Rejected by vote**, with each disagreeing voter's reason.
+- **Agreement:** ordinal Krippendorff's alpha over the votes, with a bootstrap 95% confidence interval over findings, leaving out each model's votes on its own findings. Most votes are "agree", and that imbalance pulls alpha down even when raw agreement is high.
 
-- **Logic first.** When a review has open logic findings, the page opens showing only those, Critical first, since a passage whose argument fails may be rewritten anyway. Once none are open, it shows everything, ordered by severity. A banner says so, with a link to show everything at once. A review made before findings had types says it has none.
-- **Accept** writes the change into the file and records it as applied. **Edit** lets you change the proposed text first. **Decline** records the decision with an optional note. These are the same records `--applied` and `--ignore` write. Before writing, Accept re-reads the file and finds the passage the change targets, allowing for small misquotes by the reviewers. If you have since changed that passage, it refuses and leaves the file alone.
-- A diff that skips text with "…" applies part by part: the text on each side of the ellipsis is found in order and changed, and the skipped text is kept. If any part is missing, Accept refuses.
-- A finding with no exact diff, such as one about the whole draft or one whose new text has a blank to fill in, cannot be accepted on the page. Its card says why and copies a request you can paste to an agent.
-- **Ask** on a card sends a question about that finding to every panelist in parallel, with the draft, the finding, its votes, and earlier questions. Answers appear as each model finishes, marked with the model that raised the finding. An answer that revises the change gets its own **Accept this version**.
-- **Ask** beside **Accept all shown** opens a box at the top of the right column for a question, comment, or request about the whole draft ("tighten the wedge section"). Each panelist answers, and any edits it proposes appear as changes with their own Accept. Tick "Use as focus for the next Update" to pass the comment to the next review as its focus (`-n`). Questions and comments are saved in the run folder, and a failed answer gives the reason.
-- Dropdowns select findings by type (logic, evidence, clarity, style), severity, agreement (unanimous, majority, contested), and status. **Accept all shown** applies every open finding they select.
-- Double-click any paragraph, heading, or table to edit its Markdown in place. Save writes it back, unless it changed in the file since the page loaded.
-- **Panel** in the header chooses the models for Update and Ask, saved per file. Its Add menu cascades by lab, model family, and variant: the models Claude Code and Codex run directly, and every model `cursor-agent models` lists (Gemini, Grok, Kimi, GLM, and others). Reset to default restores Claude Sonnet, GPT-5.6 Luna, and Gemini 3.8 Flash Low. On the command line the same choices are `-p claude:opus,codex:gpt-5.6-luna@medium,cursor:kimi-k3-low`, alongside the short names.
-- **Update** runs a new review of the current text and loads it into the page. The header gives when the review ran and says "edited since" once the file differs.
-- Keys: `j` and `k` move between findings, `a` accepts, `e` edits, `d` declines, `q` asks, and ⌘Enter saves an edit or sends a question.
+For one Markdown file the page opens. Otherwise `unified.md` opens in Cursor or VS Code if you ran the command there, or in your default Markdown app. Inside the Claude or Codex app, the script prints `OPEN IN APP: <path>`. Set `UNIFIED_REVIEW_OPEN_APP` to always use one app.
 
-The page is served by a small server inside `unified-review`, using only Python's standard library. It listens only on your machine, serves one file, and exits after 8 hours without use. `unified-review --page FILE` reopens it.
+## Working with agents
 
-## Reading unified.md
-
-- The title is the reviewed file, its version number, and the date and time the run started. Versions count up like SVN revisions: version 1 is the first text of that file reviewed, version 2 the next different text, and unchanged text keeps its number. `versions.json` in that runs folder maps each version to a fingerprint of the exact text. `reviewed/` in the run folder holds a copy of that text, and `results.json` records the fingerprint, git commit, and whether there were uncommitted edits.
-- Findings are grouped by severity: Critical, then Substantive, then Polish. Within each group, findings about the whole draft come first, then findings in the order of the draft, then findings about any focus material (`-n`). Each finding shows its draft section, file, and line. Findings most voters rejected come last, with their reasons.
-- Each finding is the best-voted version among duplicates. It shows the file and line, the quoted text, the point, an inline diff (~~deleted~~ and 🟢 **added**), and a line of votes such as `Claude ✓ · **GPT** ✓ · Gemini ~`: ✓ agree, ~ partial, ✗ disagree, bold for the model that raised the point.
-- A model's vote on a finding its own review raised is shown but not counted: it does not decide whether the finding is kept, its severity, or its label, since models favor their own text.
-- **Contested** means at least one model other than the one that raised it agreed and at least one disagreed.
-- **Agreement** is ordinal Krippendorff's alpha over the votes (agree > partial > disagree), with a bootstrap 95% confidence interval over findings. Each model's votes on its own findings are left out. 1 is full agreement, 0 is chance level. Most votes are "agree", and that imbalance pulls alpha down even when raw agreement is high.
-- A "Failed" line or a warning appears only when a panelist failed or fewer than two models took part.
-- **Typos** come last, as one line each: a fix that changes one word by a letter or two, or removes a doubled word, and that no voter other than the one that raised it disputed. On the review page they sit in their own Typos card, all checked, with one Accept button, and are not highlighted in the draft.
-- **Checks** lists problems the script finds without a model: equation tags out of order or duplicated, references to missing equations or figures, uncited figures, links to missing anchors, citation keys not in the bibliography, and terms written both hyphenated and closed.
-- Each review gives the panel the last review's open findings, so a point that still applies comes back in the same words. A finding shows "(in N reviews)" once it has appeared more than once. **Since the last review** lists earlier findings this review did not repeat: resolved when their passage changed, not raised again when it did not.
-- **Held back to stop churn** lists findings that would restore wording from an earlier version, or change a passage that keeps changing: after one change only Critical and Substantive findings on it show, after two changes in the last three versions only Critical ones.
-
-## Acting on findings
+The `unified-review` skill lets Claude Code, Codex, and Cursor run a review and act on its findings by number ("address 3", "apply 2, 4, 7", "fix K5"). Before an agent edits, it runs:
 
 ```
 unified-review --item 3,7,K2 [--run DIR]
 ```
 
-This prints the items from the newest run that reviewed a file in the current folder (else the last run made): the reviewed file's full path, whether it has changed since the review, each item's current line, the quoted text, the votes, the diff, and the whole current file with line numbers. The skill tells agents to run it before giving an opinion on an item or editing, so they work from the current text.
+This prints the items from the newest run for a file in the current folder: the file's path, whether it changed since the review, each item's current line, the quoted text, votes, and diff, and the whole current file with line numbers.
 
-To iterate, ask an agent to "iterate on FILE" (3 rounds by default) or "iterate 5 rounds". Each round it reviews, applies findings every voter agreed with plus Critical and Substantive findings a majority agreed with, records the rest as declined, and reviews again. It stops early when nothing qualifies, then lists the contested and whole-draft findings it skipped for you to decide. Each version is saved beside the file as `memo-v7.md`, `memo-v8.md`, and so on, with a pattern added to the repository's `.gitignore`. At the end, `memo-v7-to-v10.md` opens with every change since the start, ~~deleted~~ and 🟢 **added**, under its section heading. The two commands the loop uses also work alone:
+To iterate, ask an agent to "iterate on FILE" (3 rounds by default) or "iterate 5 rounds". Each round reviews, applies findings every voter agreed with plus Critical and Substantive findings a majority agreed with, records the rest as declined, and reviews again. It stops early when nothing qualifies, then lists the contested and whole-draft findings it skipped. Each version is saved beside the file as `memo-v7.md`, `memo-v8.md`, and so on, with a pattern added to `.gitignore`, and `memo-v7-to-v10.md` shows every change since the start. The loop uses `unified-review --snapshot FILE` and `unified-review --changes N FILE`, which also work alone.
 
-```
-unified-review --snapshot FILE
-unified-review --changes N FILE
-```
-
-
-## Skills
-
-`install.sh` links every folder in `skills/` into Claude Code, Codex, and Cursor, which load a skill when a task matches its description:
-
-- `unified-review`: run the panel review and act on its findings by number.
-- `logic`: check the logic of an argument from the document's arc down to a single sentence: missing premises, non sequiturs, unaddressed alternatives, over- and underclaims. Reviews also check it.
-- `statistics`: experimental design and inference from data, as two halves of what a study can conclude: controls, units of replication, fair method comparisons, and the inference errors that follow from design. Reviews also check it.
-- `figures`: rules for making, styling, captioning, and sourcing figures. Reviews also check them.
-- `documents`: equations, citations, and tables in Markdown documents. Reviews also check them.
-- `papers-and-proposals`: structuring papers, grants, summaries, and rebuttals, from Mensh and Kording (2017) and the bitsandbrains.io posts.
-- `pdf`: build PDFs with `make-pdf` in the house style.
-- `slides`: all deck rules, for Marp decks that use the shared theme in `slides/` (New Computer Modern, the same family as the PDFs). A decks repository links `theme/` to `slides/theme`.
-
-## Remembering your decisions
+Decisions can also be recorded from the command line:
 
 ```
 unified-review --ignore 5,7 --note "intentional"
 unified-review --applied 3
 unified-review --unignore D2
+unified-review --decisions
 ```
 
-Each decision goes into `decisions.json` in the runs folder, per reviewed file. The next review tells the panel which points you declined and which changes you already applied. A new finding that a voter matches to a declined point, or that quotes the same text, is held back and listed under "Previously declined" instead. A decline lasts while its quoted text is still in the file. Rewrite the sentence and the point can come back. Recording takes a fraction of a second and adds no model calls.
+They go into `decisions.json` in the runs folder, per file. A decline lasts while its quoted text is in the file. Rewrite the sentence and the point can come back.
 
-## PDFs
+## Also in this repo
 
-`make-pdf FILE.md` builds a PDF in a consistent style: New Computer Modern (Sans Bold headings, Book body, Book math), 1 in margins, 11 pt, justified, two-tone links, a rule under each table row, and references on a new page (set `references-page-break: false` in the front matter to keep them inline). It passes pandoc only the cited bibliography entries, and builds anyway, without a reference list, when the bibliography cannot be read. SVG figures are converted on the fly. `install.sh` installs the fonts. The style lives in `typeset/pdf-preamble.tex` and `typeset/pdf-filters.lua`, which a project with its own build can include.
+- **Skills.** `install.sh` links each folder in `skills/` into Claude Code, Codex, and Cursor, which load a skill when a task matches it:
+  - `unified-review`: run the panel and act on its findings.
+  - `logic`: check an argument from the document's arc down to a sentence. Reviews apply it.
+  - `statistics`: experimental design and inference from data. Reviews apply it.
+  - `figures`: making, styling, captioning, and sourcing figures. Reviews apply it.
+  - `documents`: equations, citations, and tables in Markdown. Reviews apply it.
+  - `papers-and-proposals`: structuring papers, grants, summaries, and rebuttals, from Mensh and Kording, "Ten simple rules for structuring papers" (*PLOS Computational Biology*, 2017, [doi:10.1371/journal.pcbi.1005619](https://doi.org/10.1371/journal.pcbi.1005619)), and the posts at [bitsandbrains.io](https://bitsandbrains.io/).
+  - `pdf` and `slides`: building PDFs and Marp decks in the house style.
+- **PDFs.** `make-pdf FILE.md` builds a PDF in New Computer Modern (Sans Bold headings, Book body and math), 1 in margins, 11 pt, justified, with a rule under each table row and references on a new page (`references-page-break: false` keeps them inline). It passes pandoc only the cited bibliography entries and builds without a reference list when the bibliography cannot be read. SVG figures are converted on the fly. The style lives in `typeset/`, which a project with its own build can include.
+- **Slides.** The Marp theme in `slides/` uses the same type family. A decks repository links `theme/` to `slides/theme`.
+- **[CLAUDE.md](CLAUDE.md)** is the author's general instructions for coding agents. It is an example, not something the tool needs, except as the fallback review rules.
 
 ## Install
 
@@ -128,37 +158,17 @@ You need Python 3.9 or later, macOS or Linux, and these CLIs, logged in:
 - [Codex CLI](https://github.com/openai/codex) (`codex`, or the copy inside the ChatGPT app, which the script finds on its own)
 - [Cursor CLI](https://cursor.com/cli) (`cursor-agent`)
 
-Then:
+Then run `./install.sh`. It links `unified-review` and `make-pdf` into `~/.local/bin`, links every skill into `~/.claude/skills`, `~/.codex/skills`, and `~/.cursor/skills`, and installs the fonts into `~/Library/Fonts` (`~/.local/share/fonts` on Linux). It does not overwrite real files. If a CLI lives somewhere unusual, set `CLAUDE_BIN`, `CODEX_BIN`, or `CURSOR_BIN`.
 
-```
-git clone https://github.com/jovo/agent-council
-cd agent-council
-./install.sh
-```
-
-`install.sh` links `unified-review` and `make-pdf` into `~/.local/bin`, links every skill into `~/.claude/skills`, `~/.codex/skills`, and `~/.cursor/skills`, and installs the fonts into `~/Library/Fonts` (`~/.local/share/fonts` on Linux). It does not overwrite real files. If a CLI lives somewhere unusual, set `CLAUDE_BIN`, `CODEX_BIN`, or `CURSOR_BIN` to its path.
-
-### In a GitHub Codespace
-
-This setup has not been tried in a live codespace yet. To run the tool in the cloud instead of on your Mac, name this repository as your dotfiles repository in your [GitHub Codespaces settings](https://github.com/settings/codespaces). Every codespace you create then runs `install.sh`, which also runs `codespaces/setup.sh`. That script installs the three CLIs, poppler, and Ghostscript, and sets `UNIFIED_REVIEW_PORT` to 8737 so the review page keeps one address. Log in to each CLI once per codespace. Or store a `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` and a `CURSOR_API_KEY` as Codespaces secrets. Codex has no such token for a subscription, so run `codex login`.
-
-In a codespace, `unified-review --page FILE` prints the page's forwarded address (`https://<codespace>-8737.app.github.dev/`), which only your GitHub account can open, and opens it in your browser. `unified.md` opens in the codespace's editor. Edits go to the checkout in the codespace, so commit and push them from there. The model calls use your subscriptions, as on a Mac. The codespace itself uses your monthly Codespaces allowance and stops after its idle timeout, which you can raise in the same settings.
-
-## Review rules
-
-Reviewers follow a set of review rules. The first one found wins: `--rules FILE`, then `$UNIFIED_REVIEW_RULES`, then the `# Writing and review guidelines` section of your `~/.claude/CLAUDE.md`, then the same section of this repo's [`CLAUDE.md`](CLAUDE.md). The script reads `~/.claude/CLAUDE.md` as plain text and does not follow its `@` imports, so a `~/.claude/CLAUDE.md` that only imports other files falls through to this repo's copy. The script tells reviewers to ignore any cap on findings or ordering rule in those rules, because it orders findings itself.
-
-## CLAUDE.md
-
-`CLAUDE.md` is the author's general instructions for coding agents: communication, sourcing, engineering, writing, and review. It is here as an example, not something the tool needs.
+**In a GitHub Codespace (untested).** To run the tool in the cloud instead of on your Mac, name this repository as your dotfiles repository in your [Codespaces settings](https://github.com/settings/codespaces). Every new codespace then runs `install.sh`, which runs `codespaces/setup.sh` to install the three CLIs, poppler, and Ghostscript, and fixes the page's port at 8737. Log in to each CLI once per codespace, or store a `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) and a `CURSOR_API_KEY` as Codespaces secrets. Codex needs `codex login`. `unified-review --page FILE` then prints the page's forwarded address, which only your GitHub account can open. Edits go to the codespace's checkout, so commit and push from there. The codespace uses your monthly Codespaces allowance and stops after its idle timeout.
 
 ## Limits
 
 - Grouping duplicates depends on voters flagging them. Two findings that make the same point about different sentences can both survive.
-- Anonymizing reviewers reduces self-preference but does not remove it, since models can recognize their own text. Voting by all panelists limits how much any one model's bias moves the result.
-- Reviews run without web search. Factual claims are tagged unverified unless you run `--verify`.
-- A carried-over confirmation is not rechecked, so a source that later moves or changes goes unnoticed until the sentence changes.
-- The fact-check marks a claim with the most cautious verdict across checkers. A checker that fails to find a source pulls a claim down to "plausible" even when another confirmed it.
+- Anonymizing reviewers reduces self-preference but does not remove it, since models can recognize their own text.
+- Reviews run without web search. Factual claims are checked only with `--verify`.
+- The fact-check keeps the most cautious verdict, so a checker that fails to find a source pulls a claim down to "plausible" even when another confirmed it. A carried-over confirmation is not rechecked until its sentence changes.
+- The churn guards count your own rewrites as changes, so Polish findings on a passage you just rewrote wait one round.
 
 ## Tests
 
