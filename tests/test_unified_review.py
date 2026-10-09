@@ -1119,6 +1119,36 @@ class ReviewPage(unittest.TestCase):
             self.assertIn("<passage>\nThe sky is green.\n</passage>", prompts[0])
             self.assertEqual(ur.load_comments(run)[0]["passage"], "The sky is green.")
 
+    def test_a_review_of_an_edit_appends_its_findings_after_the_rest(self):
+        review = ("=== FINDING\nseverity: Substantive\nkind: logic\ntitle: Claim lacks support\n"
+                  "quote: The sky is green.\n---\nThe claim needs a source.\n\n"
+                  "~~The sky is green.~~ 🟢 **The sky is blue.**\n=== END FINDING\n")
+        old = {"rep": {"title": "Old", "quote": "Grass grows.", "body": "Point."}, "votes": {}, "raised_by": [],
+               "where": "draft", "pos": 30, "severity": "Polish", "kind": "style", "rejected": False}
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "run"
+            run.mkdir()
+            draft = Path(d) / "m.md"
+            draft.write_text("The sky is green.\n\nGrass grows.\n")
+            (run / "results.json").write_text(json.dumps({"labels": {}, "groups": [old], "headings": []}))
+
+            def call(m, prompt, *a, **k):
+                return review if "Review the draft" in prompt else "A1 | agree | Substantive | logic | same:none | Fair."
+            with mock.patch.object(ur, "call", call), mock.patch.object(ur, "page_panel", lambda p: ["claude", "gpt"]), \
+                 mock.patch.object(ur, "load_rules", lambda p: ("rules", "")), mock.patch.object(ur, "load_decisions", lambda: {}):
+                ur.review_passage(draft, run, "The sky is green.")
+                for _ in range(300):
+                    if json.loads((run / "edit-review.json").read_text())["status"] != "pending":
+                        break
+                    time.sleep(0.01)
+            st = json.loads((run / "edit-review.json").read_text())
+            self.assertEqual(st["status"], "done", st)
+            fs = ur.ordered_findings(json.loads((run / "results.json").read_text()))
+            # The earlier Polish finding keeps number 1, and the new Substantive ones follow it.
+            self.assertEqual(fs[0][3]["rep"]["title"], "Old")
+            self.assertTrue(all(g.get("added") == st["first"] for _, _, _, g in fs[1:]))
+            self.assertIn("Claim lacks support", [g["rep"]["title"] for _, _, _, g in fs[1:]])
+
     def test_end_marker_dropped(self):
         fs = ur.parse_findings("=== FINDING\nseverity: Polish\ntitle: T\nquote: a b\n---\nPoint.\n\na ~~b~~ 🟢 **c**.\n=== END FINDING\n")
         self.assertNotIn("END FINDING", fs[0]["body"])
@@ -1206,7 +1236,7 @@ class ReviewPage(unittest.TestCase):
             run = Path(d)
             (run / "unified.md").write_text("# draft.md\n\n## Rejected by vote\n\n- A point\n")
             (run / "summary.json").write_text(json.dumps({"themes": []}))
-            self.assertEqual(ur.review_markdown(run), "# draft.md\n\n## Summary\n\nNo new findings on this version.\n\n"
+            self.assertEqual(ur.review_markdown(run), "# draft.md\n\n## Summary\n\nNo new findings in this review.\n\n"
                              "## Rejected by vote\n\n- A point\n")
 
     def test_review_markdown_lists_each_themes_findings_after_it(self):

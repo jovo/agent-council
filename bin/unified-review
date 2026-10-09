@@ -1224,7 +1224,9 @@ def ordered_findings(r):
         else:
             spot, label = (2, g.get("fpos", 0)), "Focus or supporting material"
         sev = "Typo" if is_typo(g) else g["severity"]
-        out.append(((ORDER.index(sev),) + spot, sev, label, g))
+        # Findings added later by a review of an edit go last, so earlier numbers stay put.
+        key = (len(ORDER), g["added"]) + spot if g.get("added") else (ORDER.index(sev),) + spot
+        out.append((key, sev, label, g))
     out.sort(key=lambda x: x[0])
     return [(n, sev, label, g) for n, (_, sev, label, g) in enumerate(out, 1)]
 
@@ -2381,7 +2383,7 @@ def page_state(path, run):
             "votes": [{"model": labels.get(m, m).split()[0], "vote": v["vote"], "raised": m in g["raised_by"]}
                       for m, v in g["votes"].items()],
             "status": {"applied": "accepted", "ignore": "declined"}.get(d["decision"]) if d else None,
-            "note": d.get("note", "") if d else "", "fill": fills.get(str(n))})
+            "note": d.get("note", "") if d else "", "fill": fills.get(str(n)), "added": g.get("added")})
     qs = load_questions(run)
     for f in out:
         f["questions"] = qs.get(str(f["n"]), [])
@@ -2401,7 +2403,8 @@ def page_state(path, run):
             "chosen": [{"spec": m, "label": label(panelist(m))} for m in page_panel(path)],
             "comments": comment_state(run, text), "summary": summary_state(run), "checks": checks(text, path, r.get("deck", False)), "deck": r.get("deck", False),
             "started": r.get("started", ""), "panel": [labels.get(m, m) for m in r["reviewers_ok"]],
-            "failures": r.get("failures", []), "text": text, "findings": out, "refs": cited_refs(text, path)}
+            "failures": r.get("failures", []), "text": text, "findings": out, "refs": cited_refs(text, path),
+            "edit_review": json.loads((run / "edit-review.json").read_text()) if (run / "edit-review.json").exists() else None}
 
 
 ELLIPSIS = re.compile(r"\s*(?:\.\.\.|…)\s*")
@@ -2579,6 +2582,83 @@ def ask_panel(path, run, f, question):
         save_question(run, f["n"], k, m, {"status": "done", "text": answer, "old": old, "new": new,
                                           "applicable": ok, "seconds": round(time.time() - t)})
     threading.Thread(target=lambda: parallel(one, panel), daemon=True).start()
+
+
+EDIT_FOCUS = """The author just rewrote the passage below. Review only this passage, as it
+now reads in the draft: report findings whose quote is inside it, and nothing
+about the rest of the draft except where the rewrite contradicts it.
+
+<passage>
+{passage}
+</passage>"""
+EDIT_REVIEW_LOCK = threading.Lock()
+
+
+def review_passage(path, run, passage):
+    """Review one passage the author just edited, in the background: the panel
+    reviews and votes as in a full review, with the draft as context. The new
+    findings are appended to the run's results, after the existing ones, and the
+    page jumps to the first. Status lands in edit-review.json."""
+    status = run / "edit-review.json"
+    write_atomic(status, json.dumps({"status": "pending", "passage": passage[:200]}))
+
+    def work():
+        try:
+            draft = Path(path).read_text()
+            panel = [panelist(m) for m in page_panel(path)]
+            declines, applied = active_decisions([Path(path)], norm(draft))
+            decided = decisions_block(declines, applied)
+            rules, _ = load_rules(None)
+            focus = EDIT_FOCUS.format(passage=passage)
+            prompt = review_prompt(draft, focus, rules, decided)
+            stamp = time.strftime("%H%M%S")
+            found = {}
+            for m, r in parallel(lambda m: call(m, prompt, run / f"edit-{stamp}-review-{m}.md",
+                                                Path(path).parent, stage="edit review"), panel).items():
+                fs = parse_findings(r) if r else None
+                if fs is not None:
+                    found[m] = fs
+            if not found:
+                return write_atomic(status, json.dumps({"status": "failed", "reason": "no reviewer answered"}))
+            ok = list(found)
+            letters = dict(zip(random.sample(ok, len(ok)), "ABCDEFGH"))
+            owner = {v: k for k, v in letters.items()}
+            dnorm = norm(draft)
+            flat = sorted(({**f, "id": f"{letters[m]}{i}", "pos": position(dnorm, f["quote"])}
+                           for m, fs in found.items() for i, f in enumerate(fs, 1)), key=lambda f: (f["pos"], f["id"]))
+            new = []
+            if flat:
+                listed = "\n\n".join(f"[{f['id']}] ({f['severity']}) {f['title']}\nquote: {f['quote'] or '(none)'}\n{f['body']}" for f in flat)
+                prompt_v = VOTE.format(draft=draft, findings=listed, decided=decided, context="",
+                                       focus=f"\n<author_focus>\n{focus}\n</author_focus>\n")
+                votes = {m: v for m, r in parallel(lambda m: call(m, prompt_v, run / f"edit-{stamp}-votes-{m}.txt",
+                                                                   Path(path).parent, stage="edit vote"), ok).items()
+                         for v in [parse_votes(r) if r else None] if v}
+                voters = [m for m in ok if m in votes]
+                if not voters:
+                    return write_atomic(status, json.dumps({"status": "failed", "reason": "every voter failed"}))
+                ids = {d["id"]: d for d in declines}
+                for g in (score_group(g, votes, voters, owner) for g in group_findings(flat, votes)):
+                    g["where"] = where(g, dnorm, "")
+                    g["fpos"] = 0
+                    g["added"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                    hit = next((v["same"] for m in voters for fid in g["members"]
+                                for v in [votes[m].get(fid, {})] if v.get("same") in ids), None)
+                    if hit:
+                        g["declined"] = {"id": hit, "title": ids[hit]["title"]}
+                    new.append(g)
+            with EDIT_REVIEW_LOCK:
+                r = json.loads((run / "results.json").read_text())
+                r["groups"] += new
+                r["labels"].update({m: label(m) for m in ok})
+                write_atomic(run / "results.json", json.dumps(r, indent=1, ensure_ascii=False) + "\n")
+            shown = [g for g in new if not g["rejected"] and not g.get("declined")]
+            write_atomic(status, json.dumps({"status": "done", "passage": passage[:200], "added": len(shown),
+                                             "rejected": len(new) - len(shown),
+                                             "first": shown[0]["added"] if shown else None}))
+        except Exception as e:  # a background thread: record the failure instead of losing it
+            write_atomic(status, json.dumps({"status": "failed", "reason": str(e)}))
+    threading.Thread(target=work, daemon=True).start()
 
 
 FILL = """A reviewer proposed the change below to a draft, with blanks in double braces
@@ -2955,6 +3035,11 @@ class PageServer:
             return 200, "application/json", json.dumps({"page": public_url(url) if url else None, "name": target.name})
         return 200, "application/json", json.dumps({"id": start_review(target), "name": target.name})
 
+    def stamp(self):
+        """Changes when the file is saved, by any app, or a new review lands."""
+        runs = runs_for(self.path)
+        return f"{self.path.stat().st_mtime}|{runs[0].name if runs else ''}"
+
     def run_folder(self):
         runs = runs_for(self.path)
         if not runs:
@@ -3081,6 +3166,10 @@ class PageServer:
             err = edit_block(self.path, body.get("old", ""), body.get("new", ""), body.get("start"))
             if err:
                 return 409, "application/json", json.dumps({"error": err})
+            if body.get("review") == "passage" and body.get("new", "").strip():
+                review_passage(self.path, self.run_folder(), body["new"].strip())
+            elif body.get("review") == "draft":
+                return self.handle("POST", "/api/update", {})
             return 200, "application/json", json.dumps({"ok": True})
         if method == "POST" and route == "/api/update":
             if not self.job or self.job.poll() is not None:
@@ -3219,7 +3308,7 @@ def review_markdown(run):
         themes.append(("Other", "", sorted(rest)))
     block = "## Summary\n\n" + ("The draft's main weaknesses are:\n\n" + "".join(
         f"- **{name}**" + (f": {gist}" if gist else "") + f" ({', '.join(map(str, fs))})\n"
-        for name, gist, fs in themes) if themes else "No new findings on this version.\n")
+        for name, gist, fs in themes) if themes else "No new findings in this review.\n")
     title, _, rest = md.partition("\n")
     return f"{title}\n\n{block}\n{rest.lstrip(chr(10))}"
 
@@ -3346,7 +3435,36 @@ def serve(path):
             self.end_headers()
             self.wfile.write(data)
 
+        def events(self):
+            """Server-Sent Events: tell the page when the file or its latest review
+            changes, so it reloads without polling. The page keeps the server alive."""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            last, beat = None, 0.0
+            try:
+                while True:
+                    page.last = time.time()
+                    try:
+                        now = page.stamp()
+                    except OSError:  # an editor mid-save can briefly remove the file
+                        now = last
+                    if now != last:
+                        self.wfile.write(f"data: {now}\n\n".encode())
+                        self.wfile.flush()
+                        last, beat = now, time.time()
+                    elif time.time() - beat > 15:  # a comment keeps the connection open
+                        self.wfile.write(b": beat\n\n")
+                        self.wfile.flush()
+                        beat = time.time()
+                    time.sleep(0.5)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
         def do_GET(self):
+            if self.path == "/api/events" and hasattr(page, "stamp"):
+                return self.events()
             self.reply("GET")
 
         def do_POST(self):

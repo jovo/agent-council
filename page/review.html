@@ -387,19 +387,28 @@ function renderDraft() {
   d.querySelectorAll("[data-a]").forEach(e => e.ondblclick = () => editBlock(e));
 }
 
+// Whether saving a paragraph also reviews it, and how much: remembered in this browser.
+let editPref = {on: true, what: "passage"};
+try { editPref = {...editPref, ...JSON.parse(localStorage.getItem("editReview") || "{}")}; } catch (e) { /* storage may be blocked */ }
+
 function editBlock(el) {
   const a = +el.dataset.a, b = +el.dataset.b, old = S.text.slice(a, b);
   const box = document.createElement("div");
   box.innerHTML = `<textarea class="blockedit">${esc(old)}</textarea>
-    <div class="row" style="margin:6px 0 14px"><button class="bsave">Save</button><button class="bcancel">Cancel</button>
-    <span class="meta">Edits the Markdown of this paragraph · Esc cancels</span><span class="err berr"></span></div>`;
+    <div class="row" style="margin:6px 0 4px"><button class="bsave">Save</button><button class="bcancel">Cancel</button>
+    <span class="meta">Edits the Markdown of this paragraph · Esc cancels</span><span class="err berr"></span></div>
+    <div class="row meta" style="margin:0 0 14px"><label><input type="checkbox" class="brev"${editPref.on ? " checked" : ""}> Review after saving:</label>
+    <select class="brevwhat"><option value="passage"${editPref.what === "passage" ? " selected" : ""}>this passage</option><option value="draft"${editPref.what === "draft" ? " selected" : ""}>the whole draft</option></select></div>`;
   el.replaceWith(box);
   const ta = box.querySelector("textarea");
   ta.style.height = Math.max(80, ta.scrollHeight + 4) + "px";
   ta.focus();
   const cancel = () => renderDraft();
   const save = async () => {
-    try { await api("/api/edit", {old, new: ta.value, start: a}); await load(); }
+    const on = box.querySelector(".brev").checked, what = box.querySelector(".brevwhat").value;
+    editPref = {on, what};
+    try { localStorage.setItem("editReview", JSON.stringify(editPref)); } catch (e) { /* storage may be blocked */ }
+    try { await api("/api/edit", {old, new: ta.value, start: a, review: on ? what : null}); await load(); }
     catch (e) { box.querySelector(".berr").textContent = e.message; }
   };
   box.querySelector(".bsave").onclick = save;
@@ -426,7 +435,7 @@ function renderCard() {
       + (f.slot ? `<button id="fill"${f.fill && f.fill.status === "pending" ? " disabled" : ""} title="Search the web for what goes in the blanks">${f.fill && f.fill.status === "pending" ? "Filling…" : "Fill"}</button> ` : "")
       + (f.editable ? `<button id="edt">Edit</button> ` : "") + `<button id="dec">Decline</button> <button id="ask">Ask</button>` + (f.editable ? "" : ` <button id="copy" title="Copy a one-line request to paste into Claude Code or Codex, which can make this change">Copy for agent</button>`);
   }
-  el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity}${f.kind ? " · " + kindOf(f) : ""} · ${esc(f.section)} · ${f.tag}</div>
+  el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity}${f.kind ? " · " + kindOf(f) : ""} · ${esc(f.section)} · ${f.tag}${f.added ? " · from your edit" : ""}</div>
     <div class="title">${esc(f.title)}</div><p class="point">${inline(pointOf(f))}</p>
     ${f.body.includes("~~") || f.body.includes("🟢") ? `<div class="diff">${f.old != null && f.new != null ? revHtml(f) : diffHtml(f.body)}</div>` : ""}
     <div class="votes">${votes}</div>
@@ -566,7 +575,7 @@ function renderSummary() {
     const themes = sm.themes.map(t => ({...t, fs: t.findings.filter(n => byN[n] && !used.has(n) && used.add(n)).map(n => byN[n])}));
     const rest = S.findings.filter(f => !used.has(f.n));
     if (rest.length) themes.push({theme: "Other", gist: "", fs: rest});
-    body = !themes.some(t => t.fs.length) ? `<p style="margin:8px 0">No new findings on this version.</p>`
+    body = !themes.some(t => t.fs.length) ? `<p style="margin:8px 0">No new findings in this review.</p>`
       : `<p style="margin:8px 0">The draft's main weaknesses are:</p>` +
       `<ul class="themes">${themes.filter(t => t.fs.length).map(t => `<li><details data-theme="${esc(t.theme)}"${openThemes.has(t.theme) ? " open" : ""}><summary><b>${esc(t.theme)}</b>${t.gist ? `: ${esc(t.gist)}` : ""}</summary>${outline(t.fs)}</details></li>`).join("")}</ul>`;
   } else {
@@ -574,7 +583,13 @@ function renderSummary() {
       : sm.status === "failed" ? `<div class="err" style="margin:8px 0">No summary: ${esc(sm.reason || "the model call failed")}</div>` : "") +
       outline(S.findings.filter(f => f.severity !== "Polish"));
   }
-  el.innerHTML = `<div class="card overview" style="margin-bottom:12px"><div class="row"><span class="title" style="font-size:15px">Summary</span><span class="meta" style="font-size:13px;margin-left:8px">${sevs}</span><span class="spacer"></span><a id="closesum" class="meta" style="cursor:pointer">Hide</a></div>${body}</div>`;
+  // Say whether this summary describes the text as it is now.
+  const er = S.edit_review;
+  const fresh = er && er.status === "pending" ? `<div class="overview banner" style="margin:8px 0;font-size:14px">Reviewing your edit to “${esc(er.passage.slice(0, 80))}${er.passage.length > 80 ? "…" : ""}”. New findings appear at the end of the list, usually within a minute.</div>`
+    : er && er.status === "failed" && !(S.job && S.job.running) ? `<div class="err" style="margin:8px 0">The review of your edit failed: ${esc(er.reason || "unknown error")}</div>`
+    : S.job && S.job.running ? `<div class="overview banner" style="margin:8px 0;font-size:14px">Reviewing the current text now. The new review replaces this one when the panel finishes, usually in a minute or two.</div>`
+    : S.edited && !(er && er.status === "done") ? `<div class="overview banner" style="margin:8px 0;font-size:14px">The draft changed since this review. Click Re-review to review the current text.</div>` : "";
+  el.innerHTML = `<div class="card overview" style="margin-bottom:12px"><div class="row"><span class="title" style="font-size:15px">Summary</span><span class="meta" style="font-size:13px;margin-left:8px">${sevs}</span><span class="spacer"></span><a id="closesum" class="meta" style="cursor:pointer">Hide</a></div>${fresh}${body}</div>`;
   el.querySelectorAll("a[data-n]").forEach(a => a.onclick = () => select(+a.dataset.n, true));
   el.querySelectorAll("details[data-theme]").forEach(d => d.ontoggle = () => openThemes[d.open ? "add" : "delete"](d.dataset.theme));
   document.getElementById("closesum").onclick = () => { summaryOpen = false; renderSide(); };
@@ -660,18 +675,37 @@ function select(n, scroll) {
   if (scroll && e) centerOn(e);
 }
 
-let polling = false;
+let polling = false, editSeen;  // editSeen: the last review of an edit already shown
 async function load() {
   S = await api("/api/state");
   if (lastRun && S.run !== lastRun) { cur = null; logicAuto = null; filt.kind = "All"; }
   lastRun = S.run;
+  // When a review of an edit lands, go to its first new finding (not on the page's first load).
+  const er = S.edit_review, first = er && er.status === "done" && er.first;
+  const jump = first && editSeen !== undefined && first !== editSeen;
+  editSeen = first || null;
+  if (jump) { const f = S.findings.find(x => x.added === first && !x.status); if (f) { cur = f.n; filt.status = "Open"; filt.kind = "All"; logicAuto = false; mode = null; } }
   if (mode) { renderSide(); } else render();
+  if (jump && cur) select(cur, true);
   const pending = S.findings.some(f => (f.questions || []).some(q => Object.values(q.answers).some(a => a.status === "pending")))
     || (S.comments || []).some(c => Object.values(c.answers).some(a => a.status === "pending"))
-    || (S.summary && S.summary.status === "pending") || S.findings.some(f => f.fill && f.fill.status === "pending");
+    || (S.summary && S.summary.status === "pending") || S.findings.some(f => f.fill && f.fill.status === "pending")
+    || (S.edit_review && S.edit_review.status === "pending");
   if ((S.comments || []).some(c => Object.values(c.answers).some(a => a.status === "pending"))) commentOpen = true;
   if ((S.job && S.job.running) || pending) { if (!polling) { polling = true; setTimeout(() => { polling = false; load(); }, pending ? 2000 : 3000); } }
 }
+
+// The server says when the file changes on disk (an edit in another app) or a new review
+// lands, and the page reloads. It waits while a paragraph, a finding's text, or a dictation
+// is in progress. EventSource reconnects by itself after a server restart.
+let stamp = null, stale = false;
+const busy = () => mode === "edit" || mode === "ask" || !!document.querySelector("textarea.blockedit") || !!rec || micBusy;
+new EventSource("/api/events").onmessage = e => {
+  if (stamp !== null && e.data !== stamp) stale = true;
+  stamp = e.data;
+  if (stale && S && !busy()) { stale = false; load(); }
+};
+setInterval(() => { if (stale && S && !busy()) { stale = false; load(); } }, 1000);  // a local check, no request
 
 async function act(route, body) {
   try {
