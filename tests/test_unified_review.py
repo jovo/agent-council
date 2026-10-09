@@ -58,7 +58,7 @@ class Parsing(unittest.TestCase):
         fs = ur.parse_findings(REVIEW)
         self.assertEqual([f["title"] for f in fs], ["Date is wrong", "Wordy opener"])
         self.assertEqual(fs[0]["severity"], "Critical")
-        self.assertEqual(fs[1]["severity"], "Polish")
+        self.assertEqual(fs[1]["severity"], "Nitpick")
         self.assertEqual(fs[0]["quote"], "Rome was founded in 1066.")
         self.assertEqual(fs[1]["quote"], "")
         self.assertIn("753 BC", fs[0]["body"])
@@ -67,7 +67,7 @@ class Parsing(unittest.TestCase):
         v = ur.parse_votes(VOTES)
         self.assertEqual(set(v), {"A1", "A2", "B1"})
         self.assertEqual(v["A2"]["vote"], "partial")
-        self.assertEqual(v["A2"]["severity"], "Polish")
+        self.assertEqual(v["A2"]["severity"], "Nitpick")
         self.assertEqual(v["B1"]["same"], "A1")
 
     def test_parse_rows(self):
@@ -115,7 +115,7 @@ class GroupingAndScoring(unittest.TestCase):
                                              "gpt": {"A1": vote("disagree", severity="Polish")}, "gemini": {}},
                            voters, owner)
         self.assertTrue(g["rejected"])
-        self.assertEqual(g["severity"], "Polish")
+        self.assertEqual(g["severity"], "Nitpick")
         self.assertNotIn("claude", g["votes"])  # a model's vote on its own finding is ignored
         self.assertEqual(ur.vote_tag(g), "No majority")
 
@@ -260,8 +260,8 @@ class Rendering(unittest.TestCase):
         ur.render(self.tmp)
         md = (self.tmp / "unified.md").read_text()
         order = [md.index(t) for t in ("## Critical", "### 1. Date (contested)", "## Substantive", "### 2. Overall",
-                                       "### 3. Early substantive", "### 4. Late substantive", "## Polish",
-                                       "### 5. Late polish")]
+                                       "### 3. Early substantive", "### 4. Late substantive", "## Nitpicks",
+                                       "**5.**")]
         self.assertEqual(order, sorted(order))
         self.assertIn("*Intro · draft.md, line 4:*", md)  # line 4, not 3: the off-by-one regression
         self.assertIn("*Body · draft.md, line 8:*", md)
@@ -629,7 +629,7 @@ class Typos(unittest.TestCase):
         typo = typo_group("recieve", "receive")
         polish["pos"], typo["pos"] = 50, 10
         r = {"groups": [typo, polish], "headings": []}
-        self.assertEqual([sev for _, sev, _, _ in ur.ordered_findings(r)], ["Polish", "Typo"])
+        self.assertEqual([sev for _, sev, _, _ in ur.ordered_findings(r)], ["Nitpick", "Typo"])
 
 
 class MechanicalChecks(unittest.TestCase):
@@ -1250,7 +1250,8 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual(ur.review_markdown(run), (run / "unified.md").read_text())
             (run / "summary.json").write_text(json.dumps({"themes": [
                 {"theme": "Logic", "gist": "A step fails.", "findings": [1]}]}))
-            self.assertEqual(ur.review_markdown(run), "# draft.md, version 1\n\n## Summary\n\nThe draft's main weaknesses are:\n\n"
+            self.assertEqual(ur.review_markdown(run), "# draft.md, version 1\n\n## Summary\n\n"
+                             "- **Logical flaws:** this review has no type labels.\n"
                              "- **Logic**: A step fails. (1)\n\n## Critical\n\n### 1. A finding\n")
 
     def test_review_markdown_says_when_there_is_nothing_to_list(self):
@@ -1258,19 +1259,21 @@ class ReviewPage(unittest.TestCase):
             run = Path(d)
             (run / "unified.md").write_text("# draft.md\n\n## Rejected by vote\n\n- A point\n")
             (run / "summary.json").write_text(json.dumps({"themes": []}))
-            self.assertEqual(ur.review_markdown(run), "# draft.md\n\n## Summary\n\nNo new findings in this review.\n\n"
+            self.assertEqual(ur.review_markdown(run), "# draft.md\n\n## Summary\n\n- **Logical flaws:** none found.\n\n"
                              "## Rejected by vote\n\n- A point\n")
 
     def test_review_markdown_lists_each_themes_findings_after_it(self):
         with tempfile.TemporaryDirectory() as d:
             run = Path(d)
-            (run / "unified.md").write_text("# draft.md\n\n## Critical\n\n" + "".join(f"### {n}. F\n\n" for n in range(1, 6)))
+            (run / "unified.md").write_text("# draft.md\n\n## Critical\n\n" + "".join(
+                f"### {n}. F{n} ({'logic' if n in (1, 3) else 'style'})\n\n" for n in range(1, 6)))
             (run / "summary.json").write_text(json.dumps({"themes": [
                 {"theme": "Logic", "gist": "Steps fail.", "findings": [3, 1, 9]},
                 {"theme": "Style", "gist": "", "findings": [1, 4]},
                 {"theme": "Gone", "gist": "Only repeats.", "findings": [3]}]}))
             block = ur.review_markdown(run).split("## Critical")[0]
-            self.assertEqual(block, "# draft.md\n\n## Summary\n\nThe draft's main weaknesses are:\n\n- **Logic**: Steps fail. (1, 3)\n"
+            # Logic findings lead and are not repeated in a theme.
+            self.assertEqual(block, "# draft.md\n\n## Summary\n\n- **Logical flaws:** F1 (1); F3 (3)\n"
                              "- **Style** (4)\n- **Other** (2, 5)\n\n")
 
     def test_review_prompt_proposes_text_and_keeps_slots_for_citations(self):

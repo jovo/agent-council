@@ -46,7 +46,7 @@ votes on the other models' findings, never its own, with reviewers anonymized.
 The script groups duplicates, reports a finding only when two models stand
 behind it (a second model raised it, or another voted agree or partial), and
 writes `unified.md`:
-findings grouped by severity (Critical, Substantive, Polish), each group in
+findings grouped by severity (Critical, Substantive, Nitpick), each group in
 draft order with its section, file, and line, then a short list of findings not
 reported. There is no cap on findings.
 
@@ -209,7 +209,7 @@ Reviewer instructions for feedback on drafts. This covers verification and how f
 
 ### Output format
 
-- Group findings by severity: **Critical** (breaks the argument or is factually wrong), then **Substantive** (weakens the argument or is unclear), then **Polish** (style, phrasing). Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Critical first, so a finding can be cited by number alone. For each finding, state the point, then immediately show its diff, before moving to the next finding. Do not collect all diffs into a separate list at the end.
+- Group findings by severity: **Critical** (breaks the argument or is factually wrong), then **Substantive** (weakens the argument or is unclear), then **Nitpick** (style, phrasing, typos: a few words of point at most, and a diff of only the words that change). Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Critical first, so a finding can be cited by number alone. For each finding, state the point, then immediately show its diff, before moving to the next finding. Do not collect all diffs into a separate list at the end.
 - Show every diff as an **inline revision of the original text**, not as a `Replace:` / `With:` pair. Strike deletions with `~~tildes~~`. Bold each addition and prefix it with `🟢 `. Tildes mark deletions only, never additions. Leave genuinely unchanged sentences plain, and for a mostly-rewritten paragraph strike the whole old block and follow it with the whole new one rather than a word-level diff.
 
 ### Math and markup inside a diff

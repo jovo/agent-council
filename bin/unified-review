@@ -67,7 +67,12 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
-SEVERITIES = ["Critical", "Substantive", "Polish"]
+SEVERITIES = ["Critical", "Substantive", "Nitpick"]
+
+
+def canon_sev(s):
+    """Severity under its current name. Older runs called nitpicks Polish."""
+    return "Nitpick" if (s or "").lower() in ("polish", "nitpick") else s
 VOTE_SCORE = {"agree": 1.0, "partial": 0.5, "disagree": 0.0}
 VERDICTS = ["contradicted", "unverifiable", "plausible", "confirmed"]  # most cautious first
 TIMEOUT = int(os.environ.get("UNIFIED_REVIEW_TIMEOUT", "900"))
@@ -519,7 +524,7 @@ the draft needs no change, reply with the single line NO FINDINGS.
 Otherwise output only findings, each in exactly this form, and nothing else:
 
 === FINDING
-severity: Critical | Substantive | Polish
+severity: Critical | Substantive | Nitpick
 kind: logic | evidence | clarity | style
 title: <under 12 words>
 quote: <the exact text this finding targets, copied verbatim from the draft or
@@ -527,7 +532,8 @@ quote: <the exact text this finding targets, copied verbatim from the draft or
   line. Empty for a finding about the whole draft or its overall structure.>
 ---
 <the point in one or two sentences, then the inline diff per the house rules.
-Do not repeat the quoted text outside the diff.
+Do not repeat the quoted text outside the diff. For a Nitpick, the point is a
+few words and the diff covers only the words that change.
 No heading and no number.>
 
 Kinds: logic, a step that does not follow (missing premise, non sequitur,
@@ -556,7 +562,7 @@ For each finding, decide:
   overstated, narrower, or the fix is flawed), or disagree (not a real problem,
   the quoted text is in neither the draft nor the focus material, or the fix
   makes the draft worse).
-- severity: Critical, Substantive, or Polish, as you would rate it.
+- severity: Critical, Substantive, or Nitpick, as you would rate it.
 - kind: logic (a step that does not follow, or an inference the evidence does
   not support), evidence (an unsupported or wrong factual claim, or a
   citation), clarity (the argument holds but is hard to follow), or style.
@@ -611,7 +617,7 @@ Reply with exactly one line per claim, in order, and nothing else:
 
 # ---------------------------------------------------------------- parsing
 
-END_MARK = re.compile(r"^\s*=+\s*END\s*(?:OF\s*)?FINDING\s*=*\s*$", re.M | re.I)
+END_MARK = re.compile(r"^\s*=+\s*(?:END\s*(?:OF\s*)?FINDING\s*=*)?\s*$", re.M | re.I)  # a stray end marker
 
 
 def strip_end(body):
@@ -636,7 +642,8 @@ def parse_findings(text):
             k = k.strip().lower()
             if k in ("severity", "kind", "title", "quote"):
                 f[k] = v.strip()
-        f["severity"] = next((s for s in SEVERITIES if s.lower() in f["severity"].lower()), "Substantive")
+        sev = f["severity"].lower().replace("polish", "nitpick")
+        f["severity"] = next((s for s in SEVERITIES if s.lower() in sev), "Substantive")
         f["kind"] = next((k for k in KINDS if k in f["kind"].lower()), "")
         f["body"] = strip_end(body)
         if f["body"] or f["title"]:
@@ -646,7 +653,7 @@ def parse_findings(text):
 
 KINDS = ["logic", "evidence", "clarity", "style"]  # logic first: fix the argument before its wording
 VOTE_LINE = re.compile(
-    r"^\W*([A-Z]\d+)\W*\|\s*(agree|partial|disagree)\s*\|\s*(critical|substantive|polish)\s*\|"
+    r"^\W*([A-Z]\d+)\W*\|\s*(agree|partial|disagree)\s*\|\s*(critical|substantive|nitpick|polish)\s*\|"
     r"(?:\s*(logic|evidence|clarity|style)\s*\|)?"
     r"\s*same\s*:?\s*([A-Z]\d+|none)?\s*\|\s*(.*)$", re.I)
 
@@ -692,7 +699,7 @@ def _record_decisions(spec, decision, note, run):
             lst = dec.setdefault(path, [])
             entry = {"id": f"D{len(lst) + 1}", "decision": decision, "title": g["rep"]["title"],
                      "quote": g["rep"]["quote"], "point": g["rep"]["body"].split("\n\n")[0][:400],
-                     "severity": g["severity"], "note": note, "version": vers.get(path),
+                     "severity": canon_sev(g["severity"]), "note": note, "version": vers.get(path),
                      "run": run.name, "date": time.strftime("%Y-%m-%d")}
             lst.append(entry)
             print(f"{item}: recorded as {decision} ({entry['id']}) for {Path(path).name}")
@@ -744,7 +751,7 @@ def parse_votes(text):
         m = VOTE_LINE.match(line.strip())
         if m:
             fid, v, sev, kind, same, reason = m.groups()
-            votes[fid.upper()] = {"vote": v.lower(), "severity": sev.capitalize(), "kind": (kind or "").lower(),
+            votes[fid.upper()] = {"vote": v.lower(), "severity": canon_sev(sev.capitalize()), "kind": (kind or "").lower(),
                                   "same": (same or "none").upper(), "reason": reason.strip()}
     return votes
 
@@ -804,7 +811,7 @@ def group_findings(flat, votes):
 
 
 def median_severity(sevs):
-    ranks = sorted(SEVERITIES.index(s) for s in sevs if s in SEVERITIES)
+    ranks = sorted(SEVERITIES.index(canon_sev(s)) for s in sevs if canon_sev(s) in SEVERITIES)
     return SEVERITIES[ranks[(len(ranks) - 1) // 2]] if ranks else "Substantive"
 
 
@@ -961,11 +968,12 @@ def vote_line(g, voters):
     cells = []
     for m in voters:
         v = g["votes"].get(m)
-        if m in g["raised_by"]:
-            cells.append(f"**{short(m)}** raised")  # a model does not vote on its own finding
-        else:
-            cells.append(f"{short(m)} {SYMBOL[v['vote']] if v else '?'}")
-    return " · ".join(cells)
+        if m not in g["raised_by"] and v:  # who raised it, and who voted, does not matter here
+            cells.append(SYMBOL[v["vote"]])
+    if cells:
+        return "Votes: " + " ".join(cells)
+    n = len(g["raised_by"])
+    return f"Raised by {n} models" if n > 1 else "No votes"
 
 
 def section_of(pos, heads):
@@ -1232,7 +1240,7 @@ def ordered_findings(r):
             spot, label = (1, g["pos"]), section_of(g["pos"], r["headings"])
         else:
             spot, label = (2, g.get("fpos", 0)), "Focus or supporting material"
-        sev = "Typo" if is_typo(g) else g["severity"]
+        sev = "Typo" if is_typo(g) else canon_sev(g["severity"])
         # Findings added later by a review of an edit go last, so earlier numbers stay put.
         key = (len(ORDER), g["added"]) + spot if g.get("added") else (ORDER.index(sev),) + spot
         out.append((key, sev, label, g))
@@ -1361,7 +1369,11 @@ def render(outdir):
             continue
         if sev != current:
             current = sev
-            parts.append(f"## {sev}")
+            parts.append("## Nitpicks" if sev == "Nitpick" else f"## {sev}")
+        if sev == "Nitpick":  # one line: where, the diff, the votes
+            diff = " ".join(p for p in strip_end(g["rep"]["body"]).split("\n\n")[1:] if "~~" in p or "🟢" in p)
+            parts.append(f"**{n}.** *{where_label}.* {diff or g['rep']['title']} ({vote_line(g, voters)})")
+            continue
         # Escape headings inside a reviewer's diff so they do not become sections here.
         body = re.sub(r"^(\s*(?:🟢\s*)?(?:\*\*)?)#", r"\1\\#", g["rep"]["body"], flags=re.M)
         tag = ((f" ({g['kind']})" if g.get("kind") else "") + (" (contested)" if g.get("contested") else "")
@@ -1390,10 +1402,10 @@ def render(outdir):
     if settled:
         parts.append("## Held back to stop churn\n\nThese would change a passage that changed recently, "
                      "or restore wording from an earlier version.\n\n" + "\n".join(
-                         f"- {g['rep']['title']} ({g['severity']}: {g['held']})" for g in settled))
+                         f"- {g['rep']['title']} ({canon_sev(g['severity'])}: {g['held']})" for g in settled))
     if rejected:
         parts.append("## Not reported\n\nNo second model backed these.\n\n" + "\n".join(
-            f"- {g['rep']['title']} ({names(g['raised_by'])})" for g in rejected))
+            f"- {g['rep']['title']}" for g in rejected))
     ag = r.get("agreement") or {}
     if ag.get("alpha") is not None:
         ci = f", 95% CI {ag['ci95'][0]} to {ag['ci95'][1]}" if ag.get("ci95") else ""
@@ -1456,7 +1468,7 @@ def show_items(spec, run):
             continue
         sec, g = found[int(item)]
         loc = locate(g["rep"]["quote"], r["files"]) if g["rep"]["quote"] else None
-        print(f"== Finding {item}: {g['rep']['title']} ({g['severity']})")
+        print(f"== Finding {item}: {g['rep']['title']} ({canon_sev(g['severity'])})")
         print(f"Section: {sec}")
         print("Location now: " + (f"{loc[0]}, {loc[2]} {loc[1]}" if loc else
           "not in the current file (already edited?)" if g["rep"]["quote"] else "whole draft"))
@@ -2144,7 +2156,7 @@ def churn(g, text, history):
     steps = times_changed(para, history)[:3] if para else []
     if sum(steps) >= 2 and g["severity"] != "Critical":
         return f"the passage changed in {sum(steps)} of the last {len(steps)} versions"
-    if steps[:1] == [True] and g["severity"] == "Polish":
+    if steps[:1] == [True] and canon_sev(g["severity"]) == "Nitpick":
         return "the passage changed since the last review"
     return None
 
@@ -2396,7 +2408,8 @@ def page_state(path, run):
             "mark": (change_mark(text, span, old, new) if len(edits) == 1
                      else [edits[0][0], edits[0][1]]) if span else None,
             "tag": vote_tag(g), "seen": g.get("seen", 1),
-            "votes": [{"model": labels.get(m, m).split()[0], "vote": v["vote"], "raised": m in g["raised_by"]}
+            "votes": [{"model": labels.get(m, m).split()[0], "label": labels.get(m, m), "icon": lab_icon(m),
+                       "vote": v["vote"], "raised": m in g["raised_by"]}
                       for m, v in g["votes"].items()],
             "status": {"applied": "accepted", "ignore": "declined"}.get(d["decision"]) if d else None,
             "note": d.get("note", "") if d else "", "fill": fills.get(str(n)), "added": g.get("added")})
@@ -2412,11 +2425,13 @@ def page_state(path, run):
                         text, a["old"], find_span(text, a["old"][:40])) is not None)
                     a["applied"] = not a["applicable"] and find_span(text, a["new"]) is not None
                 a["model"] = labels[m] if ":" in m else labels.get(m, m).split()[0]
+                a["icon"], a["label"] = lab_icon(m), labels.get(m, m)
                 a["raised"] = m in next(g for n, _, _, g in ordered_findings(r) if n == f["n"])["raised_by"]
     vers = (r.get("versions") or [{}])[0]
     return {"file": str(path), "name": Path(path).name, "run": run.name, "version": vers.get("number"),
             "edited": bool(vers.get("version")) and fingerprint(text) != vers.get("version"),
-            "chosen": [{"spec": m, "label": label(panelist(m))} for m in page_panel(path)],
+            "chosen": [{"spec": m, "label": label(panelist(m)), "icon": lab_icon(m)} for m in page_panel(path)],
+            "panel_icons": [{"icon": lab_icon(m), "label": labels.get(m, m)} for m in r["reviewers_ok"]],
             "comments": comment_state(run, text), "summary": summary_state(run), "checks": checks(text, path, r.get("deck", False)), "deck": r.get("deck", False),
             "started": r.get("started", ""), "panel": [labels.get(m, m) for m in r["reviewers_ok"]],
             "failures": r.get("failures", []), "text": text, "findings": out, "refs": cited_refs(text, path),
@@ -2896,6 +2911,7 @@ def comment_state(run, text):
     for c in out:
         for m, a in c["answers"].items():
             a["model"] = labels[m].split()[0] if m in labels else label(panelist(m))
+            a["icon"], a["label"] = lab_icon(m), labels.get(m) or label(panelist(m))
             for ch in a.get("changes", []):
                 ch["applicable"] = (find_span(text, ch["old"]) is not None or fuzzy_span(
                     text, ch["old"], find_span(text, ch["old"][:40])) is not None)
@@ -3009,6 +3025,24 @@ def model_menu():
                                           for v, items in sorted(tree[lab][m].items(), key=lambda kv: vorder(kv[0]))]}
                 for m in sorted(tree[lab], key=order)]}
             for lab in tree if tree[lab]]
+
+
+LAB_ICON = {"Anthropic": "claude", "OpenAI": "openai", "Google": "googlegemini", "xAI": "x", "Meta": "meta",
+            "Moonshot": "K", "Z.ai": "Z", "Cursor": "C"}  # an SVG in page/icons, or a letter badge
+
+
+def lab_icon(m):
+    """The icon for a panelist: claude, openai, googlegemini, x, meta, or a letter."""
+    try:
+        harness, model, _ = PANELISTS[panelist(m)]
+    except ValueError:
+        return "?"
+    if harness == "claude":
+        return "claude"
+    if harness == "codex":
+        return "openai"
+    lab = next((n for n, pat in LABS if re.match(pat, model or "")), "Other")
+    return LAB_ICON.get(lab, (model or "?")[0].upper())
 
 
 def page_panel(path):
@@ -3237,7 +3271,11 @@ def transcribe(audio, ext):
 
 
 def static(method, route):
-    """The page fonts, else not found."""
+    """The page fonts and lab icons, else not found."""
+    if method == "GET" and route.startswith("/icons/"):
+        f = PAGE_DIR / "icons" / Path(route).name
+        if f.suffix == ".svg" and f.exists():
+            return 200, "image/svg+xml", f.read_text()
     if method == "GET" and route.startswith("/fonts/"):
         f = FONT_DIR / Path(route).name
         if f.suffix == ".woff2" and f.exists():
@@ -3313,7 +3351,10 @@ def review_markdown(run):
     # Each theme ends with its finding numbers. As on the page, a finding sits under
     # its first theme, and findings in no theme go under "Other".
     ns = [int(m) for m in re.findall(r"^### (\d+)\.", md, re.M)]
-    used, themes = set(), []
+    heads = dict((int(n), t) for n, t in re.findall(r"^### (\d+)\. (.+)$", md, re.M))
+    logic = [n for n in ns if "(logic)" in heads.get(n, "")]
+    typed = not heads or any(re.search(r"\((logic|evidence|clarity|style)\)", t) for t in heads.values())
+    used, themes = set(logic), []
     for t in sm["themes"]:
         fs = sorted(n for n in t["findings"] if n in ns and n not in used)
         used.update(fs)
@@ -3322,9 +3363,13 @@ def review_markdown(run):
     rest = [n for n in ns if n not in used]
     if rest:
         themes.append(("Other", "", sorted(rest)))
-    block = "## Summary\n\n" + ("The draft's main weaknesses are:\n\n" + "".join(
+    # The first bullet is always the logic flaws, or that there are none.
+    title_of = lambda n: re.sub(r"\s*\((logic|evidence|clarity|style|contested|in \d+ reviews)\)", "", heads.get(n, "")).strip()
+    first = ("- **Logical flaws:** " + ("; ".join(f"{title_of(n)} ({n})" for n in logic) if logic else "none found.")
+             if typed else "- **Logical flaws:** this review has no type labels.") + "\n"
+    block = "## Summary\n\n" + first + "".join(
         f"- **{name}**" + (f": {gist}" if gist else "") + f" ({', '.join(map(str, fs))})\n"
-        for name, gist, fs in themes) if themes else "No new findings in this review.\n")
+        for name, gist, fs in themes)
     title, _, rest = md.partition("\n")
     return f"{title}\n\n{block}\n{rest.lstrip(chr(10))}"
 

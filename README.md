@@ -75,7 +75,7 @@ The page shows the current draft, set in New Computer Modern like the PDFs and d
 
 **Working on the whole draft**
 
-- **Summary**, shown by default at the top right, summarizes the reviews. Claude Sonnet groups the findings into themes and writes a sentence or two on where the panel agreed and split. Each theme is a bullet with a one-sentence gist, and its findings are listed beneath it by title, linked to the finding. Until the themes arrive, the card lists the Critical and Substantive findings. The summary is written the first time the page opens a review and kept as `summary.json` in the run folder. The **Summary** button shows or hides it.
+- **Summary**, shown by default at the top right, summarizes the reviews. Its first bullet is always **Logical flaws**: every logic finding, or "none found", since a draft whose argument fails is not worth polishing yet. Claude Sonnet then groups the other findings into themes. Each theme is a bullet with a one-sentence gist, and its findings are listed beneath it by title, linked to the finding. Until the themes arrive, the card lists the Critical and Substantive findings. The summary is written the first time the page opens a review and kept as `summary.json` in the run folder. The **Summary** button shows or hides it.
 - **Open…** opens a new tab where you drop a draft from Finder, or click **Choose in Finder…** (macOS). A draft dropped anywhere on the review page works the same way. Obsidian gives a dragged note to no other app, so drag it from Finder (Reveal in Finder in Obsidian). A browser does not tell a page where a dropped file lives, so the server finds the original with Spotlight: the one file with the same name and the same bytes. If it finds none (an unindexed folder) or several identical copies, it says so and reviews nothing. It never reviews a copy. The chosen file is reviewed in place, as `unified-review FILE` would, and the tab becomes its review page, so several reviews can be open at once. A file reviewed before opens straight to its page, where **Re-review** runs a new review.
 - **Download** saves the review as Markdown: the theme summary, then every finding with its proposed change and votes. It is the run's `unified.md`, so it takes no model calls.
 - **Ask** beside **Accept all shown** sends a question, comment, or request about the whole draft ("tighten the wedge section") to every panelist. Edits they propose appear with their own Accept. Tick "Use as focus for the next Re-review" to pass the comment to the next review.
@@ -93,7 +93,7 @@ unified-review [-n FOCUS] [-p PANEL] [--context FILE]... [--verify] [--rules FIL
 ```
 
 1. **Preflight.** The script checks that each CLI is installed and logged in. A panelist that is missing or logged out is dropped and listed as failed, never silently.
-2. **Review.** Each panelist reviews the draft without web search and returns findings in a fixed format: severity (Critical, Substantive, Polish), kind (logic, evidence, clarity, style), title, the exact text targeted, the point, and an inline diff. A reviewer that finds nothing worth changing says so. Each review also receives the last review's open findings, so a point that still applies comes back in the same words, and the points you declined or applied.
+2. **Review.** Each panelist reviews the draft without web search and returns findings in a fixed format: severity (Critical, Substantive, Nitpick), kind (logic, evidence, clarity, style), title, the exact text targeted, the point, and an inline diff. A reviewer that finds nothing worth changing says so. Each review also receives the last review's open findings, so a point that still applies comes back in the same words, and the points you declined or applied.
 3. **Vote.** Each panelist votes agree, partial, or disagree on every other model's finding, sees reviewers only as A, B, and C, flags duplicates, and votes on severity and kind. It does not vote on its own findings, which it sees only to name duplicates.
 4. **Merge.** The script groups duplicates (two voters calling them duplicates, or one voter plus overlapping quoted text) and keeps the best-voted version of each. It reports a finding only when two models stand behind it: a second model raised the same point, or another model voted agree or partial. It takes the median severity and majority kind of the other models' votes. It holds back findings that would restore earlier wording, or change a passage that keeps changing: after one change, only Critical and Substantive findings on that passage show, and after two changes in the last three versions, only Critical ones. It then runs the checks and writes `unified.md`.
 5. **Fact-check (optional, `--verify`).** A background process lists the draft's checkable claims, has each panelist check them with web search, keeps the most cautious verdict per claim, and writes `factcheck.md`. A claim the last fact-check confirmed keeps that verdict while its sentence is unchanged.
@@ -123,13 +123,13 @@ Each run writes a folder under `~/.local/share/unified-review/runs/` (or `$UNIFI
 - `results.json`, `factcheck.json`: findings, votes, groups, verdicts, checks, the text's fingerprint and git commit, and per-stage timings.
 - `review-<model>.md`, `votes-<model>.txt`, `*.err`: raw panel output and logs.
 
-`unified.md` gives findings by severity. Within each severity, findings about the whole draft come first, then findings in draft order, then findings about the focus material. Each shows its section, file, and line, the point, an inline diff (~~deleted~~ and 🟢 **added**), and the votes, as in `Claude ✓ · **GPT** raised · Gemini ~` (✓ agree, ~ partial, ✗ disagree). The text being changed appears once, in the diff. A finding without a diff quotes the text it is about. **Contested** means at least one model other than the raiser agreed and at least one disagreed. Then come these sections, each only when it has entries:
+`unified.md` gives findings by severity. Within each severity, findings about the whole draft come first, then findings in draft order, then findings about the focus material. Each shows its section, file, and line, the point, an inline diff (~~deleted~~ and 🟢 **added**), and the other models' votes, as in `Votes: ✓ ~` (✓ agree, ~ partial, ✗ disagree), or `Raised by 3 models` when each model raised it on its own. Who raised a finding is not shown. Nitpicks take one line each: number, section, diff, and votes. The summary at the top starts with the logical flaws, or says there are none. The text being changed appears once, in the diff. A finding without a diff quotes the text it is about. **Contested** means at least one model other than the raiser agreed and at least one disagreed. Then come these sections, each only when it has entries:
 
 - **Since the last review:** earlier findings this review did not repeat, resolved if their passage changed.
 - **Checks** and **Typos**, as on the page.
 - **Previously declined:** new findings that match a point you declined.
 - **Held back to stop churn**, with the reason for each.
-- **Not reported**: findings no second model backed, one line each with the model that raised it.
+- **Not reported**: findings no second model backed, one line each.
 - **Agreement:** ordinal Krippendorff's alpha over the votes, with a bootstrap 95% confidence interval over findings, leaving out each model's votes on its own findings. Most votes are "agree", and that imbalance pulls alpha down even when raw agreement is high.
 
 For one Markdown file the page opens. Otherwise `unified.md` opens in Cursor or VS Code if you ran the command there, or in your default Markdown app. Inside the Claude or Codex app, the script prints `OPEN IN APP: <path>`. Set `UNIFIED_REVIEW_OPEN_APP` to always use one app.
@@ -189,7 +189,7 @@ Then run `./install.sh`. It links `unified-review` and `make-pdf` into `~/.local
 - Anonymizing reviewers reduces self-preference but does not remove it, since models can recognize their own text.
 - Reviews run without web search. Factual claims are checked only with `--verify`.
 - The fact-check keeps the most cautious verdict, so a checker that fails to find a source pulls a claim down to "plausible" even when another confirmed it. A carried-over confirmation is not rechecked until its sentence changes.
-- The churn guards count your own rewrites as changes, so Polish findings on a passage you just rewrote wait one round.
+- The churn guards count your own rewrites as changes, so nitpicks on a passage you just rewrote wait one round.
 
 ## Tests
 
@@ -202,3 +202,5 @@ The tests use made-up fixtures and fake CLI calls, so they run offline and make 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+The lab icons on the review page (`page/icons`) come from [Simple Icons](https://simpleicons.org/), released under CC0. The logos are trademarks of their companies and name the model that answered. Labs Simple Icons does not cover get a letter instead.

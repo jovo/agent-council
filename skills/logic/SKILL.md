@@ -41,4 +41,4 @@ Logic comes first. A draft whose steps do not follow fails however well it reads
 
 - Name the step that fails and the kind of failure: missing premise, non sequitur, circular setup, unaddressed alternative, overclaim, underclaim, term drift, or order.
 - State the missing premise explicitly. Then give the fix: either the sentence that supplies the premise, or the weaker conclusion that no longer needs it. "Unclear" alone is not a finding.
-- Severity: a broken step in the central argument is Critical. A leap in a supporting point is Substantive. A connective or referent that blurs a step that does hold is Polish.
+- Severity: a broken step in the central argument is Critical. A leap in a supporting point is Substantive. A connective or referent that blurs a step that does hold is Nitpick.
