@@ -53,6 +53,7 @@ The page shows the current draft, set in New Computer Modern like the PDFs and d
 
 **Working on the whole draft**
 
+- **Summary**, shown by default at the top right, summarizes the reviews. Claude Sonnet groups the findings into themes and writes a sentence or two on where the panel agreed and split. Each theme is a bullet with a one-sentence gist, and its findings are listed beneath it by title, linked to the finding. Until the themes arrive, the card lists the Critical and Substantive findings. The summary is written the first time the page opens a review and kept as `summary.json` in the run folder. The **Summary** button shows or hides it.
 - **Ask** beside **Accept all shown** sends a question, comment, or request about the whole draft ("tighten the wedge section") to every panelist. Edits they propose appear with their own Accept. Tick "Use as focus for the next Update" to pass the comment to the next review.
 - Double-click any paragraph, heading, or table to edit its Markdown in place. Save writes it back, unless it changed in the file since the page loaded.
 - **Panel** chooses the models for Update and Ask, saved per file. Its menu lists models by lab, model, version, and setting: those Claude Code and Codex run directly, and every model `cursor-agent models` lists.

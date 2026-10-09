@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -779,6 +780,27 @@ class Placement(unittest.TestCase):
     def test_addition_with_no_anchor(self):
         reason = ur.unplaced_reason(self.TEXT, self.TEXT, "(no row)", "| C | new |", "")
         self.assertTrue(reason.startswith("the change adds text without quoting where it goes"))
+
+
+class Summary(unittest.TestCase):
+    def test_written_once_in_background_then_kept(self):
+        run = Path(tempfile.mkdtemp())
+        (run / "unified.md").write_text("## Critical\n\n### 1. F1 is never defined\n")
+        calls = []
+        def call(name, prompt, out, workdir, stage=""):
+            calls.append(prompt)
+            return 'Here: {"overview": "All agreed.", "themes": [{"theme": "Definitions", "gist": "F1 is undefined.", "findings": [1, "x"]}]}'
+        with mock.patch.object(ur, "call", call), mock.patch.object(ur, "load_rules", lambda p: ("rules", "")):
+            self.assertEqual(ur.summary_state(run), {"status": "pending"})
+            for _ in range(100):
+                if (run / "summary.json").exists():
+                    break
+                time.sleep(0.01)
+            self.assertEqual(ur.summary_state(run), {"status": "done", "overview": "All agreed.", "themes": [
+                {"theme": "Definitions", "gist": "F1 is undefined.", "findings": [1]}]})
+        self.assertEqual(len(calls), 1)
+        self.assertIn("F1 is never defined", calls[0])
+        shutil.rmtree(run)
 
 
 class Churn(unittest.TestCase):

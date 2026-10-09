@@ -2361,7 +2361,7 @@ def page_state(path, run):
     return {"file": str(path), "name": Path(path).name, "run": run.name, "version": vers.get("number"),
             "edited": bool(vers.get("version")) and fingerprint(text) != vers.get("version"),
             "chosen": [{"spec": m, "label": label(panelist(m))} for m in page_panel(path)],
-            "comments": comment_state(run, text), "checks": checks(text, path, r.get("deck", False)), "deck": r.get("deck", False),
+            "comments": comment_state(run, text), "summary": summary_state(run), "checks": checks(text, path, r.get("deck", False)), "deck": r.get("deck", False),
             "started": r.get("started", ""), "panel": [labels.get(m, m) for m in r["reviewers_ok"]],
             "failures": r.get("failures", []), "text": text, "findings": out, "refs": cited_refs(text, path)}
 
@@ -2541,6 +2541,78 @@ def ask_panel(path, run, f, question):
         save_question(run, f["n"], k, m, {"status": "done", "text": answer, "old": old, "new": new,
                                           "applicable": ok, "seconds": round(time.time() - t)})
     threading.Thread(target=lambda: parallel(one, panel), daemon=True).start()
+
+
+SUMMARY = """Below is a unified review of a draft: findings from a panel of reviewers,
+grouped by severity and numbered. Under each finding, the votes of every
+panelist (✓ agree, ~ partial, ✗ disagree), with the reviewer who raised it in
+bold. Rejected findings and the panel's agreement statistic come last.
+
+Summarize the reviews, not the draft, for the draft's author. Group the
+findings into two to six themes, and put every numbered finding in exactly one
+theme. Reply with only this JSON:
+
+{{"overview": "<one or two sentences: the reviewers' main conclusions about the draft>",
+ "themes": [{{"theme": "<two to six words>", "gist": "<one sentence: what the reviewers found under this theme>", "findings": [<finding numbers>]}}]}}
+
+Order themes by importance. In the overview and gists, write no finding
+numbers, counts, or vote tallies, and say nothing about where reviewers agreed
+or split. Do not restate the draft's content.
+Follow the house rules for prose.
+
+<review>
+{review}
+</review>
+
+---- HOUSE RULES ----
+{rules}"""
+SUMMARY_LOCK = threading.Lock()
+SUMMARIZING = set()
+
+
+def summary_state(run):
+    """The summary of the run's reviews for the review page: {"status": "done",
+    "overview", "themes"}, "pending", or "failed" with a reason. The first
+    request starts writing it in the background, kept in summary.json."""
+    done, failed = run / "summary.json", run / "summary.failed"
+    if done.exists():
+        return {"status": "done", **json.loads(done.read_text())}
+    if failed.exists():
+        return {"status": "failed", "reason": failed.read_text().strip()}
+    if not (run / "unified.md").exists():
+        return None
+    with SUMMARY_LOCK:
+        if run in SUMMARIZING:
+            return {"status": "pending"}
+        SUMMARIZING.add(run)
+
+    def write():
+        try:
+            rules, _ = load_rules(None)
+            prompt = SUMMARY.format(review=(run / "unified.md").read_text(), rules=rules)
+            text = call("claude", prompt, run / "summary-raw.txt", run, stage="summary")
+            if text is None:
+                failed.write_text(failure_reason(run, "summary-raw"))
+                return
+            m = re.search(r"\{.*\}", text, re.S)
+            try:
+                d = json.loads(m[0]) if m else None
+            except json.JSONDecodeError:
+                d = None
+            if not isinstance(d, dict) or not isinstance(d.get("themes"), list):
+                failed.write_text("the reply was not the summary JSON")
+                return
+            write_atomic(done, json.dumps({"overview": str(d.get("overview", "")), "themes": [
+                {"theme": str(t.get("theme", "")), "gist": str(t.get("gist", "")),
+                 "findings": [int(n) for n in t.get("findings", []) if str(n).isdigit()]}
+                for t in d["themes"] if isinstance(t, dict)]}, indent=1, ensure_ascii=False) + "\n")
+        except Exception as e:  # a background thread: record the failure instead of losing it
+            failed.write_text(str(e))
+        finally:
+            with SUMMARY_LOCK:
+                SUMMARIZING.discard(run)
+    threading.Thread(target=write, daemon=True).start()
+    return {"status": "pending"}
 
 
 COMMENT = """The author of the draft below has a general comment, question, or request
