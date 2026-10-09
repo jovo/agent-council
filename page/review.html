@@ -139,7 +139,8 @@ function renderDraft() {
   const order = f => SEV.indexOf(f.severity) * 1000 + f.n;
   for (const f of S.findings) {
     if (!f.span || f.status === "accepted" || !shown(f)) continue;
-    for (let i = f.span[0]; i < f.span[1]; i++) if (!marks[i] || order(f) < order(marks[i])) marks[i] = f;
+    const [ms, me] = f.mark || f.span;  // the words the change touches, else the whole passage
+    for (let i = ms; i < me; i++) if (!marks[i] || order(f) < order(marks[i])) marks[i] = f;
   }
   const segs = (i, b) => {
     let out = "";
@@ -347,8 +348,8 @@ function render() {
   const openLogic = S.findings.filter(f => f.kind === "logic" && !f.status).length;
   if (logicAuto === null) { logicAuto = openLogic > 0; if (logicAuto) filt.kind = "Logic"; }
   if (logicAuto && !openLogic) { logicAuto = false; filt.kind = "All"; }
-  chips("f-kind", "kind", KINDS, "All types"); chips("f-sev", "sev", SEV, "All severities");
-  chips("f-tag", "tag", TAGS, "Any agreement");
+  chips("f-kind", "kind", KINDS, "All"); chips("f-sev", "sev", SEV, "All");
+  chips("f-tag", "tag", TAGS, "Any");
   const st = document.getElementById("f-status");
   st.innerHTML = ["Open", "Done", "All"].map(o => `<option${filt.status === o ? " selected" : ""}>${o}</option>`).join("");
   st.onchange = () => { filt.status = st.value; render(); };

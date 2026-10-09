@@ -1486,6 +1486,34 @@ def fuzzy_span(text, old, quote_span):
     return lo + s, lo + e
 
 
+def change_mark(text, span, old, new):
+    """The smallest part of text[span] that a change touches: the words it
+    replaces or deletes, or for a pure insertion the word just before it."""
+    ow, nw = old.split(), new.split()
+    i = 0
+    while i < min(len(ow), len(nw)) and ow[i] == nw[i]:
+        i += 1
+    j = 0
+    while j < min(len(ow), len(nw)) - i and ow[-1 - j] == nw[-1 - j]:
+        j += 1
+    region = ow[i:len(ow) - j]
+    if not region:  # insertion: mark the neighboring word
+        region = ow[i - 1:i] if i > 0 else ow[:1]
+        i = max(i - 1, 0)
+    if not region:
+        return span
+    seg = text[span[0]:span[1]]
+    near = len(" ".join(ow[:i])) + (1 if i else 0)  # where the region starts in old
+    m = find_span(seg, " ".join(region), near)
+    if not m:
+        return list(span)
+    a, b = span[0] + m[0], span[0] + m[1]
+    if b - a < 2:  # one character is too small to click: take in the word before it
+        k = text.rfind(" ", span[0], max(a - 1, span[0]))
+        a = max(span[0], k + 1 if k >= 0 else span[0])
+    return [a, b]
+
+
 def runs_for(path):
     """Run folders that reviewed exactly this file, newest first."""
     out = []
@@ -1533,6 +1561,7 @@ def page_state(path, run):
             "point": rep["body"].split("\n\n")[0], "body": rep["body"], "quote": rep["quote"],
             "old": old, "new": new if old is not None else None, "reason": reason,
             "span": list(span or quote_span or []) or None, "applicable": span is not None,
+            "mark": change_mark(text, span, old, new) if span else None,
             "tag": vote_tag(g),
             "votes": [{"model": labels.get(m, m).split()[0], "vote": v["vote"], "raised": m in g["raised_by"]}
                       for m, v in g["votes"].items()],

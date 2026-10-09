@@ -597,6 +597,13 @@ class ReviewPage(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ur.panelist("nonsense")
 
+    def test_change_mark(self):
+        t = "Within primates, neuron number scales with brain size, and it correlates with behavior."
+        mark = lambda old, new: (lambda s: (lambda m: t[m[0]:m[1]])(ur.change_mark(t, s, old, new)))(ur.find_span(t, old))
+        self.assertEqual(mark("size, and it correlates", "size, and neuron number correlates"), "it")
+        self.assertEqual(mark("and it correlates", "and it strongly correlates"), "it")
+        self.assertEqual(mark("Within primates, neuron", "Across species, cell"), "Within primates, neuron")
+
     def test_edit_block(self):
         with tempfile.TemporaryDirectory() as d:
             doc = Path(d) / "memo.md"
