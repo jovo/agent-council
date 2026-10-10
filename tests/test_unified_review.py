@@ -1331,6 +1331,15 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual(st["name"], "my paper.pdf")
             self.assertEqual(page.handle("GET", "/api/job/nope", b"")[0], 404)
 
+    def test_repeated_uploads_get_distinct_job_ids(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d)), \
+                mock.patch.object(ur.subprocess, "Popen"):
+            first = ur.start_upload("memo.md", b"# Memo\n")
+            second = ur.start_upload("memo.md", b"# Memo\n")
+            self.assertNotEqual(first, second)
+            self.assertTrue((Path(d) / "uploads" / first / "upload" / "memo.md").exists())
+            self.assertTrue((Path(d) / "uploads" / second / "upload" / "memo.md").exists())
+
     @unittest.skipUnless(shutil.which("pandoc"), "needs pandoc")
     def test_upload_of_a_reviewed_word_file_offers_open_again_or_fresh(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):

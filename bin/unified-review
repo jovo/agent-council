@@ -60,6 +60,7 @@ import math
 import os
 import random
 import re
+import secrets
 import shlex
 import shutil
 import signal
@@ -3945,7 +3946,7 @@ def start_upload(name, body):
         raise ValueError(f"choose a {', '.join(UPLOAD_TYPES)} file")
     if not body:
         raise ValueError("the file is empty")
-    uid = time.strftime("%Y-%m-%d-%H%M%S-") + hashlib.sha1(body).hexdigest()[:6]
+    uid = time.strftime("%Y-%m-%d-%H%M%S-") + secrets.token_hex(12)
     folder = RUNS_DIR / "uploads" / uid
     doc = folder / "upload" / name  # so the run is named <date>-upload-<file>-v1
     doc.parent.mkdir(parents=True)
