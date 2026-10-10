@@ -1484,7 +1484,7 @@ class ReviewPage(unittest.TestCase):
                 "# Memo\n\nThe cortex learns **slowly and steadily** from [work](https://x.org).[^1]\n\n"
                 "The energy is $E = mc^2$ in this regime, which [Ann's note.]{.comment-start id=\"0\" author=\"Ann\" "
                 "date=\"2026-01-01T00:00:00Z\"}matters[]{.comment-end id=\"0\"} here.\n\nThis one goes.\n\n"
-                "| A | B |\n|---|---|\n| 1 | 2 |\n\n- first\n- second\n\nLast paragraph stays CITE.\n\n[^1]: A footnote.\n")
+                "| A | B |\n|---|---|\n| 1 | 2 |\n\n- first\n- second\n\nCited here^4^ and done.\n\nLast paragraph stays CITE.\n\n[^1]: A footnote.\n")
             docx = Path(d) / "memo.docx"
             subprocess.run(["pandoc", str(src), "-o", str(docx)], check=True)
             # Make it look like Word wrote it: a run split mid-word, and a citation field.
@@ -1512,6 +1512,7 @@ class ReviewPage(unittest.TestCase):
             after = (before.replace("**slowly and steadily**", "**slowly**")
                      .replace("in this regime", "at low speed").replace("This one goes.\n\n", "")
                      .replace("| 2 ", "| 3 ").replace("- second", "- second, revised")
+                     .replace("Cited here<sup>4</sup> and done.", "Cited here<sup>4</sup> with care and done.")
                      .replace("Last paragraph stays (Smith 2020).", "Last paragraph now stays (Smith 2021).\n\nA new one.")
                      .replace("[^1]: A footnote.", "[^1]: A changed footnote."))
             md.write_text(after)
@@ -1536,6 +1537,10 @@ class ReviewPage(unittest.TestCase):
             self.assertRegex(as_md(out, "all"), r'"deletion"[^>]*>in this regime<.*"insertion"[^>]*>at low speed<')  # one change, not word by word
             with zipfile.ZipFile(out) as b:
                 self.assertIn(b"ZOTERO_ITEM", b.read("word/document.xml"))
+            # Words added after a superscript are not superscript; a changed superscript stays one.
+            with zipfile.ZipFile(out) as z:
+                x = z.read("word/document.xml").decode()
+            self.assertNotRegex(x, r'<w:ins [^>]*><w:r><w:rPr>(?:(?!</w:rPr>).)*vertAlign')
             # Ann's comment stays, and the edit that could not be placed is a comment on its paragraph.
             comments = as_md(out, "all")
             self.assertIn('author="Ann"', comments)

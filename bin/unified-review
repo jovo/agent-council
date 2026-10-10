@@ -1508,11 +1508,17 @@ class Tracker:
                     self.split_run(a["run"], i)
                 return
 
-    def text_run(self, ref, text):
+    def text_run(self, ref, text, own=False):
+        """A run of text formatted like `ref`. Unless it replaces ref's own text
+        (own), it is not super- or subscript: words added after a citation number
+        are not part of the citation."""
         r = ET.Element(w_("r"))
         rpr = ref.find(w_("rPr")) if ref is not None else None
         if rpr is not None:
-            r.append(copy.deepcopy(rpr))
+            rpr = copy.deepcopy(rpr)
+            for va in [] if own else rpr.findall(w_("vertAlign")):
+                rpr.remove(va)
+            r.append(rpr)
         t = ET.SubElement(r, w_("t"), {XML_SPACE: "preserve"})
         t.text = text
         return r
@@ -1547,7 +1553,7 @@ class Tracker:
         if not new:
             return
         ins = self.mark("ins")
-        ins.append(self.text_run(ref, new))
+        ins.append(self.text_run(ref, new, own=bool(runs)))
         if last is not None:
             par = self.parent(last)
             par.insert(list(par).index(last) + 1, ins)
