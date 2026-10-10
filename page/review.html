@@ -45,6 +45,7 @@ main{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);gap:2
 #draft.pdf p{white-space:normal}  /* a PDF's text breaks at its old line ends; let it flow */
 #draft h1{font-size:26px;margin:.2em 0 .6em}#draft h2{font-size:21px;margin:1.2em 0 .5em}#draft h3,#draft h4{font-size:17px;margin:1em 0 .4em}
 #draft a{color:var(--xref);text-decoration:none}#draft a:hover{text-decoration:underline}#draft a.cite{color:var(--cite)}#draft a.xref{cursor:help}
+#draft p.fnote{font-size:14px;color:var(--muted)}#draft a.fnback{color:var(--cite)}
 #draft ul{list-style-type:disc;padding-left:1.6em;margin:0 0 .9em}#draft ul ul{list-style-type:circle;margin:0}#draft ul ul ul{list-style-type:square}#draft ul ul ul ul{list-style-type:"·  "}
 #draft ol{padding-left:1.8em;margin:0 0 .9em}#draft ol ol{list-style-type:lower-alpha;margin:0}#draft ol ol ol{list-style-type:lower-roman}#draft li{margin:0 0 .3em;white-space:pre-wrap}#draft .block>p{margin:0 0 .5em}
 #draft ol.refs{font-size:15px;padding-left:1.8em;list-style-type:decimal}#draft ol.refs li{margin:0 0 .4em;white-space:normal}
@@ -278,6 +279,20 @@ function renderDraft() {
       hideRange(m.index, m.index + m[0].length);
     }
   }
+  // Footnotes: a mark [^id] draws as a superscript number, in order of first use, linked
+  // to its note. A note [^id]: text starts its own paragraph, as pandoc writes it.
+  const fnNum = {}, fnSeen = new Set(), fnId = id => "fn-" + id.replace(/[^\w-]/g, "_");
+  for (const m of text.matchAll(/\[\^([^\]\s]+)\](?!:)/g)) fnNum[m[1]] ??= Object.keys(fnNum).length + 1;
+  for (const m of text.matchAll(/\[\^([^\]\s]+)\](:[ \t]*)?/g)) {
+    if (taken(m.index, m.index + m[0].length)) continue;
+    const id = fnId(m[1]), n = fnNum[m[1]] || "?";
+    const note = m[2] && (m.index === 0 || text[m.index - 1] === "\n");
+    if (m[2] && !note) continue;
+    tok[m.index] = note ? `<a class="fnback" id="${id}" href="#${id}-ref">${n}.</a> `
+                        : `<sup><a class="cite"${fnSeen.has(id) ? "" : ` id="${id}-ref"`} href="#${id}">${n}</a></sup>`;  // the note links back to the first mark
+    if (!note) fnSeen.add(id);
+    hideRange(m.index, m.index + m[0].length);
+  }
   for (const m of text.matchAll(/\[([^\[\]]*@[^\[\]]*)\]/g)) {  // [@Key] and [@A; @B]
     const nums = [...new Set([...m[1].matchAll(/(?<![\w@])-?@([A-Za-z0-9_][\w:.#$%&+?<>~/-]*\w)/g)].map(k => refNum[k[1]]).filter(Boolean))].sort((a, b) => a - b);
     if (!nums.length) continue;
@@ -422,7 +437,8 @@ function renderDraft() {
     }
     if (para) out += `<p>${segs(para[0], para[1])}</p>`;
     if (items.length) out += listHtml(items);
-    html += items.length ? `<div class="block"${at(a, b)}>${out}</div>` : `<p${at(a, b)}>${segs(a, b)}</p>`;
+    html += items.length ? `<div class="block"${at(a, b)}>${out}</div>`
+      : `<p${/^\[\^[^\]\s]+\]:/.test(raw) ? ' class="fnote"' : ""}${at(a, b)}>${segs(a, b)}</p>`;
   }
   if (S.refs && S.refs.length) {  // the book's format: PLOS style from pandoc, DOI linked
     html += `<h2 id="references">References</h2><ol class="refs">` + S.refs.map((r, k) => `<li id="ref-${k + 1}">` +
