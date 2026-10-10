@@ -39,7 +39,7 @@ pre{white-space:pre-wrap;font:13px/1.45 ui-monospace,Menlo,monospace;color:var(-
   </div>
   <div class="meta" id="note" style="margin-top:12px"></div>
   <div id="progress"></div>
-  <details id="logbox" open hidden><summary class="meta">Log</summary><pre id="log"></pre></details>
+  <div id="logbox" hidden><div class="meta" style="margin-top:12px">Log</div><pre id="log"></pre></div>
 </main>
 <script>
 // A browser gives a dropped file's contents but not its path. The server finds
@@ -86,7 +86,7 @@ async function poll(id) {
   document.getElementById("log").textContent = j.log.join("\n");
   document.getElementById("progress").innerHTML = progress(j);
   if (j.running) title(`Reviewing ${j.name} · ${clock(j.elapsed)}`);
-  if (j.error) { title(`Review of ${j.name} failed`); fail(j.error); document.getElementById("logbox").open = true; return; }
+  if (j.error) { title(`Review of ${j.name} failed`); fail(j.error); return; }
   if (j.page) { location.replace(j.page); return; }
   setTimeout(poll, 2000, id);
 }
