@@ -4391,10 +4391,6 @@ class UploadServer:
             st["page"] = page_url(reviewed) if reviewed else None
             st["markdown"] = Path(unified).read_text()
             st["html"] = None
-            if shutil.which("pandoc"):
-                r = subprocess.run(["pandoc", "-f", "gfm", "-t", "html"], input=st["markdown"],
-                                   capture_output=True, text=True)
-                st["html"] = r.stdout if r.returncode == 0 else None
             return ok(st)
         if method == "GET" and route in ("/", "/index.html"):
             return 200, "text/html; charset=utf-8", (PAGE_DIR / "upload.html").read_text()
