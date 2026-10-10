@@ -274,7 +274,7 @@ class Rendering(unittest.TestCase):
         (self.tmp / "summary.json").write_text(json.dumps({"themes": [
             {"theme": "Wording", "gist": "Long gist sentence.", "findings": [1, 2, 3]}]}))
         block = ur.review_markdown(self.tmp).split("## Substantive")[0]
-        self.assertIn("## Summary\n\n- **Logical flaws (1 finding):**\n  - Step fails (1)\n- **Wording (2 findings):**\n  - Vague term (2)\n  - Odd word (3)\n", block)
+        self.assertIn("## Summary (3 findings)\n\n- **Logical flaws (1 finding):**\n  - Step fails (1)\n- **Wording (2 findings):**\n  - Vague term (2)\n  - Odd word (3)\n", block)
         self.assertNotIn("Long gist", block)
 
     def test_summary_says_when_there_are_no_logic_flaws(self):
@@ -320,6 +320,34 @@ class Rendering(unittest.TestCase):
         self.assertNotIn("draft.md, line", md)  # no section, file, or line for a finding
         self.assertIn("*Whole draft*", md)
         self.assertNotIn("Warning", md)
+
+    def test_diff_in_the_first_paragraph_still_applies(self):
+        text = "Intro.\n\nThe method is only one possible solution enhancing potency. Done.\n"
+        body = "Add the missing word. The method is only one possible solution **🟢 for** enhancing potency."
+        old, new, edits = ur.placed_diff(text, body, "only one possible solution enhancing")
+        self.assertEqual((old, new), ("The method is only one possible solution enhancing potency.",
+                                      "The method is only one possible solution for enhancing potency."))
+        self.assertTrue(edits)
+        self.assertIsNone(ur.placed_diff(text, "Which source says so?", "The method")[0])  # a question has no diff
+
+    def test_nitpicks_typos_and_checks_are_one_list(self):
+        dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
+        q = "Rome was founded in 1066."
+        nit = self.group("Missing word", q, "draft", ur.position(dn, q), severity="Nitpick")
+        typo = self.group("Misspelling", q, "draft", ur.position(dn, q), severity="Nitpick")
+        typo["rep"]["body"] = "Fix the spelling.\n\nRome was ~~fonded~~ **🟢 founded** in 1066."
+        self.results([nit, typo])
+        rj = json.loads((self.tmp / "results.json").read_text())
+        rj["checks"] = [{"id": "M1", "line": 3, "pos": 0, "what": '"anti-tumor" (4×) and "antitumor" (2×) are both used.'}]
+        (self.tmp / "results.json").write_text(json.dumps(rj))
+        ur.render(self.tmp)
+        md = (self.tmp / "unified.md").read_text()
+        self.assertNotIn("## Typos", md)
+        self.assertNotIn("## Checks", md)
+        nits = md[md.index("## Nitpicks"):]
+        self.assertIn("Misspelling", nits)
+        self.assertIn("(typo)", nits)
+        self.assertIn('- **M1.** "anti-tumor" (4×) and "antitumor" (2×) are both used. (*line 3*), found by the script', nits)
 
     def test_nitpick_shows_where_and_the_change_without_votes(self):
         dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
@@ -1035,6 +1063,7 @@ class ReviewPage(unittest.TestCase):
                                     "raised_by": ["claude"], "frac": 1.0}
             (run / "results.json").write_text(json.dumps({
                 "files": [str(doc)], "labels": {"claude": "Claude Sonnet"}, "reviewers_ok": ["claude"],
+                "voters": ["claude"], "verify": False, "failures": [],
                 "headings": [], "groups": [
                     g("Sky", "The sky is green today.", "Wrong.\n\nThe sky ~~is green~~ 🟢 **is blue** today."),
                     g("Water", "Water is dry.", "Wrong.\n\nWater is ~~dry~~ 🟢 **wet**.")]}))
@@ -1042,6 +1071,15 @@ class ReviewPage(unittest.TestCase):
             code, _, out = page.handle("GET", "/api/state", {})
             st = json.loads(out)
             self.assertEqual([f["applicable"] for f in st["findings"]], [True, True])
+            code, mime, md, headers = page.handle("GET", "/api/export/review.md", b"")
+            self.assertEqual((code, headers["Content-Disposition"]), (200, 'attachment; filename="memo-review.md"'))
+            self.assertIn("### 1. Sky", md)
+            if shutil.which("pandoc"):
+                code, mime, data, _ = page.handle("GET", "/api/export/review.docx", b"")
+                self.assertEqual((code, mime, data[:2]), (200, ur.DOCX_MIME, b"PK"))
+                back = subprocess.run(["pandoc", "-f", "docx", "-t", "plain"], input=data, capture_output=True).stdout.decode()
+                self.assertIn("Sky", back)
+            self.assertEqual(page.handle("GET", "/api/export/review.pdf", b"")[0], 400)
             self.assertEqual(page.handle("POST", "/api/accept", {"n": 1})[0], 200)
             self.assertIn("The sky is blue today.", doc.read_text())
             doc.write_text(doc.read_text().replace("Water is dry.", "Water is arid."))
@@ -1385,7 +1423,7 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual(ur.to_markdown(docx), md)  # the same file again keeps the edits
             self.assertEqual(md.read_text(), after)
             page = ur.PageServer(md)
-            code, mime, data, headers = page.handle("GET", "/api/draft", b"")
+            code, mime, data, headers = page.handle("GET", "/api/export/draft.docx", b"")
             self.assertEqual((code, mime), (200, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
             self.assertEqual(headers["Content-Disposition"], 'attachment; filename="memo-edited.docx"')
             missed = json.loads(urllib.parse.unquote(headers["X-Not-Placed"]))
@@ -1407,7 +1445,12 @@ class ReviewPage(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
             draft = Path(d) / "draft.md"
             draft.write_text("# Draft\n")
-            self.assertEqual(ur.export_draft(draft), ("draft-edited.md", "text/plain; charset=utf-8", b"# Draft\n", []))
+            self.assertEqual(ur.export_draft(draft), ("draft-edited.md", ur.MD_MIME, b"# Draft\n", []))
+            if shutil.which("pandoc"):  # a Markdown draft as Word, through pandoc
+                name, mime, data, _ = ur.export_draft(draft, "docx")
+                self.assertEqual((name, mime, data[:2]), ("draft-edited.docx", ur.DOCX_MIME, b"PK"))
+            with self.assertRaises(ValueError):
+                ur.export_draft(draft, "pdf")  # only a draft that came as a PDF
             md = ur.RUNS_DIR / "converted" / "paper-abc" / "paper.md"
             md.parent.mkdir(parents=True)
             md.write_text("# Paper\n")

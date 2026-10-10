@@ -1222,25 +1222,45 @@ def original_of(path):
     return next((path.with_suffix(e) for e in (".docx", ".pdf") if path.with_suffix(e).exists()), None)
 
 
-def export_draft(path):
-    """(file name, MIME type, bytes, edits not placed) of the draft as it is now,
-    in the format it came in: a Word file is the original with the edits as
-    tracked changes, a PDF goes through make-pdf, anything else is as is."""
-    path, orig = Path(path), original_of(path)
-    if orig is None:
-        return f"{path.stem}-edited{path.suffix}", "text/plain; charset=utf-8", path.read_bytes(), []
-    ext = orig.suffix
-    if ext == ".docx":
-        data, missed = patch_docx(orig, path.read_text())
-        return (f"{path.stem}-edited.docx",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document", data, missed)
+MD_MIME = "text/markdown; charset=utf-8"
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def to_docx(md, reader, folder):
+    """A Word file of Markdown text, through pandoc. Images resolve from `folder`."""
     with tempfile.TemporaryDirectory() as tmp:
-        out = Path(tmp) / f"{path.stem}-edited.pdf"
-        r = subprocess.run([str(Path(__file__).resolve().parent / "make-pdf"), path.name, "-o", str(out)],
-                           cwd=path.parent, capture_output=True, text=True)
+        out = Path(tmp) / "out.docx"
+        r = subprocess.run(["pandoc", "-f", reader, "-o", str(out), "--resource-path", str(folder)],
+                           input=md, capture_output=True, text=True)
         if r.returncode != 0 or not out.exists():
-            raise RuntimeError(f"could not make the PDF: {(r.stderr.strip().splitlines() or ['no output'])[-1][:200]}")
-        return out.name, "application/pdf", out.read_bytes(), []
+            raise RuntimeError(f"could not make the Word file: {(r.stderr.strip().splitlines() or ['no output'])[-1][:200]}")
+        return out.read_bytes()
+
+
+def export_draft(path, fmt=None):
+    """(file name, MIME type, bytes, edits not placed) of the draft as it is now,
+    as Markdown, Word, or (for a draft that came as a PDF) PDF. The default is the
+    format it came in. A draft that came as a Word file comes back as the original
+    with the edits as tracked changes. Any other Word file is made by pandoc."""
+    path, orig = Path(path), original_of(path)
+    fmt = fmt or (orig.suffix[1:] if orig else "md")
+    name = f"{path.stem}-edited.{fmt}"
+    if fmt == "md":
+        return name, MD_MIME, path.read_bytes(), []
+    if fmt == "docx":
+        if orig is not None and orig.suffix == ".docx":
+            data, missed = patch_docx(orig, path.read_text())
+            return name, DOCX_MIME, data, missed
+        return name, DOCX_MIME, to_docx(path.read_text(), "markdown", path.parent), []
+    if fmt == "pdf" and orig is not None and orig.suffix == ".pdf":
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / name
+            r = subprocess.run([str(Path(__file__).resolve().parent / "make-pdf"), path.name, "-o", str(out)],
+                               cwd=path.parent, capture_output=True, text=True)
+            if r.returncode != 0 or not out.exists():
+                raise RuntimeError(f"could not make the PDF: {(r.stderr.strip().splitlines() or ['no output'])[-1][:200]}")
+            return name, "application/pdf", out.read_bytes(), []
+    raise ValueError(f"the draft cannot be downloaded as .{fmt}")
 
 
 # Patching a Word file in place. The Markdown copy is compared with a fresh
@@ -1279,7 +1299,7 @@ def md_units(md):
                 units += [("cell", c.strip()) for c in cells]
             elif re.match(r"\[\^[^\]]+\]:", t):
                 units.append(("footnote", t))
-            elif t.startswith("<"):
+            elif re.match(r"<(table|div|figure|img|!--)\b", t, re.I):  # block HTML; <u> and <sup> are text
                 units.append(("html", t))
             else:
                 units.append(("text", t))
@@ -1348,7 +1368,9 @@ def wnorm(t):
 
 
 def tokens(t):
-    return re.findall(r"\s+|\w+|[^\w\s]", t)
+    """Words, numbers, spaces, and marks. Letters and digits split, since a
+    citation number set after a word ("pneumonitis55") is often a field."""
+    return re.findall(r"\s+|[^\W\d]+|\d+|[^\w\s]", t)
 
 
 class Tracker:
@@ -1495,7 +1517,17 @@ class Tracker:
                 gap, prev = merged.pop(), merged.pop()
                 c = ("replace", prev[1], c[2], prev[3], c[4])
             merged.append(c)
-        ops = [(offs[i1], offs[i2], "".join(b_tok[j1:j2])) for tag, i1, i2, j1, j2 in merged if tag != "equal"]
+        ops = []
+        for tag, i1, i2, j1, j2 in merged:
+            if tag == "equal":
+                continue
+            s, e, n = offs[i1], offs[i2], "".join(b_tok[j1:j2])
+            locked = lambda k: any(a["locked"] and a["start"] <= k < a["end"] for a in atoms)
+            while e > s and n and text[e - 1] == n[-1] and locked(e - 1):  # leave unchanged locked text out
+                e, n = e - 1, n[:-1]
+            while e > s and n and text[s] == n[0] and locked(s):
+                s, n = s + 1, n[1:]
+            ops.append((s, e, n))
         for s, e, _ in ops:
             if any(a["locked"] and (a["start"] < e and a["end"] > s if e > s else a["start"] < s < a["end"])
                    for a in atoms):
@@ -1890,24 +1922,22 @@ def render(outdir):
                            "Agreement, duplicate grouping, and rejection by vote mean little in this run.")
     if r["verify"]:
         parts.append("*Fact-check running. Results go to factcheck.md.*")
-    current, typos = None, []
+    # Nitpicks, typos, and the script's checks are one list, after the other findings.
+    current, nits = None, []
     for n, sev, where_label, g in ordered_findings(r):
         group = "Logic" if g.get("kind") == "logic" and sev != "Typo" else sev
-        if sev == "Typo":
-            before, after = typo_change(*diff_parts(g["rep"]["body"]))
-            typos.append(f"- **{n}.** ~~{before}~~ → {after} ({where_label})")
-            continue
-        if group != current:
-            current = group
-            parts.append({"Nitpick": "## Nitpicks", "Logic": "## Logical flaws"}.get(group, f"## {group}"))
-        if group == "Nitpick":  # one item: where it is, and the change, or the point when it has no diff
+        if sev in ("Nitpick", "Typo"):  # one item: where it is, and the change, or the point when it has no diff
             paras = [p.strip() for p in strip_end(g["rep"]["body"]).split("\n\n") if p.strip()]
             diff = " ".join(p for p in paras if "~~" in p or "🟢" in p) or " ".join(paras[:1])
             loc = locate(g["rep"]["quote"], r["files"]) if g["rep"]["quote"].strip() and g["where"] != "focus" else None
             at = ", ".join(x for x in (where_label if where_label not in [Path(f).name for f in r["files"]] else "",
                                        f"{loc[2]} {loc[1]}" if loc else "") if x)  # a draft with no headings: just the line
-            parts.append(f"- **{n}.** {g['rep']['title']}{f' (*{at}*)' if at else ''}: {diff}".replace("\n", " "))
+            nits.append(f"- **{n}.** {g['rep']['title']}{f' (*{at}*)' if at else ''}: {diff}"
+                        f"{' (typo)' if sev == 'Typo' else ''}".replace("\n", " "))
             continue
+        if group != current:
+            current = group
+            parts.append({"Logic": "## Logical flaws"}.get(group, f"## {group}"))
         # Escape headings inside a reviewer's diff so they do not become sections here.
         body = re.sub(r"^(\s*(?:🟢\s*)?(?:\*\*)?)#", r"\1\\#", strip_end(g["rep"]["body"]), flags=re.M)
         tag = ((f" ({sev})" if group == "Logic" else f" ({g['kind']})" if g.get("kind") else "")
@@ -1916,18 +1946,15 @@ def render(outdir):
                )
         parts.append(f"### {n}. {g['rep']['title']}{tag} {marks(g, voters)}".rstrip() + "\n\n"
                      f"{quoted(g, r['files'], where_label)}{body}")
+    nits += [f"- **{c['id']}.** {c['what']} (*line {c['line']}*), found by the script" for c in r.get("checks") or []]
+    if nits:
+        parts.append("## Nitpicks\n\nWording-level fixes: the panel's nitpicks, typos no voter disputed, and checks "
+                     "the script ran without a model.\n\n" + "\n".join(nits))
     since = r.get("since_last") or {}
     if since.get("resolved") or since.get("dropped"):
         parts.append("## Since the last review\n\n" + "\n".join(
             [f"- Resolved: {t} (its passage changed)" for t in since.get("resolved", [])]
             + [f"- Not raised again: {t} (its passage is unchanged)" for t in since.get("dropped", [])]))
-    if r.get("checks"):
-        parts.append("## Checks\n\nFound by the script, not the panel: numbering, references, citation keys, and "
-                     "terms spelled two ways.\n\n" + "\n".join(
-                         f"- **{c['id']}.** Line {c['line']}: {c['what']}" for c in r["checks"]))
-    if typos:
-        parts.append("## Typos\n\nOne-word fixes that no other voter disputed. Accept them together on "
-                     "the review page, or by number.\n\n" + "\n".join(typos))
     held = [g for g in r["groups"] if g.get("declined") and not g["rejected"]]
     if held:
         parts.append("## Previously declined\n\nHeld back because you declined the same point before. "
@@ -2777,6 +2804,17 @@ def placed_diff(text, body, quote, slots=False):
     """(old, new, edits) for a finding's diff in text. When the diff as written
     cannot be placed, tries it with lenient_diff's fixes."""
     old, new = diff_parts(body, slots)
+    head = strip_end(body).split("\n\n")[0]
+    if old is None and ("~~" in head or "🟢" in head):
+        # The diff sits in the first paragraph, after the point ("Add the article.
+        # The method is ~~a~~ **🟢 the**..."). Drop leading sentences until it places.
+        first = min(i for i in (head.find("~~"), head.find("🟢")) if i >= 0)
+        cuts = [0] + [m.end() for m in re.finditer(r"[.!?:]\s+", head[:first])]
+        for c in cuts:
+            o, n = diff_parts("point\n\n" + head[c:], slots)
+            e = locate_edits(text, o, n, quote) if o else None
+            if e:
+                return o, n, e
     edits = locate_edits(text, old, new, quote) if old else None
     if old is not None and not edits:
         o, n = lenient_diff(body, slots)
@@ -2973,7 +3011,7 @@ def page_state(path, run):
     return {"file": str(path), "name": Path(path).name, "run": run.name, "version": vers.get("number"),
             "edited": bool(vers.get("version")) and fingerprint(text) != vers.get("version"),
             "readonly": read_only(path), "pdf": is_pdf(path),
-            "draft_format": (original_of(path) or Path(path)).suffix,
+            "draft_formats": ["md", "docx"] + (["pdf"] if is_pdf(original_of(path) or "") else []),
             "chosen": [{"spec": m, "label": label(panelist(m)), "icon": lab_icon(m)} for m in page_panel(path)],
             "panel_icons": [{"icon": lab_icon(m), "label": labels.get(m, m)} for m in r["reviewers_ok"]],
             "comments": comment_state(run, text), "summary": summary_state(run), "checks": checks(text, path, r.get("deck", False)), "deck": r.get("deck", False),
@@ -3662,8 +3700,16 @@ class PageServer:
             return 200, "application/json", json.dumps(st)
         if method == "GET" and route == "/api/ping":
             return 200, "application/json", json.dumps({"file": str(self.path)})
-        if method == "GET" and route == "/api/draft":  # the edited draft, in the format it came in
-            name, mime, data, missed = export_draft(self.path)
+        if method == "GET" and (m := re.fullmatch(r"/api/export/(review|draft)\.(md|docx|pdf)", route)):
+            # Download the review or the edited draft, as Markdown or Word (or a PDF draft as PDF).
+            missed = []
+            if m[1] == "draft":
+                name, mime, data, missed = export_draft(self.path, m[2])
+            elif m[2] in ("md", "docx"):
+                md, name = review_markdown(self.run_folder()), f"{self.path.stem}-review.{m[2]}"
+                mime, data = (MD_MIME, md) if m[2] == "md" else (DOCX_MIME, to_docx(md, "gfm", self.run_folder()))
+            else:
+                return 400, "application/json", json.dumps({"error": "the review downloads as .md or .docx"})
             return 200, mime, data, {"Content-Disposition": f'attachment; filename="{name}"',
                                      "X-Not-Placed": urllib.parse.quote(json.dumps(missed))}
         if method == "GET" and route == "/api/markdown":
@@ -3992,7 +4038,7 @@ def review_markdown(run):
     count = lambda fs: f"{len(fs)} finding{'' if len(fs) == 1 else 's'}"
     first = ((f"- **Logical flaws ({count(logic)}):**\n" + titles(logic)) if logic else "- **Logical flaws:** none found.\n"
              ) if typed else "- **Logical flaws:** this review has no type labels.\n"
-    block = "## Summary\n\n" + first + "".join(f"- **{name} ({count(fs)}):**\n{titles(fs)}" for name, fs in themes)
+    block = f"## Summary ({count(ns)})\n\n" + first + "".join(f"- **{name} ({count(fs)}):**\n{titles(fs)}" for name, fs in themes)
     title, _, rest = md.partition("\n")
     return f"{title}\n\n{block}\n{rest.lstrip(chr(10))}"
 

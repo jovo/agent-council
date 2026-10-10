@@ -28,6 +28,8 @@ button,textarea,input{font:inherit;color:inherit}
 .mbitem{padding:3px 14px 3px 8px;cursor:pointer;white-space:nowrap;display:flex;gap:6px}
 .mbitem:hover{background:var(--focus);color:var(--bg)}
 .mbcheck{width:14px;display:inline-block;text-align:center}
+#dl>.mbmenu{left:auto;right:0}.mbitem.sub{position:relative;justify-content:space-between}
+.mbitem.sub>.mbmenu{display:none;top:-5px;left:auto;right:100%;color:var(--ink)}.mbitem.sub:hover>.mbmenu{display:block}
 select{-webkit-appearance:none;appearance:none;background-color:var(--panel);border:1px solid var(--line);border-radius:6px;padding:3px 30px 3px 9px;font:inherit;font-size:14px;color:inherit;margin-right:10px;cursor:pointer;
 background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
 background-position:calc(100% - 15px) 55%,calc(100% - 10px) 55%;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
@@ -115,9 +117,7 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
     <span class="meta" id="meta" style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
     <span style="position:relative"><button id="panelbtn" title="Models used for Re-review and Ask"></button><div id="panelmenu" class="menu" hidden></div></span>
     <span class="meta" id="tally"></span>
-    <span style="position:relative"><button id="dlbtn" title="Download the review, or the edited draft">Download</button><div id="dlmenu" class="menu" hidden style="min-width:220px">
-      <div class="mi" id="dlreview" title="Every finding with its proposed change">Review (.md)</div>
-      <div class="mi" id="dldraft" title="The draft as it is now, in the format it came in">Edited draft</div></div></span>
+    <span class="mb" id="dl" title="Download the review, or the edited draft"></span>
     <button id="openbtn" title="Choose another file in Finder and review it in a new tab">Open…</button>
     <button id="update" title="Run a new review of the current text">Re-review</button>
   </div>
@@ -132,7 +132,7 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
 </header>
 <main>
   <div><div id="overview"></div><article id="draft"></article></div>
-  <aside id="side"><div id="sumpanel"></div><div id="askpanel"></div><div class="card" id="card"></div><div class="card" id="checks" hidden></div><div class="card" id="typos" hidden></div><div class="card list" id="list"></div>
+  <aside id="side"><div id="sumpanel"></div><div id="askpanel"></div><div class="card" id="card"></div><div class="card" id="nits" hidden></div><div class="card list" id="list"></div>
     <div class="meta" style="font-size:13px"><kbd>j</kbd> <kbd>k</kbd> next and previous · <kbd>a</kbd> accept · <kbd>e</kbd> edit · <kbd>d</kbd> decline · <kbd>q</kbd> ask · double-click a paragraph to edit it, <kbd>⌘</kbd><kbd>Enter</kbd> saves · drop a draft from Finder to review it in a new tab</div></aside>
 </main>
 <div id="droptoast" class="card" hidden style="position:fixed;right:24px;bottom:24px;z-index:5;font-size:15px;max-width:480px"></div>
@@ -165,7 +165,9 @@ function splitBody(body) {
 }
 const pointOf = f => splitBody(f.body)[0] || "";
 function diffHtml(body) {
-  const paras = splitBody(body).slice(1).filter(p => p.includes("~~") || p.includes("🟢"));
+  const has = p => p.includes("~~") || p.includes("🟢");
+  let paras = splitBody(body).slice(1).filter(has);
+  if (!paras.length) paras = splitBody(body).slice(0, 1).filter(has);  // a diff written in the first paragraph
   return marks(esc(paras.join("\n\n")));
 }
 const kindOf = f => f.kind ? f.kind[0].toUpperCase() + f.kind.slice(1) : "";
@@ -266,7 +268,7 @@ function renderDraft() {
   // edits keep working on the raw text. Markup characters are hidden, and a few
   // spans (citations, anchors) are drawn as a token in place of their source.
   const hide = new Array(N).fill(false), tok = new Array(N).fill(""), bold = new Array(N).fill(false),
-    ital = new Array(N).fill(false), link = new Array(N).fill(null), script = new Array(N).fill("");
+    ital = new Array(N).fill(false), link = new Array(N).fill(null), script = new Array(N).fill(""), under = new Array(N).fill(false);
   const taken = (a, b) => { for (let k = a; k < b; k++) if (hide[k]) return true; return false; };
   const hideRange = (a, b) => { for (let k = a; k < b; k++) hide[k] = true; };
   const refNum = Object.fromEntries((S.refs || []).map((r, k) => [r.key, k + 1]));
@@ -312,6 +314,11 @@ function renderDraft() {
   for (const m of text.matchAll(/\\([!-\/:-@\[-`{-~])/g)) {  // an escaped character, as in \* or \[
     if (!hide[m.index]) hide[m.index] = true;
   }
+  for (const m of text.matchAll(/<u>([^\n]*?)<\/u>/g)) {  // underlines, as Word files bring; they may hold superscripts
+    const a = m.index, b = a + m[0].length;
+    hideRange(a, a + 3); hideRange(b - 4, b);
+    for (let k = a + 3; k < b - 4; k++) under[k] = true;
+  }
   for (const m of text.matchAll(/<(sup|sub)>([^<\n]*)<\/\1>/g)) {  // superscripts and subscripts, as Word files bring
     const a = m.index, open = m[1].length + 2, b = a + m[0].length;
     hideRange(a, a + open); hideRange(b - open - 1, b);
@@ -343,11 +350,12 @@ function renderDraft() {
   const segs = (i, b) => {
     let out = "";
     while (i < b) {
-      const f = marks[i], bo = bold[i], it = ital[i], ln = link[i], sc = script[i]; let j = i;
-      while (j < b && marks[j] === f && bold[j] === bo && ital[j] === it && link[j] === ln && script[j] === sc) j++;
+      const f = marks[i], bo = bold[i], it = ital[i], ln = link[i], sc = script[i], un = under[i]; let j = i;
+      while (j < b && marks[j] === f && bold[j] === bo && ital[j] === it && link[j] === ln && script[j] === sc && under[j] === un) j++;
       let seg = "";
       for (let k = i; k < j; k++) seg += tok[k] + (hide[k] ? "" : esc(text[k]));
       if (sc && seg) seg = `<${sc}>${seg}</${sc}>`;
+      if (un && seg) seg = `<u>${seg}</u>`;
       if (it && seg) seg = `<i>${seg}</i>`;
       if (bo && seg) seg = `<b>${seg}</b>`;
       if (ln && seg) {
@@ -604,34 +612,41 @@ function commentThreads() {
       `</div>`).join("") + `</div>`).join("");
 }
 
-function renderTypos() {
-  // Typos are listed together, all checked, and accepted in one step instead of one by one in the draft.
-  const el = document.getElementById("typos"), ty = S.findings.filter(f => f.severity === "Typo" && !f.status && f.applicable);
-  el.hidden = !ty.length;
-  if (!ty.length) return;
-  el.innerHTML = `<div class="listhead"><span class="title">Typos</span> <span class="meta">${ty.length} one-word fixes no other voter disputed · uncheck any to keep</span></div>` +
-    ty.map(f => `<label style="display:flex;gap:8px;align-items:baseline;margin:4px 0;font-size:14px"><input type="checkbox" checked data-n="${f.n}"><span>${f.n}. ${diffHtml(f.body)}</span></label>`).join("") +
-    `<div class="row" style="margin-top:6px"><button id="acctypos">Accept checked</button><span class="err" id="typoerr"></span></div>`;
-  document.getElementById("acctypos").onclick = async () => {
-    const ns = [...el.querySelectorAll("input:checked")].map(x => +x.dataset.n);
-    for (const n of ns) { try { await api("/api/accept", {n}); } catch (e) { document.getElementById("typoerr").textContent = e.message; } }
-    load();
-  };
-}
-
-function renderChecks() {
-  // Problems the script finds without a model, recomputed from the current text on every load.
-  const el = document.getElementById("checks"), cs = S.checks || [];
-  el.hidden = !cs.length;
-  if (!cs.length) return;
-  el.innerHTML = `<div class="listhead"><span class="title">Checks</span> <span class="meta">${cs.length} found by the script, not the panel · click one to jump to it</span></div>` +
-    cs.map(c => `<div class="chk" data-pos="${c.pos}" style="cursor:pointer;font-size:14px;margin:3px 0">${c.id}. <span class="meta">line ${c.line}</span> ${esc(c.what)}${c.fix ? ` <button class="fixc" data-fix="${c.fix}">Fix</button>` : ""}</div>`).join("");
+function renderNits() {
+  // One list for everything small, in draft order: the panel's nitpicks, typos no voter disputed, and
+  // checks the script finds without a model (recomputed from the current text on every load). Typos
+  // start checked and nitpicks that can be applied start unchecked; "Accept checked" applies them together.
+  const el = document.getElementById("nits");
+  const fs = S.findings.filter(f => (f.severity === "Nitpick" || f.severity === "Typo") && !f.status);
+  const rows = [...fs.map(f => ({pos: f.span ? f.span[0] : Infinity, f})), ...(S.checks || []).map(c => ({pos: c.pos, c}))]
+    .sort((a, b) => a.pos - b.pos);
+  el.hidden = !rows.length;
+  if (!rows.length) return;
+  const nTypo = fs.filter(f => f.severity === "Typo").length, nCheck = (S.checks || []).length;
+  const parts = [`${fs.length - nTypo} from the panel`, nTypo && `${nTypo} typo${nTypo > 1 ? "s" : ""}`, nCheck && `${nCheck} found by the script`].filter(Boolean);
+  const box = f => f.applicable && !S.readonly ? `<input type="checkbox" data-n="${f.n}"${f.severity === "Typo" ? " checked" : ""}>` : `<span style="width:13px"></span>`;
+  const row = r => r.f
+    ? `<label class="nit" style="display:flex;gap:8px;align-items:baseline;margin:4px 0;font-size:14px">${box(r.f)}<span>${r.f.n}. ` +
+      (r.f.severity === "Typo" ? `${diffHtml(r.f.body)} <span class="meta">· typo</span>` : `<a data-n="${r.f.n}" style="cursor:pointer">${esc(r.f.title)}</a>`) + `</span></label>`
+    : `<div class="nit chk" data-pos="${r.c.pos}" style="display:flex;gap:8px;align-items:baseline;margin:4px 0;font-size:14px;cursor:pointer"><span style="width:13px"></span>` +
+      `<span>${r.c.id}. <span class="meta">line ${r.c.line}</span> ${esc(r.c.what)} <span class="meta">· found by the script</span>` +
+      `${r.c.fix ? ` <button class="fixc" data-fix="${r.c.fix}">Fix</button>` : ""}</span></div>`;
+  el.innerHTML = `<div class="listhead"><span class="title">Nitpicks</span> <span class="meta">${rows.length} open: ${parts.join(", ")} · click one to jump to it</span></div>` +
+    rows.map(row).join("") +
+    (fs.some(f => f.applicable) && !S.readonly ? `<div class="row" style="margin-top:6px"><button id="accnits">Accept checked</button><span class="err" id="niterr"></span></div>` : "");
+  el.querySelectorAll("a[data-n]").forEach(a => a.onclick = e => { e.preventDefault(); select(+a.dataset.n, true); });
   el.querySelectorAll(".fixc").forEach(x => x.onclick = async e => { e.stopPropagation(); await api("/api/fix", {fix: x.dataset.fix}); load(); });
   el.querySelectorAll(".chk").forEach(x => x.onclick = () => {
     const pos = +x.dataset.pos;
     const b = [...document.querySelectorAll("#draft [data-a]")].find(e => +e.dataset.a <= pos && pos < +e.dataset.b);
     if (b) { centerOn(b); b.classList.remove("flash"); void b.offsetWidth; b.classList.add("flash"); }
   });
+  const acc = document.getElementById("accnits");
+  if (acc) acc.onclick = async () => {
+    const ns = [...el.querySelectorAll("input:checked")].map(x => +x.dataset.n);
+    for (const n of ns) { try { await api("/api/accept", {n}); } catch (e) { document.getElementById("niterr").textContent = e.message; } }
+    load();
+  };
 }
 
 let summaryOpen = true;
@@ -678,8 +693,7 @@ function renderSummary() {
 
 function renderSide() {
   renderSummary();
-  renderChecks();
-  renderTypos();
+  renderNits();
   const el = document.getElementById("list"), fs = S.findings.filter(shown);
   el.innerHTML = `<div class="listhead"><span class="title">Findings</span> <span class="meta">${fs.length} shown by the filters above · click one to jump to it</span></div>` +
     fs.map(f => `<div data-n="${f.n}" class="${f.n === cur ? "cur" : ""}">${f.n}. <span class="sev ${f.severity}">${f.severity}</span>${f.kind ? " · " + kindOf(f) : ""} · ${esc(f.title)}${f.seen > 1 ? ` <span class="meta">· in ${f.seen} reviews</span>` : ""}${f.status ? " · " + f.status : ""}</div>`).join("");
@@ -750,6 +764,14 @@ function render() {
 }
 
 function select(n, scroll) {
+  const f = S.findings.find(x => x.n === n);
+  if (f && f.severity !== "Typo" && !shown(f)) {  // picked from the summary but hidden: lift only the filters that hide it
+    if (filt.kind !== "All" && kindOf(f) !== filt.kind) { filt.kind = "All"; logicAuto = false; }
+    if (filt.form !== "All" && formOf(f) !== filt.form) filt.form = "All";
+    if (filt.sev !== "All" && f.severity !== filt.sev) filt.sev = "All";
+    if (filt.tag !== "All" && f.tag !== filt.tag) filt.tag = "All";
+    if (!shown(f)) filt.status = "All";
+  }
   cur = n; mode = null; render();
   const e = document.querySelector(`.hl[data-n="${n}"]`);
   if (scroll && e) centerOn(e);
@@ -879,44 +901,58 @@ function save(blob, name) {
   a.click();
   URL.revokeObjectURL(a.href);
 }
-document.getElementById("dlbtn").onclick = e => {
-  e.stopPropagation();
-  const el = document.getElementById("dlmenu");
-  el.hidden = !el.hidden;
-  document.getElementById("dldraft").textContent = `Edited draft (${(S && S.draft_format) || ".md"})`;
-};
-document.addEventListener("click", e => { const el = document.getElementById("dlmenu"); if (!el.contains(e.target)) el.hidden = true; });
-document.getElementById("dlreview").onclick = async () => {
-  document.getElementById("dlmenu").hidden = true;
+// Download: the review or the edited draft, each as Markdown or Word (a draft that came as a PDF also as PDF).
+let dlOpen = false;
+const FORMAT = {md: "Markdown (.md)", docx: "Word (.docx)", pdf: "PDF (.pdf)"};
+function drawDl() {
+  const el = document.getElementById("dl");
+  const sub = (what, label, fmts, title) => `<div class="mbitem sub" title="${title}"><span>${label}</span><span class="mbarrow">▸</span><div class="mbmenu">` +
+    fmts.map(f => `<div class="mbitem" data-what="${what}" data-fmt="${f}">${FORMAT[f]}</div>`).join("") + `</div></div>`;
+  el.innerHTML = `<span class="mbname">Download <span class="mbarrow">▾</span></span>` + (dlOpen ? `<div class="mbmenu">` +
+    sub("review", "Review", ["md", "docx"], "Every finding with its proposed change") +
+    sub("draft", "Edited draft", (S && S.draft_formats) || ["md", "docx"], "The draft as it is now. A Word draft gets your edits as tracked changes.") +
+    `</div>` : "");
+  el.classList.toggle("open", dlOpen);
+  el.querySelector(".mbname").onclick = e => { e.stopPropagation(); dlOpen = !dlOpen; drawDl(); };
+  el.querySelectorAll(".mbitem[data-fmt]").forEach(it => it.onclick = e => { e.stopPropagation(); dlOpen = false; drawDl(); download(it.dataset.what, it.dataset.fmt); });
+}
+document.addEventListener("click", () => { if (dlOpen) { dlOpen = false; drawDl(); } });
+drawDl();
+async function download(what, fmt) {
+  const name = document.querySelector("#dl .mbname");
+  name.innerHTML = `Making the file… <span class="mbarrow">▾</span>`;
   try {
-    const j = await api("/api/markdown");
-    save(new Blob([j.markdown], {type: "text/markdown"}), j.name);
-  } catch (e) { alert("Could not get the review: " + e.message); }
-};
-document.getElementById("dldraft").onclick = async () => {
-  const item = document.getElementById("dldraft");
-  item.textContent = "Making the file…";
-  try {
-    const r = await fetch("/api/draft");
+    const r = await fetch(`/api/export/${what}.${fmt}`);
     if (!r.ok) throw new Error((await r.json()).error || r.statusText);
-    const name = (r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/);
-    save(await r.blob(), name ? name[1] : "draft");
-    // A Word file gets the edits as tracked changes. List the ones it could not take, to make by hand.
+    const file = (r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/);
+    save(await r.blob(), file ? file[1] : `${what}.${fmt}`);
+    // A Word draft gets the edits as tracked changes. List the ones it could not take, to make by hand.
     const missed = JSON.parse(decodeURIComponent(r.headers.get("X-Not-Placed") || "%5B%5D"));
     if (missed.length) alert(`${missed.length} edit${missed.length > 1 ? "s were" : " was"} not placed in the Word file. Make ${missed.length > 1 ? "them" : "it"} by hand:\n\n` +
       missed.map(m => `• ${m.why}\n  was: ${m.old || "(nothing)"}\n  now: ${m.new || "(removed)"}`).join("\n\n"));
-  } catch (e) { alert("Could not get the draft: " + e.message); }
-  document.getElementById("dlmenu").hidden = true;
-};
+  } catch (e) { alert(`Could not get the ${what === "review" ? "review" : "draft"}: ${e.message}`); }
+  drawDl();
+}
 document.getElementById("openbtn").onclick = () => window.open(location.origin + "/open", "_blank");
 document.getElementById("sumbtn").onclick = () => { summaryOpen = !summaryOpen; renderSide(); if (summaryOpen) document.getElementById("side").scrollTop = 0; };
 document.getElementById("askbtn").onclick = () => { commentOpen = !commentOpen; renderSide(); const t = document.querySelector("#commentbox textarea"); if (t) { document.getElementById("side").scrollTop = 0; t.focus(); } };
 document.getElementById("update").onclick = async () => { await api("/api/update", {}); load(); };
 document.getElementById("acceptall").onclick = async () => {
-  const todo = S.findings.filter(f => shown(f) && !f.status && f.applicable);
-  if (!todo.length) return;
-  if (!confirm(`Apply ${todo.length} change${todo.length > 1 ? "s" : ""} to ${S.name}?`)) return;
-  for (const f of todo) { try { await api("/api/accept", {n: f.n}); } catch (e) {} }
+  // Typos live in the Nitpicks list, so they count as shown when nitpicks would be.
+  const open = S.findings.filter(f => !f.status && (shown(f) || (f.severity === "Typo" && shown({...f, severity: "Nitpick"}))));
+  const todo = open.filter(f => f.applicable), left = open.filter(f => !f.applicable);
+  // Say what is left and why: a question has no text to apply, and some changes no longer match the draft.
+  const LEFT = {question: ["question to answer", "questions to answer"], changed: ["passage changed since the review", "passages changed since the review"],
+    point: ["point with no change to apply", "points with no change to apply"], other: ["change the page cannot apply", "changes the page cannot apply"]};
+  const why = f => f.form === "question" ? "question" : /not in the draft/.test(f.reason || "") ? "changed" : /no diff/.test(f.reason || "") ? "point" : "other";
+  const counts = Object.entries(left.reduce((c, f) => (c[why(f)] = (c[why(f)] || 0) + 1, c), {}))
+    .map(([k, n]) => `${n} ${LEFT[k][n > 1 ? 1 : 0]}`);
+  const rest = left.length ? `\n\nLeft for you: ${counts.join(", ")}.` : "";
+  if (!todo.length) { alert(`Nothing shown can be applied.${rest}`); return; }
+  if (!confirm(`Apply ${todo.length} change${todo.length > 1 ? "s" : ""} to ${S.name}?${rest}`)) return;
+  const failed = [];
+  for (const f of todo) { try { await api("/api/accept", {n: f.n}); } catch (e) { failed.push(`${f.n}. ${f.title}: ${e.message}`); } }
+  if (failed.length) alert(`${failed.length} could not be applied, often because an earlier change rewrote the same passage:\n\n${failed.join("\n")}`);
   load();
 };
 document.addEventListener("keydown", e => {
