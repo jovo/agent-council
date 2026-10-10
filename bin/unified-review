@@ -60,6 +60,7 @@ import math
 import os
 import random
 import re
+import secrets
 import shlex
 import shutil
 import signal
@@ -4140,7 +4141,7 @@ def start_upload(name, body):
         raise ValueError(f"choose a {', '.join(UPLOAD_TYPES)} file")
     if not body:
         raise ValueError("the file is empty")
-    uid = time.strftime("%Y-%m-%d-%H%M%S-") + hashlib.sha1(body).hexdigest()[:6]
+    uid = time.strftime("%Y-%m-%d-%H%M%S-") + secrets.token_hex(12)
     folder = RUNS_DIR / "uploads" / uid
     doc = folder / "upload" / name  # so the run is named <date>-upload-<file>-v1
     doc.parent.mkdir(parents=True)
@@ -4335,7 +4336,7 @@ def choose_file(start):
 def start_review(path):
     """Review a file in place in the background, as `unified-review FILE` does.
     Returns the job id, read with upload_job(id, "opens")."""
-    jid = time.strftime("%Y-%m-%d-%H%M%S-") + hashlib.sha1(str(path).encode()).hexdigest()[:6]
+    jid = time.strftime("%Y-%m-%d-%H%M%S-") + secrets.token_hex(12)
     folder = RUNS_DIR / "opens" / jid
     folder.mkdir(parents=True)
     (folder / "file.txt").write_text(str(path))
