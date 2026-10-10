@@ -152,6 +152,11 @@ right?".
      `unified-review --ignore 5,7 --note "<their reason, if given>"`.
    - When the user wants a declined point back: `unified-review --unignore D2`
      (D ids are listed under "Previously declined" in `unified.md`).
+   - When the user wants a file's history forgotten (start over, nothing held
+     back to stop churn): `unified-review --forget FILE`. It sets aside the
+     file's earlier reviews, decisions, and versions under `runs/forgotten/`.
+     A Word or PDF file's edited Markdown copy stays, so the next review sees
+     the edited text as version 1.
    Every agent (Claude, Codex, Cursor) records to the same log, so decisions
    made in one are visible in the others. `unified-review --decisions` lists
    them for the current project, and `--item` shows whether an item was

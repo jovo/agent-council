@@ -15,6 +15,7 @@ Usage: unified-review [-o OUTDIR] [-n FOCUS] [-p PANEL] [--context FILE]... [--v
        unified-review --applied 3                  record applied findings
        unified-review --unignore D2                lift a past decline
        unified-review --decisions                  list decisions for this folder
+       unified-review --forget FILE                start FILE's history over (kept in runs/forgotten)
        unified-review --snapshot FILE              save FILE as FILE-v<N> beside it
        unified-review --changes N FILE             write every change since version N
   -o OUTDIR  where to write output (default: <project>-<file>-v<N> under
@@ -61,6 +62,7 @@ import random
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -727,6 +729,43 @@ def _record_decisions(spec, decision, note, run):
             print(f"{item}: recorded as {decision} ({entry['id']}) for {Path(path).name}")
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     write_atomic(RUNS_DIR / "decisions.json", json.dumps(dec, indent=1, ensure_ascii=False) + "\n")
+
+
+def forget(path):
+    """Set aside everything the script remembers about a file, so its next review
+    is its first: earlier reviews (which hold back churn and carry findings over),
+    decisions, and version numbers. They move to RUNS_DIR/forgotten/, not away.
+    A PDF or Word file's Markdown copy, with its edits, and the original beside it
+    stay, so the edited text is what the next review sees. Returns the folder."""
+    p = Path(path).resolve()
+    if (is_pdf(p) or is_docx(p)) and converted_path(p).exists():
+        p = converted_path(p)  # what was reviewed is the Markdown copy
+    out = RUNS_DIR / "forgotten" / f"{time.strftime('%Y-%m-%d-%H%M%S')}-{p.stem}"
+    runs = runs_for(p)
+    (out / "runs").mkdir(parents=True)
+    for run in runs:
+        shutil.move(str(run), str(out / "runs" / run.name))
+    with open(RUNS_DIR / ".decisions.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        dec = load_decisions()
+        gone = dec.pop(str(p), [])
+        write_atomic(RUNS_DIR / "decisions.json", json.dumps(dec, indent=1, ensure_ascii=False) + "\n")
+    reg_file = RUNS_DIR / "versions.json"
+    reg = json.loads(reg_file.read_text()) if reg_file.exists() else {}
+    versions = reg.pop(str(p), [])
+    write_atomic(reg_file, json.dumps(reg, indent=1) + "\n")
+    (out / "forgotten.json").write_text(json.dumps(
+        {"file": str(p), "runs": [r.name for r in runs], "decisions": gone, "versions": versions}, indent=1) + "\n")
+    # A review page still open on this file has no review behind it now: stop its server.
+    pages_file = RUNS_DIR / "pages.json"
+    pages = json.loads(pages_file.read_text()) if pages_file.exists() else {}
+    if str(p) in pages:
+        with contextlib.suppress(OSError):
+            os.kill(pages[str(p)]["pid"], signal.SIGTERM)
+    print(f"{p.name}: set aside {len(runs)} review{'' if len(runs) == 1 else 's'}, {len(gone)} decision"
+          f"{'' if len(gone) == 1 else 's'}, and {len(versions)} version{'' if len(versions) == 1 else 's'} in {out}")
+    print(f"The next review of {Path(path).name} is its first.")
+    return out
 
 
 def show_decisions(here):
@@ -3970,6 +4009,20 @@ def job_progress(uid, lines, running):
     return [{k: st[k] for k in ("label", "state", "secs", "models")} for st in stages]
 
 
+def reviewed_copy(name, body):
+    """The Markdown copy an uploaded PDF or Word file was reviewed as before, and
+    its runs: (path, runs). (None, []) for a file not seen before. Each upload of
+    another kind is a new copy, so it has no history."""
+    name = Path(name).name
+    if not (is_pdf(name) or is_docx(name)) or not body:
+        return None, []
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / name
+        f.write_bytes(body)
+        md = converted_path(f).resolve()  # reviews record resolved paths
+    return (md, runs_for(md)) if md.exists() else (None, [])
+
+
 def upload_job(uid, kind="uploads"):
     """Where a background review stands, for an upload or (kind "opens") a file
     chosen with Open: {"running", "name", "log"}, and when it is done,
@@ -4113,9 +4166,22 @@ class UploadServer:
         err = lambda code, msg: (code, "application/json", json.dumps({"error": msg}))
         if method == "GET" and route == "/api/ping":
             return ok({"file": UPLOAD})
-        if method == "POST" and route.startswith("/api/upload/"):
+        if method == "POST" and (m := re.fullmatch(r"/api/upload/(?:(check|open|fresh)/)?([^/]+)", route)):
+            # check: was this file reviewed before? open: its last review page. fresh: forget
+            # its history, then review it. No action: review it, keeping its history.
+            name = urllib.parse.unquote(m[2])
+            if m[1] in ("check", "open", "fresh"):
+                md, runs = reviewed_copy(name, body)
+                if m[1] == "check":
+                    return ok({"seen": bool(runs), "reviews": len(runs),
+                               "last": runs[0].name[:10] if runs else None})
+                if m[1] == "open":
+                    url = page_url(md) if runs else None
+                    return ok({"page": public_url(url)}) if url else err(404, "no earlier review of this file")
+                if runs:
+                    forget(md)
             try:
-                return ok({"id": start_upload(urllib.parse.unquote(route[len("/api/upload/"):]), body)})
+                return ok({"id": start_upload(name, body)})
             except ValueError as e:
                 return err(400, str(e))
         if method == "GET" and route.startswith("/api/job/"):
@@ -4333,6 +4399,8 @@ def main():
     ap.add_argument("--ignore", metavar="N[,N..]", help="record that you declined these findings")
     ap.add_argument("--applied", metavar="N[,N..]", help="record that you applied these findings")
     ap.add_argument("--unignore", metavar="D[,D..]", help="lift past declines (D ids)")
+    ap.add_argument("--forget", metavar="FILE",
+                    help="set aside a file's earlier reviews, decisions, and versions, so its next review is its first")
     ap.add_argument("--decisions", action="store_true",
                     help="list recorded decisions for files under the current folder")
     ap.add_argument("--note", default="", help="your reason, stored with --ignore or --applied")
@@ -4353,6 +4421,11 @@ def main():
     a = ap.parse_args()
     if a.decisions:
         show_decisions(str(Path.cwd().resolve()))
+        return
+    if a.forget:
+        if not Path(a.forget).is_file():
+            sys.exit(f"error: no such file: {a.forget}")
+        forget(a.forget)
         return
     for flag, kind in (("ignore", "ignore"), ("applied", "applied"), ("unignore", "lifted")):
         if getattr(a, flag):

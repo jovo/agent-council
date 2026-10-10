@@ -25,6 +25,7 @@ main{max-width:860px;margin:0 auto;padding:24px 16px 80px}
 #drop.over{border-color:var(--ink)}
 #drop p{margin:0 0 8px}
 #status{margin-top:16px}
+.choices{display:grid;gap:10px;margin-top:10px}.choices button{min-width:170px}
 .stages{margin:12px 0;font-size:15px}
 .stage{padding:6px 0;border-bottom:1px solid var(--line)}
 .stage.running>b{color:var(--ink)}.stage.done>b,.stage.done .models{color:var(--muted)}.stage .failed{color:var(--crit-ink)}
@@ -74,13 +75,34 @@ function progress(j) {
     `</div>`).join("") + `</div>`;
 }
 
+const send = async (action, file) => {
+  const r = await fetch(`/api/upload/${action ? action + "/" : ""}${encodeURIComponent(file.name)}`, {method: "POST", body: file});
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+};
+
+// A PDF or Word file reviewed before: open that review, review it again with its
+// history, or start over. Anything else, or a file not seen before, is reviewed at once.
 async function upload(file) {
   $("status").innerHTML = `<div class="meta">Uploading ${esc(file.name)}…</div>`;
   try {
-    const r = await fetch("/api/upload/" + encodeURIComponent(file.name), {method: "POST", body: file});
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.statusText);
-    location.hash = j.id;
+    const seen = await send("check", file);
+    if (!seen.seen) { location.hash = (await send("", file)).id; return; }
+    $("drop").hidden = true; $("again").hidden = false;  // "Review another file" backs out
+    $("status").innerHTML = `<p>You reviewed <b>${esc(file.name)}</b> before: ${seen.reviews} review${seen.reviews > 1 ? "s" : ""}, the last on ${esc(seen.last)}.</p>
+      <div class="choices">
+        <div><button data-a="open">Open the last review</button> <span class="meta">See it and your edits as they are. The panel does not run.</span></div>
+        <div><button data-a="">Review again</button> <span class="meta">The panel reviews your edited text. Earlier reviews still hold back churn and carry open findings over.</span></div>
+        <div><button data-a="fresh">Start over</button> <span class="meta">Forget this file's earlier reviews, decisions, and versions, and review your edited text as its first version. They are set aside, not deleted.</span></div>
+      </div>`;
+    $("status").querySelectorAll("button[data-a]").forEach(b => b.onclick = async () => {
+      $("status").querySelectorAll("button").forEach(x => x.disabled = true);
+      try {
+        const j = await send(b.dataset.a, file);
+        if (j.page) location.href = j.page; else location.hash = j.id;
+      } catch (e) { $("status").insertAdjacentHTML("beforeend", `<div class="err">${esc(e.message)}</div>`); }
+    });
   } catch (e) { $("status").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 
@@ -124,7 +146,7 @@ document.addEventListener("drop", e => {
   e.preventDefault(); drop.classList.remove("over");
   if (!drop.hidden && e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
 });
-$("again").onclick = () => { location.hash = ""; $("pick").value = ""; };
+$("again").onclick = () => { location.hash = ""; $("pick").value = ""; show(null); };
 $("download").onclick = () => {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([markdown], {type: "text/markdown"}));

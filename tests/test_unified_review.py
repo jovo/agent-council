@@ -1,4 +1,6 @@
 """Tests for unified-review. Run: python3 -m unittest discover tests"""
+import contextlib
+import io
 import json
 import re
 import shutil
@@ -1329,6 +1331,35 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual(st["name"], "my paper.pdf")
             self.assertEqual(page.handle("GET", "/api/job/nope", b"")[0], 404)
 
+    @unittest.skipUnless(shutil.which("pandoc"), "needs pandoc")
+    def test_upload_of_a_reviewed_word_file_offers_open_again_or_fresh(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+            src = Path(d) / "memo.md"
+            src.write_text("# Memo\n\nSome text.\n")
+            docx = Path(d) / "memo.docx"
+            subprocess.run(["pandoc", str(src), "-o", str(docx)], check=True)
+            body, page = docx.read_bytes(), ur.UploadServer()
+            check = lambda: json.loads(page.handle("POST", "/api/upload/check/memo.docx", body)[2])
+            self.assertEqual(check(), {"seen": False, "reviews": 0, "last": None})
+            with contextlib.redirect_stderr(io.StringIO()):
+                md = ur.to_markdown(docx)
+            run = ur.RUNS_DIR / "2026-10-09-1200-memo-v1"
+            run.mkdir()
+            md = md.resolve()  # as a review records it
+            (run / "results.json").write_text(json.dumps({"files": [str(md)]}))
+            self.assertEqual(check(), {"seen": True, "reviews": 1, "last": "2026-10-09"})
+            self.assertEqual(json.loads(page.handle("POST", "/api/upload/check/notes.md", b"# x")[2])["seen"], False)
+            with mock.patch.object(ur, "page_url", lambda p: "http://127.0.0.1:1/" if p == md else None):
+                self.assertEqual(json.loads(page.handle("POST", "/api/upload/open/memo.docx", body)[2])["page"],
+                                 "http://127.0.0.1:1/")
+            with mock.patch.object(ur, "start_upload", lambda name, body: "job1"):
+                self.assertEqual(json.loads(page.handle("POST", "/api/upload/memo.docx", body)[2]), {"id": "job1"})
+                self.assertEqual(check()["seen"], True)  # review again keeps the history
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(json.loads(page.handle("POST", "/api/upload/fresh/memo.docx", body)[2]), {"id": "job1"})
+            self.assertEqual(check()["seen"], False)  # start over forgot it
+            self.assertTrue(md.exists())  # the edited copy stays
+
     def test_open_reviews_the_chosen_file_in_place(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
                 mock.patch.object(ur.sys, "platform", "darwin"):
@@ -1440,6 +1471,27 @@ class ReviewPage(unittest.TestCase):
             with zipfile.ZipFile(docx) as a, zipfile.ZipFile(out) as b:
                 self.assertEqual(a.read("word/comments.xml"), b.read("word/comments.xml"))
                 self.assertIn(b"ZOTERO_ITEM", b.read("word/document.xml"))
+
+    def test_forget_sets_aside_reviews_decisions_and_versions(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+            doc, other = Path(d).resolve() / "memo.md", Path(d).resolve() / "other.md"
+            doc.write_text("# Memo\n")
+            for name, f in (("r1", doc), ("r2", doc), ("r3", other)):
+                (ur.RUNS_DIR / name).mkdir(parents=True)
+                (ur.RUNS_DIR / name / "results.json").write_text(json.dumps({"files": [str(f)]}))
+            (ur.RUNS_DIR / "decisions.json").write_text(json.dumps({str(doc): [{"id": "D1"}], str(other): [{"id": "D1"}]}))
+            (ur.RUNS_DIR / "versions.json").write_text(json.dumps({str(doc): ["a", "b"], str(other): ["c"]}))
+            with contextlib.redirect_stdout(io.StringIO()):
+                out = ur.forget(doc)
+            self.assertEqual(ur.runs_for(doc), [])
+            self.assertEqual([r.name for r in ur.runs_for(other)], ["r3"])
+            self.assertEqual(sorted(x.name for x in (out / "runs").iterdir()), ["r1", "r2"])
+            self.assertNotIn(str(doc), json.loads((ur.RUNS_DIR / "decisions.json").read_text()))
+            self.assertIn(str(other), json.loads((ur.RUNS_DIR / "decisions.json").read_text()))
+            self.assertEqual(ur.version_number(doc, "b"), 1)  # the edited text is version 1
+            kept = json.loads((out / "forgotten.json").read_text())
+            self.assertEqual((kept["decisions"], kept["versions"]), ([{"id": "D1"}], ["a", "b"]))
+            self.assertTrue(doc.exists())
 
     def test_draft_downloads_in_the_format_it_came_in(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
