@@ -81,6 +81,7 @@ The page shows the current draft, set in New Computer Modern like the PDFs and d
 - **Ask** beside **Accept all shown** sends a question, comment, or request about the whole draft ("tighten the wedge section") to every panelist. Edits they propose appear with their own Accept. Tick "Use as focus for the next Re-review" to pass the comment to the next review.
 - Double-click any paragraph, heading, or table to edit its Markdown in place. Save writes it back, unless it changed in the file since the page loaded.
 - **Panel** chooses the models for Re-review and Ask, saved per file. Its menu lists models by lab, model, version, and setting: those Claude Code and Codex run directly, and every model `cursor-agent models` lists.
+- **Iterate** asks for a number of rounds (3 by default), then reviews, applies every finding all voters agreed with plus Major and Minor findings a majority agreed with, records the rest as declined, and reviews again. It skips contested, whole-draft, and question findings and findings with a blank to fill. It stops early when a round applies nothing, saves a snapshot beside the file after each round, and writes the changes since the start. `unified-review --iterate N FILE` runs the same loop from a terminal.
 - **Re-review** runs a new review of the current text and loads it. The header gives when the review ran and says "edited since" once the file differs.
 - Keys: `j` and `k` move between findings, `a` accepts, `e` edits, `d` declines, `q` asks, and ⌘Enter saves an edit or sends a question.
 
