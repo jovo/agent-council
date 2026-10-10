@@ -263,7 +263,7 @@ function renderDraft() {
   // edits keep working on the raw text. Markup characters are hidden, and a few
   // spans (citations, anchors) are drawn as a token in place of their source.
   const hide = new Array(N).fill(false), tok = new Array(N).fill(""), bold = new Array(N).fill(false),
-    ital = new Array(N).fill(false), link = new Array(N).fill(null);
+    ital = new Array(N).fill(false), link = new Array(N).fill(null), script = new Array(N).fill("");
   const taken = (a, b) => { for (let k = a; k < b; k++) if (hide[k]) return true; return false; };
   const hideRange = (a, b) => { for (let k = a; k < b; k++) hide[k] = true; };
   const refNum = Object.fromEntries((S.refs || []).map((r, k) => [r.key, k + 1]));
@@ -284,6 +284,14 @@ function renderDraft() {
   for (const m of text.matchAll(/<a\s+(?:id|name)="([^"]+)"\s*>\s*<\/a>/g)) {  // anchors for cross-references
     tok[m.index] = `<span id="${esc(m[1])}"></span>`;
     hideRange(m.index, m.index + m[0].length);
+  }
+  for (const m of text.matchAll(/\\([!-\/:-@\[-`{-~])/g)) {  // an escaped character, as in \* or \[
+    if (!hide[m.index]) hide[m.index] = true;
+  }
+  for (const m of text.matchAll(/<(sup|sub)>([^<\n]*)<\/\1>/g)) {  // superscripts and subscripts, as Word files bring
+    const a = m.index, open = m[1].length + 2, b = a + m[0].length;
+    hideRange(a, a + open); hideRange(b - open - 1, b);
+    for (let k = a + open; k < b - open - 1; k++) script[k] = m[1];
   }
   for (const m of text.matchAll(/<br\s*\/?>/gi)) {  // a line break, as in a table cell
     tok[m.index] = "<br>";
@@ -311,10 +319,11 @@ function renderDraft() {
   const segs = (i, b) => {
     let out = "";
     while (i < b) {
-      const f = marks[i], bo = bold[i], it = ital[i], ln = link[i]; let j = i;
-      while (j < b && marks[j] === f && bold[j] === bo && ital[j] === it && link[j] === ln) j++;
+      const f = marks[i], bo = bold[i], it = ital[i], ln = link[i], sc = script[i]; let j = i;
+      while (j < b && marks[j] === f && bold[j] === bo && ital[j] === it && link[j] === ln && script[j] === sc) j++;
       let seg = "";
       for (let k = i; k < j; k++) seg += tok[k] + (hide[k] ? "" : esc(text[k]));
+      if (sc && seg) seg = `<${sc}>${seg}</${sc}>`;
       if (it && seg) seg = `<i>${seg}</i>`;
       if (bo && seg) seg = `<b>${seg}</b>`;
       if (ln && seg) {
