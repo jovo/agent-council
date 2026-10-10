@@ -1086,16 +1086,34 @@ class Summary(unittest.TestCase):
 class NotAssessed(unittest.TestCase):
     def test_lists_what_the_panel_could_not_check(self):
         with tempfile.TemporaryDirectory() as d:
-            plain, fig = Path(d) / "a.md", Path(d) / "b.md"
-            plain.write_text("Text only.\n")
+            prose, nums, fig = Path(d) / "a.md", Path(d) / "b.md", Path(d) / "c.md"
+            prose.write_text("We propose a four-day week for the team.\n")
+            nums.write_text("Accuracy rose to 78.4% (n = 5 seeds).\n")
             fig.write_text("See ![fit](fig1.png).\n")
-            self.assertEqual(ur.not_assessed({"files": [str(plain)], "verify": False}),
+            # Prose with no numbers, code, or data: nothing to reproduce.
+            self.assertEqual(ur.not_assessed({"files": [str(prose)], "verify": False}),
                              "Not assessed by the panel: whether cited sources say what the draft says they do "
-                             "(`--verify` checks them) and whether reported numbers reproduce from the data or code.")
+                             "(`--verify` checks them).")
+            self.assertEqual(ur.not_assessed({"files": [str(prose)], "verify": True}), "")
+            self.assertEqual(ur.not_assessed({"files": [str(nums)], "verify": True}),
+                             "Not assessed by the panel: whether reported numbers reproduce from the data or code.")
             self.assertEqual(ur.not_assessed({"files": [str(fig)], "verify": True}),
-                             "Not assessed by the panel: whether reported numbers reproduce from the data or code "
-                             "and the images the draft links to.")
-            self.assertIn(", and the images", ur.not_assessed({"files": [str(fig)], "verify": False}))
+                             "Not assessed by the panel: the images the draft links to.")
+            self.assertIn(", whether reported numbers reproduce from the data or code, and the images",
+                          ur.not_assessed({"files": [str(nums), str(fig)], "verify": False}))
+
+
+class ClaimRules(unittest.TestCase):
+    def test_claim_map_and_finding_rule_reach_the_panel(self):
+        rules = ur.reviewer_rules()
+        self.assertIn("identify up to three central claims", rules)
+        self.assertIn("smallest adequate remedy", rules)
+        self.assertIn("Keep Nitpicks terse", rules)
+        # The prompt carries the rule itself, so custom --rules cannot drop it.
+        prompt = ur.review_prompt("draft", "", "custom rules only")
+        self.assertIn("up to three central claims", prompt)
+        self.assertIn("smallest adequate remedy", prompt)
+        self.assertIn("state the decision the\ndefect could mislead", prompt)
 
 
 class SinceLast(unittest.TestCase):
