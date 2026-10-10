@@ -86,7 +86,7 @@ def tearDownModule():
 REVIEW = """Some preamble the parser should ignore.
 
 === FINDING
-severity: Critical
+severity: Major
 title: Date is wrong
 quote: Rome was founded in 1066.
 ---
@@ -102,22 +102,22 @@ quote:
 Cut the throat-clearing.
 
 === FINDING
-severity: Substantive
+severity: Minor
 title: Missing separator, so this one is skipped
 """
 
-VOTES = """A1 | agree | Critical | same:none | Wrong date.
+VOTES = """A1 | agree | Major | same:none | Wrong date.
 **A2** | Partial | polish | same: none | Minor.
-- B1 | disagree | Substantive | same:A1 | Not wrong.
+- B1 | disagree | Minor | same:A1 | Not wrong.
 B2 | maybe | Polish | same:none | Not a valid vote word.
 """
 
 
-def finding(fid, quote="", severity="Substantive", pos=0):
+def finding(fid, quote="", severity="Minor", pos=0):
     return {"id": fid, "quote": quote, "severity": severity, "title": fid, "body": fid, "pos": pos}
 
 
-def vote(v, same="NONE", severity="Substantive"):
+def vote(v, same="NONE", severity="Minor"):
     return {"vote": v, "severity": severity, "same": same, "reason": v}
 
 
@@ -150,14 +150,14 @@ class Parsing(unittest.TestCase):
     def test_parse_findings(self):
         fs = ur.parse_findings(REVIEW)
         self.assertEqual([f["title"] for f in fs], ["Date is wrong", "Wordy opener"])
-        self.assertEqual(fs[0]["severity"], "Critical")
+        self.assertEqual(fs[0]["severity"], "Major")
         self.assertEqual(fs[1]["severity"], "Nitpick")
         self.assertEqual(fs[0]["quote"], "Rome was founded in 1066.")
         self.assertEqual(fs[1]["quote"], "")
         self.assertIn("753 BC", fs[0]["body"])
 
     def test_parse_question_form(self):
-        fs = ur.parse_findings("=== FINDING\nseverity: Substantive\nkind: clarity\nform: question\n"
+        fs = ur.parse_findings("=== FINDING\nseverity: Minor\nkind: clarity\nform: question\n"
                                "title: Which gripper\nquote: a robot arm\n---\nTwo-finger or three-finger?\n")
         self.assertEqual(fs[0]["form"], "question")
         self.assertEqual(ur.parse_findings(REVIEW)[0]["form"], "edit")  # no form line means an edit
@@ -214,7 +214,7 @@ class GroupingAndScoring(unittest.TestCase):
         voters = ["claude", "gpt", "gemini"]
         # Gemini did not vote. Counting Claude's vote on its own finding would make
         # this 1 disagree of 2, not a majority. Without it, 1 of 1 rejects.
-        g = ur.score_group([finding("A1")], {"claude": {"A1": vote("agree", severity="Critical")},
+        g = ur.score_group([finding("A1")], {"claude": {"A1": vote("agree", severity="Major")},
                                              "gpt": {"A1": vote("disagree", severity="Polish")}, "gemini": {}},
                            voters, owner)
         self.assertTrue(g["rejected"])
@@ -238,11 +238,11 @@ class GroupingAndScoring(unittest.TestCase):
     def test_score_group_takes_median_severity_and_raisers(self):
         owner = {"A": "claude", "B": "gpt"}
         g = ur.score_group([finding("A1"), finding("B1")],
-                           {"claude": {"A1": vote("agree", severity="Critical")},
+                           {"claude": {"A1": vote("agree", severity="Major")},
                             "gpt": {"A1": vote("agree", severity="Polish")},
-                            "gemini": {"A1": vote("agree", severity="Substantive")}},
+                            "gemini": {"A1": vote("agree", severity="Minor")}},
                            ["claude", "gpt", "gemini"], owner)
-        self.assertEqual(g["severity"], "Substantive")
+        self.assertEqual(g["severity"], "Minor")
         self.assertEqual(g["raised_by"], ["claude", "gpt"])
 
 
@@ -345,7 +345,7 @@ class Rendering(unittest.TestCase):
             "reviewers_ok": list(reviewers), "voters": list(voters), "verify": False,
             "failures": list(failures), "headings": ur.draft_headings(draft), "groups": groups}))
 
-    def group(self, title, quote, where, pos, contested=False, rejected=False, severity="Substantive"):
+    def group(self, title, quote, where, pos, contested=False, rejected=False, severity="Minor"):
         return {"rep": {"title": title, "quote": quote, "body": "Point."}, "where": where, "pos": pos,
                 "severity": severity, "frac": 1, "score": 2, "n_votes": 2, "raised_by": ["claude"],
                 "votes": {"claude": vote("agree"), "gpt": vote("disagree" if contested else "agree")},
@@ -364,7 +364,7 @@ class Rendering(unittest.TestCase):
                       g("Odd word", "More text here.", "style")])
         (self.tmp / "summary.json").write_text(json.dumps({"themes": [
             {"theme": "Wording", "gist": "Long gist sentence.", "findings": [1, 2, 3]}]}))
-        block = ur.review_markdown(self.tmp).split("## Substantive")[0]
+        block = ur.review_markdown(self.tmp).split("## Minor")[0]
         self.assertIn("## Summary (3 findings)\n\n- **Logical flaws (1 finding):**\n  - Step fails (1)\n- **Wording (2 findings):**\n  - Vague term (2)\n  - Odd word (3)\n", block)
         self.assertNotIn("Long gist", block)
 
@@ -376,13 +376,13 @@ class Rendering(unittest.TestCase):
     def test_logic_flaws_come_first(self):
         dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
         g = lambda title, q, kind, sev: {**self.group(title, q, "draft", ur.position(dn, q), severity=sev), "kind": kind}
-        self.results([g("Critical fact", "First line.", "evidence", "Critical"),
-                      g("Leap", "More text here.", "logic", "Substantive"),
-                      g("Broken step", "Rome was founded in 1066.", "logic", "Critical")])
+        self.results([g("Major fact", "First line.", "evidence", "Major"),
+                      g("Leap", "More text here.", "logic", "Minor"),
+                      g("Broken step", "Rome was founded in 1066.", "logic", "Major")])
         ur.render(self.tmp)
         md = (self.tmp / "unified.md").read_text()
-        order = [md.index(x) for x in ("## Logical flaws", "### 1. Broken step (Critical)", "### 2. Leap (Substantive)",
-                                       "## Critical", "### 3. Critical fact (evidence)")]
+        order = [md.index(x) for x in ("## Logical flaws", "### 1. Broken step (Major)", "### 2. Leap (Minor)",
+                                       "## Major", "### 3. Major fact (evidence)")]
         self.assertEqual(order, sorted(order))
 
     def test_votes_sit_beside_the_title(self):
@@ -400,11 +400,11 @@ class Rendering(unittest.TestCase):
                       self.group("Late substantive", "More text here.", "draft", at("More text here.")),
                       self.group("Overall", "", "overview", 0),
                       self.group("Date", "Rome was founded in 1066.", "draft", at("Rome was founded in 1066."),
-                                 contested=True, severity="Critical"),
+                                 contested=True, severity="Major"),
                       self.group("Early substantive", "First line.", "draft", at("First line."))])
         ur.render(self.tmp)
         md = (self.tmp / "unified.md").read_text()
-        order = [md.index(t) for t in ("## Critical", "### 1. Date (contested)", "## Substantive", "### 2. Overall",
+        order = [md.index(t) for t in ("## Major", "### 1. Date (contested)", "## Minor", "### 2. Overall",
                                        "### 3. Early substantive", "### 4. Late substantive", "## Nitpicks",
                                        "- **5.** Late polish")]
         self.assertEqual(order, sorted(order))
@@ -616,7 +616,7 @@ class Decisions(unittest.TestCase):
         self.run = self.tmp / "run"
         self.run.mkdir()
         g = {"rep": {"title": "Date is wrong", "quote": "Rome was founded in 1066.", "body": "Wrong date.\n\n~~1066~~"},
-             "where": "draft", "pos": 0, "severity": "Critical", "frac": 1, "rejected": False, "members": ["A1"]}
+             "where": "draft", "pos": 0, "severity": "Major", "frac": 1, "rejected": False, "members": ["A1"]}
         (self.run / "results.json").write_text(json.dumps({"files": [str(self.doc)], "headings": [], "groups": [g],
                                                            "versions": [{"path": str(self.doc), "number": 2}]}))
         self.patch = mock.patch.object(ur, "RUNS_DIR", self.tmp)
@@ -759,10 +759,10 @@ class Pipeline(unittest.TestCase):
             if stage == "review" and reply is not None:
                 return reply
             if stage == "review":
-                return (f"=== FINDING\nseverity: Substantive\ntitle: Sky color by {m}\n"
+                return (f"=== FINDING\nseverity: Minor\ntitle: Sky color by {m}\n"
                         "quote: The sky is green today.\n---\nThe sky is blue.")
             ids = re.findall(r"^\[([A-H]\d+)\]", prompt, re.M)
-            return "\n".join(f"{i} | agree | Substantive | same:none | fine" for i in ids)
+            return "\n".join(f"{i} | agree | Minor | same:none | fine" for i in ids)
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
             f = d / "memo.md"
@@ -920,13 +920,13 @@ class CarryOver(unittest.TestCase):
         self.assertEqual(new["seen"], 1)
         self.assertTrue(new["key"].startswith("K"))
         # The baseline sentence is gone from the draft, so its finding counts as resolved.
-        self.assertEqual(since, {"resolved": ["Missing baseline"], "dropped": []})
+        self.assertEqual(since, {"resolved": [{"n": None, "title": "Missing baseline"}], "dropped": []})
 
     def test_unchanged_passage_not_raised_again_is_dropped(self):
         prev = [{"key": "Kaaaaaa", "title": "Vague term", "quote": "many things happen here", "seen": 1}]
         rejected = self.group("Vague term", "many things happen here", rejected=True)
         since = ur.carry_over([rejected], prev, ur.norm("many things happen here."))
-        self.assertEqual(since, {"resolved": [], "dropped": ["Vague term"]})
+        self.assertEqual(since, {"resolved": [], "dropped": [{"n": None, "title": "Vague term"}]})
 
     def test_open_block(self):
         self.assertEqual(ur.open_block([]), "")
@@ -1038,7 +1038,7 @@ class Placement(unittest.TestCase):
 class Summary(unittest.TestCase):
     def test_written_once_in_background_then_kept(self):
         run = Path(tempfile.mkdtemp())
-        (run / "unified.md").write_text("## Critical\n\n### 1. F1 is never defined\n")
+        (run / "unified.md").write_text("## Major\n\n### 1. F1 is never defined\n")
         calls = []
         def call(name, prompt, out, workdir, stage=""):
             calls.append(prompt)
@@ -1054,6 +1054,55 @@ class Summary(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertIn("F1 is never defined", calls[0])
         shutil.rmtree(run)
+
+    def test_key_claim_is_one_sentence_from_the_draft(self):
+        run = Path(tempfile.mkdtemp())
+        draft = run / "memo.md"
+        draft.write_text("Sparse coding predicts V1 receptive fields.\n")
+        (run / "results.json").write_text(json.dumps({"files": [str(draft)]}))
+        (run / "unified.md").write_text("## Major\n\n### 1. F1 is never defined\n")
+        calls = []
+        def call(name, prompt, out, workdir, stage=""):
+            calls.append(prompt)
+            return ('{"claim": "Sparse coding predicts V1 receptive fields. It also predicts V2.", '
+                    '"themes": [{"theme": "Definitions", "gist": "F1 is undefined.", "findings": [1]}]}')
+        with mock.patch.object(ur, "call", call), mock.patch.object(ur, "load_rules", lambda p: ("rules", "")):
+            ur.summary_state(run)
+            for _ in range(100):
+                if (run / "summary.json").exists():
+                    break
+                time.sleep(0.01)
+            st = ur.summary_state(run)
+        self.assertEqual(st["claim"], "Sparse coding predicts V1 receptive fields.")
+        self.assertIn("<draft>\nSparse coding predicts V1 receptive fields.", calls[0])
+        shutil.rmtree(run)
+
+    def test_one_sentence(self):
+        self.assertEqual(ur.one_sentence("A holds. B holds."), "A holds.")
+        self.assertEqual(ur.one_sentence("  A  holds  "), "A holds")
+        self.assertEqual(ur.one_sentence(None), "")
+
+
+class SinceLast(unittest.TestCase):
+    def results(self, since):
+        g = lambda t, seen, pos: {"rep": {"title": t, "quote": "", "body": "Point."}, "severity": "Major",
+                                  "rejected": False, "where": "draft", "pos": pos, "seen": seen}
+        return {"groups": [g("Old point", 2, 0), g("New point", 1, 5)], "headings": [], "since_last": since}
+
+    def test_counts_and_numbers(self):
+        r = self.results({"resolved": [{"n": 4, "title": "Fixed thing"}],
+                          "dropped": [{"n": 6, "title": "Quiet thing"}]})
+        block = ur.since_block(r)
+        self.assertIn("**Resolved (1)**: 4 (numbers from the last review)", block)
+        self.assertIn("**Persisting (1)**: 1", block)
+        self.assertIn("**New (1)**: 2", block)
+        self.assertIn("Quiet thing", block)
+
+    def test_first_review_has_no_block(self):
+        self.assertEqual(ur.since_block(self.results(None)), "")
+
+    def test_older_runs_kept_titles_only(self):
+        self.assertIn("**Resolved (1)**\n", ur.since_block(self.results({"resolved": ["Fixed thing"], "dropped": []})))
 
 
 class Churn(unittest.TestCase):
@@ -1076,7 +1125,7 @@ class Churn(unittest.TestCase):
         history = ["Alpha three words here.\n\nBeta stays the same."]
         g = typo_group("Alpha four words", "Alpha five words")
         self.assertIn("changed since the last review", ur.churn(g, text, history))
-        g["severity"] = "Substantive"
+        g["severity"] = "Minor"
         self.assertIsNone(ur.churn(g, text, history))
         steady = typo_group("Beta stays", "Beta remains")
         self.assertIsNone(ur.churn(steady, text, history))
@@ -1085,9 +1134,9 @@ class Churn(unittest.TestCase):
         text = "Alpha four words here."
         history = ["Alpha two words here.", "Alpha three words here."]
         g = typo_group("Alpha four words", "Alpha five words")
-        g["severity"] = "Substantive"
+        g["severity"] = "Minor"
         self.assertIn("2 of the last 2", ur.churn(g, text, history))
-        g["severity"] = "Critical"
+        g["severity"] = "Major"
         self.assertIsNone(ur.churn(g, text, history))
 
     def test_typos_are_never_held(self):
@@ -1183,7 +1232,7 @@ class ReviewPage(unittest.TestCase):
             doc.write_text("# Memo\n\nThe sky is green today. Grass grows.\n\nWater is dry.\n")
             run = Path(d) / "runs" / "r1"
             run.mkdir(parents=True)
-            g = lambda t, q, body: {"rep": {"title": t, "quote": q, "body": body}, "severity": "Substantive",
+            g = lambda t, q, body: {"rep": {"title": t, "quote": q, "body": body}, "severity": "Minor",
                                     "where": "draft", "pos": 0, "rejected": False, "votes": {"claude": {"vote": "agree"}},
                                     "raised_by": ["claude"], "frac": 1.0}
             (run / "results.json").write_text(json.dumps({
@@ -1230,6 +1279,11 @@ class ReviewPage(unittest.TestCase):
         self.assertEqual(fs[0]["kind"], "logic")
         v = ur.parse_votes("A1 | agree | Polish | style | same:none | ok\nA2 | partial | Critical | same:none | old format")
         self.assertEqual((v["A1"]["kind"], v["A2"]["kind"]), ("style", ""))
+        # Older names map to the current ones in rank order.
+        self.assertEqual(fs[0]["severity"], "Major")
+        self.assertEqual((v["A1"]["severity"], v["A2"]["severity"]), ("Nitpick", "Major"))
+        self.assertEqual([ur.canon_sev(s) for s in ("Critical", "Substantive", "Polish", "Minor")],
+                         ["Major", "Minor", "Nitpick", "Minor"])
         self.assertEqual(ur.majority_kind(["logic", "clarity", "clarity"], "logic"), "clarity")
         self.assertEqual(ur.majority_kind(["logic", "clarity"], ""), "logic")  # ties go to logic
         self.assertEqual(ur.majority_kind([], "evidence"), "evidence")
@@ -1347,7 +1401,7 @@ class ReviewPage(unittest.TestCase):
             draft.write_text(quote + "\n")
 
             def state():
-                with mock.patch.object(ur, "ordered_findings", lambda r: [(1, "Substantive", "", g)]), \
+                with mock.patch.object(ur, "ordered_findings", lambda r: [(1, "Minor", "", g)]), \
                      mock.patch.object(ur, "load_decisions", lambda: {}), \
                      mock.patch.object(ur, "load_questions", lambda run: {}), \
                      mock.patch.object(ur, "page_panel", lambda p: []):
@@ -1376,7 +1430,7 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual(ur.load_comments(run)[0]["passage"], "The sky is green.")
 
     def test_a_review_of_an_edit_appends_its_findings_after_the_rest(self):
-        review = ("=== FINDING\nseverity: Substantive\nkind: logic\ntitle: Claim lacks support\n"
+        review = ("=== FINDING\nseverity: Minor\nkind: logic\ntitle: Claim lacks support\n"
                   "quote: The sky is green.\n---\nThe claim needs a source.\n\n"
                   "~~The sky is green.~~ 🟢 **The sky is blue.**\n=== END FINDING\n")
         old = {"rep": {"title": "Old", "quote": "Grass grows.", "body": "Point."}, "votes": {}, "raised_by": [],
@@ -1389,7 +1443,7 @@ class ReviewPage(unittest.TestCase):
             (run / "results.json").write_text(json.dumps({"labels": {}, "groups": [old], "headings": []}))
 
             def call(m, prompt, *a, **k):
-                return review if "Review the draft" in prompt else "A1 | agree | Substantive | logic | same:none | Fair."
+                return review if "Review the draft" in prompt else "A1 | agree | Minor | logic | same:none | Fair."
             with mock.patch.object(ur, "call", call), mock.patch.object(ur, "page_panel", lambda p: ["claude", "gpt"]), \
                  mock.patch.object(ur, "load_rules", lambda p: ("rules", "")), mock.patch.object(ur, "load_decisions", lambda: {}):
                 ur.review_passage(draft, run, "The sky is green.")
@@ -1400,7 +1454,7 @@ class ReviewPage(unittest.TestCase):
             st = json.loads((run / "edit-review.json").read_text())
             self.assertEqual(st["status"], "done", st)
             fs = ur.ordered_findings(json.loads((run / "results.json").read_text()))
-            # The earlier Polish finding keeps number 1, and the new Substantive ones follow it.
+            # The earlier Polish finding keeps number 1, and the new Minor ones follow it.
             self.assertEqual(fs[0][3]["rep"]["title"], "Old")
             self.assertTrue(all(g.get("added") == st["first"] for _, _, _, g in fs[1:]))
             self.assertIn("Claim lacks support", [g["rep"]["title"] for _, _, _, g in fs[1:]])
