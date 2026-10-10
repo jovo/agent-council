@@ -55,9 +55,13 @@ votes on the other models' findings, never its own, with reviewers anonymized.
 The script groups duplicates, reports a finding only when two models stand
 behind it (a second model raised it, or another voted agree or partial), and
 writes `unified.md`:
-findings grouped by severity (Critical, Substantive, Nitpick), each group in
+findings grouped by severity (Major, Minor, Nitpick), each group in
 draft order with its section, file, and line, then a short list of findings not
-reported. There is no cap on findings.
+reported. There is no cap on findings. When the file was reviewed before,
+`unified.md` opens with a "Since the last review" section: three counts and
+their finding numbers, resolved (an earlier finding whose passage changed and
+that no panelist raised again, numbered as in the last review), persisting,
+and new. Report these counts to the user before the findings.
 
 - The review takes about 40 seconds to 2 minutes, then `unified.md` opens in the
   default app for .md files (set UNIFIED_REVIEW_OPEN_APP to change). With `--verify`, a web fact-check (stronger Claude and
@@ -93,7 +97,8 @@ logic findings first, and lets the user ask the panel about a finding or the
 whole draft. Each finding carries a kind (logic, evidence, clarity, style);
 when acting on findings outside the page, take open logic findings first.
 Give the user that
-link and say how many findings there are by severity. Do not paste
+link and say how many findings there are by severity. The page's summary
+opens with the draft's key claim: exactly one claim, in one sentence. Do not paste
 `unified.md` unless asked. Run `unified-review --page FILE` to reopen the page.
 Decisions made on the page are in the same log as `--applied` and `--ignore`,
 so `--item` and later reviews see them.
@@ -182,7 +187,7 @@ stopping to ask between rounds.
 3. Apply a finding only if it is in the review's main list (not rejected) and
    either:
    - every voter agreed (every vote is ✓), or
-   - it is Critical or Substantive and a majority of voters agreed (more ✓
+   - it is Major or Minor and a majority of voters agreed (more ✓
      than half the votes; ~ counts as not agreeing).
    Skip everything else, and always skip contested findings, whole-draft
    findings, question findings, and findings whose quoted text is no longer
@@ -204,8 +209,8 @@ stopping to ask between rounds.
    it (or prints `OPEN IN APP:`, which you handle as for `unified.md`).
 8. Then give one summary: for each round, the version reviewed, the
    finding numbers applied (with a few words each), and how many were skipped.
-   Then list the skipped findings worth the user's attention: Critical or
-   Substantive findings that were contested or whole-draft, with the run folder
+   Then list the skipped findings worth the user's attention: Major or
+   Minor findings that were contested or whole-draft, with the run folder
    so the user can address them by number (`--run DIR`).
 
 ## Reviewer rules
@@ -220,6 +225,7 @@ Reviewer instructions for feedback on drafts. This covers verification and how f
 - Categories the draft names but does not apply. When it sets up a split, check that each method or condition it mentions falls in exactly one category and that each category is defined well enough to place them. Ask where each one falls when the draft does not say.
 - Mechanisms that cannot produce the stated effect given how the system was built or trained, such as a policy expected to adapt to an input it was never trained on.
 - For each experiment the draft proposes, check that a reader could set it up from the text: the hardware, the task as given to the system (its instruction or goal), what varies and what stays fixed, and for a simulation, what is modeled and what is idealized. Ask about each missing piece.
+- A new term or method introduced without saying why an existing one does not serve.
 - What an expert in the draft's field expects and does not find: standard benchmarks (including well-known ones missing from a list the draft gives), accepted definitions or standards for key terms. Ask, since the omission may be deliberate.
 
 ### What not to touch
@@ -229,7 +235,7 @@ Reviewer instructions for feedback on drafts. This covers verification and how f
 
 ### Output format
 
-- Group findings by severity: **Critical** (breaks the argument or is factually wrong), then **Substantive** (weakens the argument or is unclear), then **Nitpick** (style, phrasing, typos: a few words of point at most, and a diff of only the words that change). Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Critical first, so a finding can be cited by number alone. For each finding, state the point, then immediately show its diff, before moving to the next finding. Do not collect all diffs into a separate list at the end.
+- Group findings by severity, judged by one test: do the draft's claims still stand if this goes unfixed? **Major**: no, a claim fails or is unsupported until this is fixed. **Minor**: yes, but the fix makes the draft clearer, more complete, or easier to reproduce. **Nitpick**: style, phrasing, typos, with a few words of point at most and a diff of only the words that change. Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Major first, so a finding can be cited by number alone. For each finding, state the point, then immediately show its diff, before moving to the next finding. Do not collect all diffs into a separate list at the end.
 - A question finding has no diff. State the question in one or two sentences, list the readings or options you see, and say which one you assumed. Use it only when the answer is the author's to give. When the draft already implies the answer, propose the edit.
 - Show every diff as an **inline revision of the original text**, not as a `Replace:` / `With:` pair. Strike deletions with `~~tildes~~`. Bold each addition and prefix it with `🟢 `. Tildes mark deletions only, never additions. Leave genuinely unchanged sentences plain, and for a mostly-rewritten paragraph strike the whole old block and follow it with the whole new one rather than a word-level diff.
 

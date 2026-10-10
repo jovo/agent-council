@@ -76,7 +76,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
-SEVERITIES = ["Critical", "Substantive", "Nitpick"]
+SEVERITIES = ["Major", "Minor", "Nitpick"]
 JSON_BODY_LIMIT = 1 * 1024 * 1024
 UPLOAD_BODY_LIMIT = 50 * 1024 * 1024
 AUDIO_BODY_LIMIT = 25 * 1024 * 1024
@@ -108,9 +108,14 @@ def read_request_body(headers, stream, method, route):
     return stream.read(size)
 
 
+OLD_SEVERITIES = {"critical": "Major", "substantive": "Minor", "polish": "Nitpick"}
+
+
 def canon_sev(s):
-    """Severity under its current name. Older runs called nitpicks Polish."""
-    return "Nitpick" if (s or "").lower() in ("polish", "nitpick") else s
+    """Severity under its current name. Older runs used Critical, Substantive,
+    and Nitpick (earlier still Polish), mapped here in rank order."""
+    low = (s or "").lower()
+    return OLD_SEVERITIES.get(low) or next((v for v in SEVERITIES if v.lower() == low), s)
 VOTE_SCORE = {"agree": 1.0, "partial": 0.5, "disagree": 0.0}
 VERDICTS = ["contradicted", "unverifiable", "plausible", "confirmed"]  # most cautious first
 TIMEOUT = int(os.environ.get("UNIFIED_REVIEW_TIMEOUT", "900"))
@@ -567,7 +572,7 @@ the draft needs no change, reply with the single line NO FINDINGS.
 Otherwise output only findings, each in exactly this form, and nothing else:
 
 === FINDING
-severity: Critical | Substantive | Nitpick
+severity: Major | Minor | Nitpick
 kind: logic | evidence | clarity | style
 form: edit | question
 title: <under 12 words>
@@ -581,6 +586,10 @@ Do not repeat the quoted text outside the diff, and do not put the diff in a
 code block. For a Nitpick, the point is a
 few words and the diff covers only the words that change.
 No heading and no number.>
+
+Severities: Major, a claim of the draft fails or is unsupported until this is
+fixed; Minor, the claims stand without the fix, but it makes the draft clearer,
+more complete, or easier to reproduce; Nitpick, wording, style, or a typo.
 
 Kinds: logic, a step that does not follow (missing premise, non sequitur,
 circular setup, unaddressed alternative, over- or underclaim, or an inference
@@ -611,7 +620,9 @@ For each finding, decide:
   answer it and the answer would change the draft, partial if the draft answers
   it only later or only implicitly, disagree if the draft answers it where the
   question arises (say where).
-- severity: Critical, Substantive, or Nitpick, as you would rate it.
+- severity: Major (a claim fails or is unsupported until this is fixed), Minor
+  (the claims stand without the fix), or Nitpick (wording, style, typo), as you
+  would rate it.
 - kind: logic (a step that does not follow, or an inference the evidence does
   not support), evidence (an unsupported or wrong factual claim, or a
   citation), clarity (the argument holds but is hard to follow), or style.
@@ -689,14 +700,16 @@ def parse_findings(text):
         head, sep, body = block.partition("\n---")
         if not sep:
             continue
-        f = {"severity": "Substantive", "kind": "", "form": "edit", "title": "", "quote": ""}
+        f = {"severity": "Minor", "kind": "", "form": "edit", "title": "", "quote": ""}
         for line in head.strip().splitlines():
             k, _, v = line.partition(":")
             k = k.strip().lower()
             if k in ("severity", "kind", "form", "title", "quote"):
                 f[k] = v.strip()
-        sev = f["severity"].lower().replace("polish", "nitpick")
-        f["severity"] = next((s for s in SEVERITIES if s.lower() in sev), "Substantive")
+        sev = f["severity"].lower()
+        # The first severity name in the field wins, as in "polish (minor)" from older reviewers.
+        hits = sorted((sev.find(w.lower()), w) for w in [*SEVERITIES, *OLD_SEVERITIES] if w.lower() in sev)
+        f["severity"] = canon_sev(hits[0][1]) if hits else "Minor"
         f["kind"] = next((k for k in KINDS if k in f["kind"].lower()), "")
         f["form"] = "question" if "question" in f["form"].lower() else "edit"
         f["body"] = strip_end(body)
@@ -707,7 +720,7 @@ def parse_findings(text):
 
 KINDS = ["logic", "evidence", "clarity", "style"]  # logic first: fix the argument before its wording
 VOTE_LINE = re.compile(
-    r"^\W*([A-Z]\d+)\W*\|\s*(agree|partial|disagree)\s*\|\s*(critical|substantive|nitpick|polish)\s*\|"
+    r"^\W*([A-Z]\d+)\W*\|\s*(agree|partial|disagree)\s*\|\s*(major|minor|nitpick|critical|substantive|polish)\s*\|"
     r"(?:\s*(logic|evidence|clarity|style)\s*\|)?"
     r"\s*same\s*:?\s*([A-Z]\d+|none)?\s*\|\s*(.*)$", re.I)
 
@@ -903,7 +916,7 @@ def group_findings(flat, votes):
 
 def median_severity(sevs):
     ranks = sorted(SEVERITIES.index(canon_sev(s)) for s in sevs if canon_sev(s) in SEVERITIES)
-    return SEVERITIES[ranks[(len(ranks) - 1) // 2]] if ranks else "Substantive"
+    return SEVERITIES[ranks[(len(ranks) - 1) // 2]] if ranks else "Minor"
 
 
 def score_group(members, votes, voters, owner):
@@ -914,7 +927,7 @@ def score_group(members, votes, voters, owner):
         f["score"] = sum(VOTE_SCORE[v["vote"]] for v in cast)
         f["n_votes"] = len(cast)
         f["frac"] = f["score"] / len(cast) if cast else 0
-    rep = max(members, key=lambda f: (f["frac"], -SEVERITIES.index(f["severity"]), -f["pos"]))
+    rep = max(members, key=lambda f: (f["frac"], -SEVERITIES.index(canon_sev(f["severity"])), -f["pos"]))
     raised_by = {owner[f["id"][0]] for f in members}
     rep_votes = {m: votes[m][rep["id"]] for m in voters if rep["id"] in votes.get(m, {}) and m not in raised_by}
     raiser = owner.get(rep["id"][0])
@@ -2089,6 +2102,30 @@ def participation(fails, roles, names, consequence):
     return out
 
 
+def since_block(r):
+    """Resolved, persisting, and new findings against the last review of the file,
+    with their numbers: resolved ones by their number in that review, the others
+    by their number here. A review with no earlier one has since_last of None."""
+    since = r.get("since_last")
+    if since is None:
+        return ""
+    old = lambda ps: [p if isinstance(p, dict) else {"n": None, "title": p} for p in ps]  # older runs kept titles only
+    resolved, dropped = old(since.get("resolved", [])), old(since.get("dropped", []))
+    found = ordered_findings(r)
+    persisting = [n for n, _, _, g in found if g.get("seen", 1) > 1]
+    new = [n for n, _, _, g in found if g.get("seen", 1) == 1]
+    nums = lambda ns: f": {', '.join(map(str, ns))}" if ns else ""
+    lines = [f"- **Resolved ({len(resolved)})**{nums([p['n'] for p in resolved if p['n']])}"
+             + (" (numbers from the last review)" if any(p["n"] for p in resolved) else ""),
+             f"- **Persisting ({len(persisting)})**{nums(persisting)}",
+             f"- **New ({len(new)})**{nums(new)}"]
+    lines += [f"  - Resolved: {p['title']}" for p in resolved]
+    if dropped:
+        lines.append(f"- Not raised again, though the passage is unchanged ({len(dropped)}): "
+                     + "; ".join(p["title"] for p in dropped))
+    return "## Since the last review\n\n" + "\n".join(lines)
+
+
 def render(outdir):
     """Write unified.md from results.json."""
     r = json.loads((outdir / "results.json").read_text())
@@ -2104,6 +2141,8 @@ def render(outdir):
                            "Agreement, duplicate grouping, and rejection by vote mean little in this run.")
     if r["verify"]:
         parts.append("*Fact-check running. Results go to factcheck.md.*")
+    if r.get("since_last") is not None:
+        parts.append(since_block(r))
     # Nitpicks, typos, and the script's checks are one list, after the other findings.
     current, nits = None, []
     for n, sev, where_label, g in ordered_findings(r):
@@ -2132,11 +2171,6 @@ def render(outdir):
     if nits:
         parts.append("## Nitpicks\n\nWording-level fixes: the panel's nitpicks, typos no voter disputed, and checks "
                      "the script ran without a model.\n\n" + "\n".join(nits))
-    since = r.get("since_last") or {}
-    if since.get("resolved") or since.get("dropped"):
-        parts.append("## Since the last review\n\n" + "\n".join(
-            [f"- Resolved: {t} (its passage changed)" for t in since.get("resolved", [])]
-            + [f"- Not raised again: {t} (its passage is unchanged)" for t in since.get("dropped", [])]))
     held = [g for g in r["groups"] if g.get("declined") and not g["rejected"]]
     if held:
         parts.append("## Previously declined\n\nHeld back because you declined the same point before. "
@@ -2251,7 +2285,9 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     ctx_block, ctx_text, ctx_names = context or ("", "", [])
     if ctx_names:
         log(f"supporting material: {', '.join(ctx_names)}")
-    prev = previous_open(files[0]) if len(files) == 1 and not is_pdf(files[0]) else []
+    single = len(files) == 1 and not is_pdf(files[0])
+    earlier = bool(single and runs_for(Path(files[0]).resolve()))  # this file was reviewed before
+    prev = previous_open(files[0]) if single else []
     if prev:
         log(f"carrying {len(prev)} open findings from the last review")
     prompt = review_prompt(shown, focus, rules, decided + open_block(prev), ctx_block)
@@ -2357,6 +2393,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         if hit:
             g["declined"] = {"id": hit, "title": ids[hit]["title"]}
     mech, since = [], carry_over(groups, prev, dnorm)
+    since = since if earlier else None
     if len(files) == 1 and not is_pdf(files[0]):
         text = files[0].read_text()
         mech = checks(text, files[0], DECK)
@@ -2787,15 +2824,16 @@ def checks(text, path, deck=False):
 
 def previous_open(path):
     """Open findings from the newest earlier review of this file:
-    [{key, title, quote, seen}]. Accepted, declined, and held findings are left out."""
+    [{key, n, title, quote, seen}], n being the number it had there. Accepted,
+    declined, and held findings are left out."""
     runs = runs_for(Path(path).resolve())
     if not runs:
         return []
     r = json.loads((runs[0] / "results.json").read_text())
     decided = {d["title"] for d in load_decisions().get(str(Path(path).resolve()), []) if d.get("run") == runs[0].name}
     return [{"key": g.get("key") or "K" + hashlib.sha256((g["rep"]["title"] + g["rep"]["quote"]).encode()).hexdigest()[:6],
-             "title": g["rep"]["title"], "quote": g["rep"]["quote"], "seen": g.get("seen", 1)}
-            for _, _, _, g in ordered_findings(r) if g["rep"]["title"] not in decided]
+             "n": n, "title": g["rep"]["title"], "quote": g["rep"]["quote"], "seen": g.get("seen", 1)}
+            for n, _, _, g in ordered_findings(r) if g["rep"]["title"] not in decided]
 
 
 def open_block(prev):
@@ -2812,7 +2850,8 @@ def open_block(prev):
 def carry_over(groups, prev, dnorm):
     """Give each group the key of the earlier finding it repeats, or a new key,
     and count the reviews it has appeared in. Returns the earlier findings not
-    repeated: {"resolved": passage changed, "dropped": passage unchanged}."""
+    repeated: {"resolved": passage changed, "dropped": passage unchanged}, each
+    [{"n": its number in the earlier review, "title"}]."""
     left = list(prev)
     for g in groups:
         t, q = norm(g["rep"]["title"]), g["rep"]["quote"]
@@ -2827,8 +2866,9 @@ def carry_over(groups, prev, dnorm):
             g["key"] = "K" + hashlib.sha256((g["rep"]["title"] + q).encode()).hexdigest()[:6]
             g["seen"] = 1
     gone = lambda p: p["quote"] and norm(p["quote"])[:60] not in dnorm
-    return {"resolved": [p["title"] for p in left if gone(p)],
-            "dropped": [p["title"] for p in left if not gone(p)]}
+    item = lambda p: {"n": p.get("n"), "title": p["title"]}
+    return {"resolved": [item(p) for p in left if gone(p)],
+            "dropped": [item(p) for p in left if not gone(p)]}
 
 
 # ---------------------------------------------------------------- churn
@@ -2893,8 +2933,8 @@ def restores_earlier(text, edits, history):
 def churn(g, text, history):
     """Why a finding should be held back to stop churn, or None. A change that
     restores earlier wording is held. On a passage that changed in the last
-    step, only Critical and Substantive findings show. On one that changed in
-    two of the last three steps, only Critical findings show. Typos always show."""
+    step, only Major and Minor findings show. On one that changed in
+    two of the last three steps, only Major findings show. Typos always show."""
     if g["where"] != "draft" or not history or is_typo(g):
         return None
     old, new, edits = placed_diff(text, g["rep"]["body"], g["rep"]["quote"])
@@ -2906,7 +2946,7 @@ def churn(g, text, history):
         return None
     para = next((p for p in paragraphs(text) if norm(text[anchor[0]:anchor[1]])[:60] in norm(p)), None)
     steps = times_changed(para, history)[:3] if para else []
-    if sum(steps) >= 2 and g["severity"] != "Critical":
+    if sum(steps) >= 2 and canon_sev(g["severity"]) != "Major":
         return f"the passage changed in {sum(steps)} of the last {len(steps)} versions"
     if steps[:1] == [True] and canon_sev(g["severity"]) == "Nitpick":
         return "the passage changed since the last review"
@@ -3677,21 +3717,29 @@ def fill_slots(path, run, f):
     threading.Thread(target=work, daemon=True).start()
 
 
-SUMMARY = """Below is a unified review of a draft: findings from a panel of reviewers,
+SUMMARY = """Below is a draft, then a unified review of it: findings from a panel of reviewers,
 grouped by severity and numbered. Under each finding, the votes of every
 panelist (✓ agree, ~ partial, ✗ disagree), with the reviewer who raised it in
 bold. Rejected findings and the panel's agreement statistic come last.
 
-Summarize the reviews, not the draft, for the draft's author. Group the
+First, state the draft's key claim: exactly one claim, the one the rest of the
+draft exists to support, in exactly one sentence, in the draft's own terms.
+Take it from the draft, not from the review.
+
+Then summarize the reviews, not the draft, for the draft's author. Group the
 findings into two to six themes, and put every numbered finding in exactly one
 theme. Reply with only this JSON:
 
-{{"themes": [{{"theme": "<two to six words naming a weakness of the draft>", "gist": "<one sentence: what the reviewers found under this theme>", "findings": [<finding numbers>]}}]}}
+{{"claim": "<the key claim, one sentence>", "themes": [{{"theme": "<two to six words naming a weakness of the draft>", "gist": "<one sentence: what the reviewers found under this theme>", "findings": [<finding numbers>]}}]}}
 
 Order themes by importance. In the gists, write no finding
 numbers, counts, or vote tallies, and say nothing about where reviewers agreed
-or split. Do not restate the draft's content.
+or split. Apart from the claim, do not restate the draft's content.
 Follow the house rules for prose.
+
+<draft>
+{draft}
+</draft>
 
 <review>
 {review}
@@ -3700,6 +3748,27 @@ Follow the house rules for prose.
 ---- HOUSE RULES ----
 {rules}"""
 SUMMARY_LOCK = threading.Lock()
+
+
+def summary_draft(run):
+    """The text the run reviewed, for the summary's key claim: each file's copy in
+    reviewed/, or the file itself. Empty when the run has no results."""
+    if not (run / "results.json").exists():
+        return ""
+    out = []
+    for f in json.loads((run / "results.json").read_text())["files"]:
+        try:
+            out.append(reviewed_text(run, f) or doc_text(Path(f)))
+        except (Exception, SystemExit):  # unreadable: the summary goes without it
+            continue
+    return "\n\n".join(out)
+
+
+def one_sentence(claim):
+    """The model's key claim, kept to its first sentence."""
+    text = " ".join(str(claim or "").split())
+    m = re.match(r".+?[.!?](?=\s+[A-Z(\"“]|$)", text)
+    return m[0] if m else text
 SUMMARIZING = set()
 
 
@@ -3722,7 +3791,7 @@ def summary_state(run):
     def write():
         try:
             rules, _ = load_rules(None)
-            prompt = SUMMARY.format(review=(run / "unified.md").read_text(), rules=rules)
+            prompt = SUMMARY.format(draft=summary_draft(run), review=(run / "unified.md").read_text(), rules=rules)
             text = call("claude", prompt, run / "summary-raw.txt", run, stage="summary")
             if text is None:
                 failed.write_text(failure_reason(run, "summary-raw"))
@@ -3735,7 +3804,8 @@ def summary_state(run):
             if not isinstance(d, dict) or not isinstance(d.get("themes"), list):
                 failed.write_text("the reply was not the summary JSON")
                 return
-            write_atomic(done, json.dumps({"themes": [
+            claim = one_sentence(d.get("claim"))
+            write_atomic(done, json.dumps({**({"claim": claim} if claim else {}), "themes": [
                 {"theme": str(t.get("theme", "")), "gist": str(t.get("gist", "")),
                  "findings": [int(n) for n in t.get("findings", []) if str(n).isdigit()]}
                 for t in d["themes"] if isinstance(t, dict)]}, indent=1, ensure_ascii=False) + "\n")
@@ -4364,7 +4434,8 @@ def review_markdown(run):
     count = lambda fs: f"{len(fs)} finding{'' if len(fs) == 1 else 's'}"
     first = ((f"- **Logical flaws ({count(logic)}):**\n" + titles(logic)) if logic else "- **Logical flaws:** none found.\n"
              ) if typed else "- **Logical flaws:** this review has no type labels.\n"
-    block = f"## Summary ({count(ns)})\n\n" + first + "".join(f"- **{name} ({count(fs)}):**\n{titles(fs)}" for name, fs in themes)
+    claim = f"**Key claim:** {sm['claim']}\n\n" if sm.get("claim") else ""
+    block = f"## Summary ({count(ns)})\n\n" + claim + first + "".join(f"- **{name} ({count(fs)}):**\n{titles(fs)}" for name, fs in themes)
     title, _, rest = md.partition("\n")
     return f"{title}\n\n{block}\n{rest.lstrip(chr(10))}"
 
