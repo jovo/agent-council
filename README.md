@@ -190,6 +190,16 @@ Then run `./install.sh`. It links `unified-review` and `make-pdf` into `~/.local
 - The fact-check keeps the most cautious verdict, so a checker that fails to find a source pulls a claim down to "plausible" even when another confirmed it. A carried-over confirmation is not rechecked until its sentence changes.
 - The churn guards count your own rewrites as changes, so nitpicks on a passage you just rewrote wait one round.
 
+## Benchmark
+
+`bin/review-bench` measures how often the panel finds flaws planted in drafts. Each case in `bench/plants.json` replaces one passage of a draft in `bench/drafts/` with a flawed version and names the tier it deserves. The bench reviews each planted copy, and each clean draft once as a control, then reports per tier how many flaws a panelist raised, how many the merged review reported, how many got the planted tier, and how many raised flaws the vote dropped. A flaw on a passage the control also flagged may have been found for another reason. Each review runs in its own runs folder, so the drafts' earlier reviews and decisions never carry over.
+
+```bash
+bin/review-bench --post 31
+```
+
+`--post 31` adds the report as a comment on [issue 31](https://github.com/jovo/agent-council/issues/31), which collects every run, so results can be compared across commits and panels. Add a case to `bench/plants.json` to grow the data. A run of the ten cases makes twelve reviews and takes roughly ten minutes at two at a time (`--jobs`).
+
 ## Tests
 
 ```

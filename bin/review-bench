@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""review-bench: how often the unified-review panel finds flaws planted in drafts.
+
+Each case in bench/plants.json replaces one passage of a base draft in
+bench/drafts/ with a flawed version, and names the tier a reviewer should give
+it. The bench reviews each planted copy, and each clean draft once as a control,
+then reports per tier:
+
+  raised     some panelist's finding quotes the planted text
+  reported   a finding in the merged review (not rejected, declined, or held) quotes it
+  tier       that reported finding has the planted tier
+  control    the clean draft got a reported finding on the same passage, so a
+             detection there may not be caused by the plant
+
+Every run reviews in its own runs folder, so earlier reviews, decisions, and
+versions of the drafts never carry over. Results go to a JSON file and a
+Markdown report. --post N adds the report as a comment on GitHub issue N.
+
+Usage: review-bench [-p PANEL] [--only ID,ID] [--jobs N] [--no-control] [--post ISSUE] [--out DIR]
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+UR_PATH = ROOT / "bin" / "unified-review"
+ur = SourceFileLoader("unified_review", str(UR_PATH)).load_module()
+TIERS = ["Major", "Minor", "Nitpick"]
+
+
+def plant(text, case):
+    """The draft with the case's passage replaced. The passage must occur once."""
+    if text.count(case["old"]) != 1:
+        raise ValueError(f"{case['id']}: the passage to replace occurs {text.count(case['old'])} times in {case['draft']}")
+    return text.replace(case["old"], case["new"])
+
+
+def review(name, draft_name, text, panel, out):
+    """Review `text` as `draft_name` in its own folder. Returns (results, seconds),
+    results None when the review failed."""
+    d = out / name
+    (d / "runs").mkdir(parents=True, exist_ok=True)
+    doc = d / draft_name
+    doc.write_text(text)
+    env = {**os.environ, "UNIFIED_REVIEW_RUNS": str(d / "runs"), "UNIFIED_REVIEW_NO_PAGE": "1"}
+    t0 = time.time()
+    with open(d / "review.log", "w") as log, open(d / "review.err", "w") as err:
+        code = subprocess.run([sys.executable, str(UR_PATH), str(doc), "-p", ",".join(panel)], cwd=str(d),
+                              env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=err).returncode
+    seconds = round(time.time() - t0)
+    found = sorted((d / "runs").glob("*/results.json"))
+    if code != 0 or not found:
+        return None, seconds
+    return json.loads(found[-1].read_text()), seconds
+
+
+def hits(text, quote, span):
+    """Whether a finding's quote lands on span (start, end) of text."""
+    if not quote or not quote.strip():
+        return False
+    s = ur.find_span(text, quote)
+    return bool(s) and s[0] < span[1] and s[1] > span[0]
+
+
+def match(results, text, passage):
+    """What the review did with the passage: {"raised", "reported", "tier", "finding"}."""
+    i = text.find(passage)
+    span = (i, i + len(passage))
+    raised = any(hits(text, f.get("quote", ""), span) for f in results.get("findings", []))
+    byid = {f["id"]: f for f in results.get("findings", [])}
+    for g in results.get("groups", []):
+        if g.get("rejected") or g.get("declined") or g.get("held"):
+            continue
+        quotes = [g["rep"]["quote"]] + [byid[m]["quote"] for m in g.get("members", []) if m in byid]
+        if any(hits(text, q, span) for q in quotes):
+            sev = "Nitpick" if ur.is_typo(g) else ur.canon_sev(g["severity"])
+            return {"raised": True, "reported": True, "tier": sev, "finding": g["rep"]["title"]}
+    return {"raised": raised, "reported": False, "tier": None, "finding": None}
+
+
+def summarize(rows):
+    """Counts per tier and overall: n, raised, reported, tier correct, control flagged."""
+    out = {}
+    for tier in TIERS + ["All"]:
+        rs = [r for r in rows if r.get("ok") and (tier == "All" or r["planted_tier"] == tier)]
+        out[tier] = {"n": len(rs), "raised": sum(r["raised"] for r in rs), "reported": sum(r["reported"] for r in rs),
+                     "tier_correct": sum(r["tier"] == r["planted_tier"] for r in rs),
+                     "lost_at_vote": sum(r["raised"] and not r["reported"] for r in rs),
+                     "control": sum(bool(r.get("control")) for r in rs)}
+    return out
+
+
+def report(meta, rows, summary):
+    frac = lambda k, n: f"{k}/{n}" if n else "–"
+    lines = [f"## Review bench, {meta['date']}",
+             "",
+             f"agent-council `{meta['commit']}`{' plus uncommitted edits' if meta['dirty'] else ''} · panel "
+             f"`{','.join(meta['panel'])}` · {summary['All']['n']} planted flaws in {meta['drafts']} drafts · "
+             f"{meta['minutes']} min" + (" · no control" if not meta["control"] else ""),
+             "",
+             "| Tier | Raised | Reported | Right tier (of reported) | Lost at vote | Control flagged |",
+             "|---|---|---|---|---|---|"]
+    for tier in TIERS + ["All"]:
+        s = summary[tier]
+        lines.append(f"| {tier} | {frac(s['raised'], s['n'])} | {frac(s['reported'], s['n'])} | "
+                     f"{frac(s['tier_correct'], s['reported'])} | {frac(s['lost_at_vote'], s['raised'])} | "
+                     f"{frac(s['control'], s['n']) if meta['control'] else '–'} |")
+    lines += ["", "Flaws are nested in drafts, so these are counts, not independent samples. "
+              "A reported flaw whose passage the control also flagged may have been found for another reason.",
+              "", "<details><summary>Per case</summary>", "",
+              "| Case | Planted | Raised | Reported as | Control | Finding |", "|---|---|---|---|---|---|"]
+    for r in rows:
+        if not r.get("ok"):
+            lines.append(f"| {r['id']} | {r['planted_tier']} | review failed | | | |")
+            continue
+        lines.append(f"| {r['id']} | {r['planted_tier']} | {'yes' if r['raised'] else 'no'} | {r['tier'] or 'not reported'} | "
+                     f"{'flagged' if r.get('control') else 'no' if meta['control'] else '–'} | {r['finding'] or ''} |")
+    lines += ["", "</details>"]
+    if meta["failed"]:
+        lines += ["", f"Failed reviews: {', '.join(meta['failed'])}."]
+    return "\n".join(lines) + "\n"
+
+
+def git_state():
+    run = lambda *a: subprocess.run(["git", "-C", str(ROOT), *a], capture_output=True, text=True).stdout.strip()
+    return run("rev-parse", "--short", "HEAD"), bool(run("status", "--porcelain"))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("-p", "--panel", default=",".join(ur.DEFAULT_PANEL))
+    ap.add_argument("--cases", default=str(ROOT / "bench" / "plants.json"))
+    ap.add_argument("--only", help="comma-separated case ids")
+    ap.add_argument("--jobs", type=int, default=2, help="reviews to run at once (default 2)")
+    ap.add_argument("--no-control", action="store_true", help="skip the clean-draft reviews")
+    ap.add_argument("--post", metavar="ISSUE", help="add the report as a comment on this GitHub issue")
+    ap.add_argument("--out", help="output folder (default ~/.local/share/unified-review/bench/<time>)")
+    a = ap.parse_args()
+
+    cases = json.loads(Path(a.cases).read_text())["cases"]
+    if a.only:
+        want = set(a.only.split(","))
+        cases = [c for c in cases if c["id"] in want]
+    if not cases:
+        sys.exit("error: no cases")
+    drafts_dir = Path(a.cases).parent / "drafts"
+    texts = {c["draft"]: (drafts_dir / c["draft"]).read_text() for c in cases}
+    planted = {c["id"]: plant(texts[c["draft"]], c) for c in cases}
+    panel = [m.strip() for m in a.panel.split(",") if m.strip()]
+    stamp = time.strftime("%Y-%m-%d-%H%M%S")
+    out = Path(a.out) if a.out else Path.home() / ".local/share/unified-review/bench" / stamp
+    out.mkdir(parents=True, exist_ok=True)
+    control = not a.no_control
+
+    jobs = [(c["id"], c["draft"], planted[c["id"]]) for c in cases]
+    if control:
+        jobs += [(f"control-{Path(d).stem}", d, t) for d, t in texts.items()]
+    print(f"review-bench: {len(jobs)} reviews, {a.jobs} at a time, in {out}", file=sys.stderr)
+    t0 = time.time()
+    with ThreadPoolExecutor(a.jobs) as pool:
+        done = dict(zip([j[0] for j in jobs], pool.map(lambda j: review(*j, panel, out), jobs)))
+
+    rows, failed = [], [name for name, (res, _) in done.items() if res is None]
+    for c in cases:
+        res, secs = done[c["id"]]
+        row = {"id": c["id"], "draft": c["draft"], "planted_tier": c["tier"], "planted_kind": c["kind"],
+               "what": c["what"], "seconds": secs, "ok": res is not None}
+        if res is not None:
+            row.update(match(res, planted[c["id"]], c["new"]))
+            ctl = done.get(f"control-{Path(c['draft']).stem}", (None, 0))[0] if control else None
+            row["control"] = match(ctl, texts[c["draft"]], c["old"])["reported"] if ctl else None
+        rows.append(row)
+    commit, dirty = git_state()
+    meta = {"date": time.strftime("%Y-%m-%d %H:%M"), "commit": commit, "dirty": dirty, "panel": panel,
+            "drafts": len(texts), "control": control, "minutes": round((time.time() - t0) / 60),
+            "failed": failed, "control_seconds": {n: s for n, (_, s) in done.items() if n.startswith("control-")}}
+    summary = summarize(rows)
+    (out / "bench.json").write_text(json.dumps({"meta": meta, "summary": summary, "cases": rows}, indent=1) + "\n")
+    md = report(meta, rows, summary)
+    (out / "report.md").write_text(md)
+    print(md)
+    print(out / "report.md", file=sys.stderr)
+    if a.post:
+        r = subprocess.run(["gh", "issue", "comment", a.post, "--body-file", str(out / "report.md")],
+                           cwd=str(ROOT), capture_output=True, text=True)
+        print(r.stdout.strip() or r.stderr.strip(), file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
