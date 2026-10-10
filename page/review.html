@@ -122,6 +122,7 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
     <span class="mb" id="dl" title="Download the review, or the edited draft"></span>
     <button id="openbtn" title="Choose another file in Finder and review it in a new tab">Open…</button>
     <span style="position:relative"><button id="update" title="Run a new review of the current text">Re-review</button><button id="updmore" title="Review options: start over, fact-check">▾</button><div id="updmenu" class="menu" hidden></div></span>
+    <button id="iterate" title="Review, apply what the panel agrees on, and repeat">Iterate</button>
   </div>
   <div class="row meta" id="fail" style="margin-top:4px"></div>
   <div class="row" style="margin-top:8px">
@@ -788,6 +789,7 @@ function renderSummary() {
   const er = S.edit_review;
   const fresh = er && er.status === "pending" ? `<div class="overview banner" style="margin:8px 0;font-size:14px">Reviewing your edit to “${esc(er.passage.slice(0, 80))}${er.passage.length > 80 ? "…" : ""}”. New findings appear at the end of the list, usually within a minute.</div>`
     : er && er.status === "failed" && !(S.job && S.job.running) ? `<div class="err" style="margin:8px 0">The review of your edit failed: ${esc(er.reason || "unknown error")}</div>`
+    : S.job && S.job.running && S.job.kind === "iterate" ? `<div class="overview banner" style="margin:8px 0;font-size:14px">Iterating: ${esc(S.job.progress || "starting")}. Each round reviews the text, applies the findings the panel agrees on, and declines the rest. The page shows the newest review as each round finishes.</div>`
     : S.job && S.job.running ? `<div class="overview banner" style="margin:8px 0;font-size:14px">Reviewing the current text now. The new review replaces this one when the panel finishes, usually in a minute or two.</div>`
     : S.edited && !(er && er.status === "done") ? `<div class="overview banner" style="margin:8px 0;font-size:14px">The draft changed since this review. Click Re-review to review the current text.</div>` : "";
   el.innerHTML = `<div class="card overview" style="margin-bottom:12px"><div class="row"><span class="title" style="font-size:15px">Summary</span><span class="meta" style="font-size:13px;margin-left:8px">${sevs}</span><span class="spacer"></span><a id="closesum" class="meta" style="cursor:pointer">Hide</a></div>${fresh}${body}</div>`;
@@ -856,8 +858,10 @@ function render() {
   const acc = S.findings.filter(f => f.status === "accepted").length, dec = S.findings.filter(f => f.status === "declined").length;
   document.getElementById("tally").textContent = `${acc} accepted · ${dec} declined · ${S.findings.length - acc - dec} open`;
   const job = S.job && S.job.running;
-  const up = document.getElementById("update"); up.textContent = job ? "Reviewing…" : "Re-review"; up.disabled = !!job;
+  const up = document.getElementById("update"); up.textContent = job && S.job.kind !== "iterate" ? "Reviewing…" : "Re-review"; up.disabled = !!job;
   document.getElementById("updmore").disabled = !!job;
+  const it = document.getElementById("iterate"); it.textContent = job && S.job.kind === "iterate" ? "Iterating…" : "Iterate"; it.disabled = !!job;
+  it.hidden = !!S.readonly;
   const openLogic = S.findings.filter(f => f.kind === "logic" && !f.status).length;
   if (logicAuto === null) { logicAuto = openLogic > 0; if (logicAuto) filt.kind = "Logic"; }
   if (logicAuto && !openLogic) { logicAuto = false; filt.kind = "All"; }
@@ -893,7 +897,7 @@ async function load() {
     document.getElementById("draft").innerHTML = failed
       ? `<div class="err">The new review of ${esc(S.name)} failed. Earlier reviews are in runs/forgotten. Click Re-review to try again.</div>`
       : `<div class="overview banner" style="font-size:14px">Starting over: the panel is reviewing ${esc(S.name)} as its first version. The new review appears here when it finishes, usually in a minute or two.</div>`;
-    document.getElementById("update").disabled = document.getElementById("updmore").disabled = !failed;
+    document.getElementById("update").disabled = document.getElementById("updmore").disabled = document.getElementById("iterate").disabled = !failed;
     document.getElementById("update").textContent = failed ? "Re-review" : "Reviewing…";
     document.getElementById("tally").textContent = "";
     if (!failed) setTimeout(load, 3000);
@@ -1070,6 +1074,14 @@ document.getElementById("updmore").onclick = e => {
   };
 };
 document.addEventListener("click", () => { document.getElementById("updmenu").hidden = true; });
+document.getElementById("iterate").onclick = async () => {
+  const ans = prompt(`Iterate on ${S.name}: each round reviews the text, applies findings every voter agreed with (or Major and Minor findings a majority agreed with), and records the rest as declined. It stops early when a round applies nothing. Snapshots are saved beside the file.\n\nHow many rounds?`, "3");
+  if (ans === null) return;
+  const rounds = parseInt(ans, 10);
+  if (!(rounds >= 1 && rounds <= 10)) { alert("Give a number of rounds from 1 to 10."); return; }
+  try { await api("/api/iterate", {rounds}); } catch (e) { alert(`Could not start: ${e.message}`); }
+  load();
+};
 document.getElementById("acceptall").onclick = async () => {
   // Typos live in the Nitpicks list, so they count as shown when nitpicks would be.
   const open = S.findings.filter(f => !f.status && (shown(f) || (f.severity === "Typo" && shown({...f, severity: "Nitpick"}))));
