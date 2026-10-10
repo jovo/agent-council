@@ -69,6 +69,21 @@ class Parsing(unittest.TestCase):
             ur.read_request_body({"Content-Length": str(ur.JSON_BODY_LIMIT + 1)}, io.BytesIO(), "POST", "/api/update")
         self.assertEqual(ur.read_request_body({"Content-Length": str(ur.JSON_BODY_LIMIT + 1)}, io.BytesIO(b"x"), "POST", "/api/upload/memo.md"), b"x")
 
+    def test_runs_for_reuses_unchanged_results_metadata(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d)):
+            ur.RUN_METADATA.clear()
+            draft = Path(d) / "memo.md"
+            result = ur.RUNS_DIR / "run" / "results.json"
+            result.parent.mkdir()
+            result.write_text(json.dumps({"files": [str(draft)]}))
+            with mock.patch.object(ur.json, "loads", wraps=ur.json.loads) as loads:
+                self.assertEqual(ur.runs_for(draft), [result.parent])
+                self.assertEqual(ur.runs_for(draft), [result.parent])
+                time.sleep(0.01)  # ensure a distinct mtime on filesystems with coarse clocks
+                result.write_text(json.dumps({"files": [str(Path(d) / "other.md")]}))
+                self.assertEqual(ur.runs_for(draft), [])
+            self.assertEqual(loads.call_count, 2)
+
     def test_parse_findings(self):
         fs = ur.parse_findings(REVIEW)
         self.assertEqual([f["title"] for f in fs], ["Date is wrong", "Wordy opener"])
