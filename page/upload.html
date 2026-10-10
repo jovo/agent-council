@@ -62,7 +62,7 @@ pre{white-space:pre-wrap;font:13px/1.45 ui-monospace,Menlo,monospace;color:var(-
 <script>
 const $ = id => document.getElementById(id);
 const esc = t => (t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-let markdown = "", name = "";
+let markdown = "", name = "", logOpen = true;  // the log starts open
 // Progress, read from the review's log: each stage, and each model's state in it.
 const clock = s => s < 60 ? `${s} s` : `${Math.floor(s / 60)} m ${String(s % 60).padStart(2, "0")} s`;
 function progress(j) {
@@ -102,9 +102,10 @@ function show(j) {
   $("result").hidden = !(j && j.markdown);
   name = j ? j.name : ""; $("name").textContent = name;
   if (idle) { $("status").innerHTML = ""; return; }
-  const log = j.log.length ? `<details><summary class="meta">Log</summary><pre>${esc(j.log.join("\n"))}</pre></details>` : "";
+  const log = j.log.length ? `<details id="logbox"${logOpen ? " open" : ""}><summary class="meta">Log</summary><pre>${esc(j.log.join("\n"))}</pre></details>` : "";
   if (j.running) {
     $("status").innerHTML = `<div class="meta">Reviewing for ${clock(j.elapsed)}. Each model's state is below. A long draft takes several minutes.</div>${progress(j)}${log}`;
+    if ($("logbox")) $("logbox").ontoggle = e => { logOpen = e.target.open; };  // kept across polls
   } else if (j.error) {
     $("status").innerHTML = `<div class="err">${esc(j.error)}</div>${progress(j)}<pre>${esc(j.log.join("\n"))}</pre>`;
   } else {
