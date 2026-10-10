@@ -1324,10 +1324,11 @@ class ReviewPage(unittest.TestCase):
                 self.assertIn("did not finish", st["error"])
             unified = Path(d) / "run" / "unified.md"
             unified.parent.mkdir()
-            unified.write_text("# my paper.pdf\n\n### 1. A finding\n")
+            unified.write_text("# my paper.pdf\n\n<script>window.xss = true</script>\n")
             (folder / "stdout.log").write_text(f"{unified}\n")
             st = json.loads(page.handle("GET", "/api/job/" + uid, b"")[2])
             self.assertEqual(st["markdown"], unified.read_text())
+            self.assertIsNone(st["html"])
             self.assertEqual(st["name"], "my paper.pdf")
             self.assertEqual(page.handle("GET", "/api/job/nope", b"")[0], 404)
 
