@@ -943,7 +943,13 @@ document.getElementById("acceptall").onclick = async () => {
   const todo = open.filter(f => f.applicable && !f.slot);
   // What cannot be applied (questions, malformed or misquoted changes) goes to the Word download as comments.
   if (!todo.length) { alert("Nothing shown can be applied. Questions and changes to make by hand are comments in Download ▸ Edited draft ▸ Word."); return; }
-  if (!confirm(`Apply ${todo.length} change${todo.length > 1 ? "s" : ""} to ${S.name}?`)) return;
+  // Say why the count is below the "N shown" in the findings list.
+  const vis = S.findings.filter(shown);
+  const left = [[vis.filter(f => f.status).length, "already accepted or declined"],
+                [open.filter(f => !f.applicable).length, "to make by hand"],
+                [open.filter(f => f.applicable && f.slot).length, "with a blank to fill"]]
+    .filter(([k]) => k).map(([k, why]) => `${k} ${why}`);
+  if (!confirm(`Apply ${todo.length} change${todo.length > 1 ? "s" : ""} to ${S.name}?` + (left.length ? `\n\nOf the ${vis.length} shown, left out: ${left.join(", ")}.` : ""))) return;
   const failed = [];
   for (const f of todo) { try { await api("/api/accept", {n: f.n}); } catch (e) { failed.push(`${f.n}. ${f.title}: ${e.message}`); } }
   if (failed.length) alert(`${failed.length} could not be applied, often because an earlier change rewrote the same passage:\n\n${failed.join("\n")}`);
