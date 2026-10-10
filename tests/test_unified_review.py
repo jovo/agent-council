@@ -2,6 +2,7 @@
 import contextlib
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -356,6 +357,13 @@ class Rendering(unittest.TestCase):
         self.assertEqual(apply(t, "Fix.\n\nat a reduced ~~efficiently~~🟢 efficiency, given a high enough affinity<sup>64</sup>."),
                          "at a reduced efficiency, given a high enough affinity<sup>64</sup>. This suggested")
         self.assertEqual(apply("depicted in **c**. FLAG", "Fix.\n\ndepicted in ~~c~~🟢 f."), "depicted in **f**. FLAG")
+        # Striking all a superscript holds and adding after it leaves no empty <sup></sup>.
+        _, _, e = ur.placed_diff("(BB7.2, 162 nM<sup>66</sup>) may", "Cite.\n\n(BB7.2, 162 nM<sup>~~66~~</sup>**🟢 {{citation: Author, year}}**",
+                                 "", slots=True)
+        a, b, r = e[0]
+        self.assertEqual("(BB7.2, 162 nM<sup>66</sup>) may"[:a] + r + "(BB7.2, 162 nM<sup>66</sup>) may"[b:],
+                         "(BB7.2, 162 nM{{citation: Author, year}}) may")
+        self.assertEqual(apply("see ref<sup>12</sup> here", "Drop it.\n\nsee ref~~12~~ here"), "see ref here")
         # An addition that would repeat what follows with a word changed is refused, not guessed.
         self.assertEqual(apply("as the starting point and add potency as required. Next",
                                "Fix.\n\nas the starting point 🟢 to add potency as required."), ur.MALFORMED)
@@ -1514,14 +1522,16 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual((code, mime), (200, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
             self.assertEqual(headers["Content-Disposition"], 'attachment; filename="memo-edited.docx"')
             missed = json.loads(urllib.parse.unquote(headers["X-Not-Placed"]))
-            self.assertEqual([m["why"] for m in missed], ["it changes an equation, citation or other field, footnote mark, or image"])
+            self.assertEqual([(m["why"], m["old"], m["new"]) for m in missed],
+                             [("it changes an equation, citation or other field, footnote mark, or image",
+                               "Last paragraph stays (Smith 202[0]).", "Last paragraph stays (Smith 202[1]).")])  # just the change, in brackets
             out = Path(d) / "out.docx"
             out.write_bytes(data)
             plain = lambda m: subprocess.run(["pandoc", "-f", ur.DOCX_MD, "-t", "plain", "--wrap=none"], input=m,
                                              capture_output=True, text=True).stdout
             # Accepting every change gives the edited draft, less the edit not placed. Rejecting gives the original.
-            self.assertEqual(plain(as_md(out)), plain(after.replace(
-                "Last paragraph now stays (Smith 2021).", "Last paragraph stays (Smith 2020).")))
+            # "now" is placed; only the change inside the citation field is not.
+            self.assertEqual(plain(as_md(out)), plain(after.replace("(Smith 2021)", "(Smith 2020)")))
             self.assertEqual(plain(as_md(out, "reject")), plain(before))
             self.assertRegex(as_md(out, "all"), r'"deletion"[^>]*>in this regime<.*"insertion"[^>]*>at low speed<')  # one change, not word by word
             with zipfile.ZipFile(out) as b:
@@ -1530,8 +1540,13 @@ class ReviewPage(unittest.TestCase):
             comments = as_md(out, "all")
             self.assertIn('author="Ann"', comments)
             self.assertRegex(comments, r'author="Unified review"[^>]*>This edit is in the reviewed draft but could not be placed[^<]*'
-                                       r'Was: Last paragraph stays \(Smith 2020\)\.')
+                                       r'Was: Last paragraph stays \(Smith 202\\?\[0\\?\]\)\.')  # pandoc escapes brackets
             self.assertRegex(comments, r'comment-end[^>]*></span>Last paragraph|Last paragraph[^\n]*comment-end')
+            # A blank left in the draft is a comment too.
+            md.write_text(after.replace("A new one.", "A new one {{citation: Author, year}}."))
+            _, _, data, _ = ur.export_draft(md, "docx")
+            out.write_bytes(data)
+            self.assertRegex(as_md(out, "all"), r'author="Unified review"[^>]*>Fill this in: \{\{citation: Author, year\}\}')
 
     def test_forget_sets_aside_reviews_decisions_and_versions(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
@@ -1553,6 +1568,28 @@ class ReviewPage(unittest.TestCase):
             kept = json.loads((out / "forgotten.json").read_text())
             self.assertEqual((kept["decisions"], kept["versions"]), ([{"id": "D1"}], ["a", "b"]))
             self.assertTrue(doc.exists())
+
+    def test_servers_starting_together_keep_each_others_entries(self):
+        with tempfile.TemporaryDirectory() as d:
+            runs = Path(d) / "runs"
+            files = [Path(d) / f"f{k}.md" for k in range(4)]
+            for f in files:
+                f.write_text("# x\n")
+            env = {**os.environ, "UNIFIED_REVIEW_RUNS": str(runs)}
+            procs = [subprocess.Popen([sys.executable, str(REPO / "bin" / "unified-review"), "--serve", str(f)], env=env,
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for f in files]
+            try:
+                for _ in range(50):
+                    pages = json.loads((runs / "pages.json").read_text()) if (runs / "pages.json").exists() else {}
+                    if len(pages) == len(files):
+                        break
+                    time.sleep(0.1)
+                self.assertEqual(sorted(pages), sorted(str(f.resolve()) for f in files))
+                self.assertEqual(sorted(v["pid"] for v in pages.values()), sorted(p.pid for p in procs))
+            finally:
+                for p in procs:
+                    p.terminate()
+                    p.wait()
 
     def test_draft_downloads_in_the_format_it_came_in(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):

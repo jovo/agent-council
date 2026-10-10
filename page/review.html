@@ -624,7 +624,7 @@ function renderNits() {
   if (!rows.length) return;
   const nTypo = fs.filter(f => f.severity === "Typo").length, nCheck = (S.checks || []).length;
   const parts = [`${fs.length - nTypo} from the panel`, nTypo && `${nTypo} typo${nTypo > 1 ? "s" : ""}`, nCheck && `${nCheck} found by the script`].filter(Boolean);
-  const box = f => f.applicable && !S.readonly ? `<input type="checkbox" data-n="${f.n}"${f.severity === "Typo" ? " checked" : ""}>` : `<span style="width:13px"></span>`;
+  const box = f => f.applicable && !f.slot && !S.readonly ? `<input type="checkbox" data-n="${f.n}"${f.severity === "Typo" ? " checked" : ""}>` : `<span style="width:13px"></span>`;
   const row = r => r.f
     ? `<label class="nit" style="display:flex;gap:8px;align-items:baseline;margin:4px 0;font-size:14px">${box(r.f)}<span>${r.f.n}. ` +
       (r.f.severity === "Typo" ? `${diffHtml(r.f.body)} <span class="meta">· typo</span>` : `<a data-n="${r.f.n}" style="cursor:pointer">${esc(r.f.title)}</a>`) + `</span></label>`
@@ -633,7 +633,7 @@ function renderNits() {
       `${r.c.fix ? ` <button class="fixc" data-fix="${r.c.fix}">Fix</button>` : ""}</span></div>`;
   el.innerHTML = `<div class="listhead"><span class="title">Nitpicks</span> <span class="meta">${rows.length} open: ${parts.join(", ")} · click one to jump to it</span></div>` +
     rows.map(row).join("") +
-    (fs.some(f => f.applicable) && !S.readonly ? `<div class="row" style="margin-top:6px"><button id="accnits">Accept checked</button><span class="err" id="niterr"></span></div>` : "");
+    (fs.some(f => f.applicable && !f.slot) && !S.readonly ? `<div class="row" style="margin-top:6px"><button id="accnits">Accept checked</button><span class="err" id="niterr"></span></div>` : "");
   el.querySelectorAll("a[data-n]").forEach(a => a.onclick = e => { e.preventDefault(); select(+a.dataset.n, true); });
   el.querySelectorAll(".fixc").forEach(x => x.onclick = async e => { e.stopPropagation(); await api("/api/fix", {fix: x.dataset.fix}); load(); });
   el.querySelectorAll(".chk").forEach(x => x.onclick = () => {
@@ -939,7 +939,8 @@ document.getElementById("update").onclick = async () => { await api("/api/update
 document.getElementById("acceptall").onclick = async () => {
   // Typos live in the Nitpicks list, so they count as shown when nitpicks would be.
   const open = S.findings.filter(f => !f.status && (shown(f) || (f.severity === "Typo" && shown({...f, severity: "Nitpick"}))));
-  const todo = open.filter(f => f.applicable);
+  // A change with a blank to fill is left out: it needs Fill or your own data, so it is accepted one by one.
+  const todo = open.filter(f => f.applicable && !f.slot);
   // What cannot be applied (questions, malformed or misquoted changes) goes to the Word download as comments.
   if (!todo.length) { alert("Nothing shown can be applied. Questions and changes to make by hand are comments in Download ▸ Edited draft ▸ Word."); return; }
   if (!confirm(`Apply ${todo.length} change${todo.length > 1 ? "s" : ""} to ${S.name}?`)) return;

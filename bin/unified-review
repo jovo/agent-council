@@ -1324,7 +1324,15 @@ def export_draft(path, fmt=None, notes=()):
             data, missed = patch_docx(orig, path.read_text())
         else:
             data = to_docx(path.read_text(), "markdown", path.parent)
-        unplaced = [{"quote": m["old"] or m["new"], "text": "This edit is in the reviewed draft but could not be "
+        text = path.read_text()
+        blanks = [{"quote": line[max(0, k - 60):m.end()],  # the words before the blank, and the blank
+                   "text": f"Fill this in: {m[0]} is a placeholder from an accepted finding, and it is in the text as written."}
+                  for line in text.splitlines() for m in re.finditer(r"\{\{[^{}]*\}\}", line) for k in [m.start()]]
+        with zipfile.ZipFile(io.BytesIO(data)) as z:  # a blank whose edit was not placed is not in the file
+            body = ET.fromstring(z.read("word/document.xml")).find(w_("body"))
+        words = "\n".join("".join(x["text"] for x in para_atoms(q)) for q in body.iter(w_("p")))  # as Word shows it
+        blanks = [x for x in blanks if x["text"].split(" is a placeholder")[0][len("Fill this in: "):] in words]
+        unplaced = blanks + [{"quote": m.get("anchor") or m["old"] or m["new"], "text": "This edit is in the reviewed draft but could not be "
                      f"placed here as a tracked change ({m['why']}). Make it by hand.\nWas: {m['old'] or '(nothing)'}"
                      f"\nNow: {m['new'] or '(removed)'}"} for m in missed]
         return name, DOCX_MIME, add_comments(data, list(notes) + unplaced), missed
@@ -1570,7 +1578,9 @@ class Tracker:
 
     def edit(self, p, old, new):
         """Write the change from old to new (both plain text) into paragraph p.
-        Returns why it could not, or None."""
+        Returns why it could not, or None, or for a paragraph changed in several
+        places, a list of the changes it could not place, as (why, was, now) with
+        a few words around each: the others are placed."""
         atoms = para_atoms(p)
         text = "".join(a["text"] for a in atoms)
         if wnorm(text) != wnorm(old):
@@ -1604,13 +1614,19 @@ class Tracker:
             while e > s and n and text[s] == n[0] and locked(s):
                 s, n = s + 1, n[1:]
             ops.append((s, e, n))
-        for s, e, _ in ops:
-            if any(a["locked"] and (a["start"] < e and a["end"] > s if e > s else a["start"] < s < a["end"])
-                   for a in atoms):
-                return "it changes an equation, citation or other field, footnote mark, or image"
-        for s, e, n in reversed(ops):
+        hits = lambda s, e: any(a["locked"] and (a["start"] < e and a["end"] > s if e > s else a["start"] < s < a["end"])
+                                for a in atoms)
+        bad = [(s, e, n) for s, e, n in ops if hits(s, e)]
+        for s, e, n in reversed([o for o in ops if o not in bad]):
             self.replace(p, s, e, n)
-        return None
+        if not bad:
+            return None
+        why = "it changes an equation, citation or other field, footnote mark, or image"
+        if len(bad) == len(ops):
+            return why
+        around = lambda s, e, n: (text[max(0, s - 40):s] + "[" + n + "]" + text[e:e + 40]).strip()
+        return [(why, (text[max(0, s - 40):s] + "[" + text[s:e] + "]" + text[e:e + 40]).strip(), around(s, e, n))
+                for s, e, n in bad]
 
     def delete_paragraph(self, p):
         atoms = para_atoms(p)
@@ -1716,7 +1732,7 @@ def patch_docx(orig, md):
     body_paras = Paras(body.root)
     note_paras = Paras(notes.root) if notes else None
     missed = []
-    miss = lambda old, new, why: missed.append({"old": old, "new": new, "why": why})
+    miss = lambda old, new, why, anchor=None: missed.append({"old": old, "new": new, "why": why, **({"anchor": anchor} if anchor else {})})
 
     def where(i):
         """(tracker, paragraph) of the original's unit i, or (None, None)."""
@@ -1749,7 +1765,11 @@ def patch_docx(orig, md):
                 miss(a[i][1], "", why)
         else:
             why = tr.edit(p, plain_a[i], plain_b[j])
-            if why:
+            if isinstance(why, list):  # the rest of the paragraph's changes are placed
+                here = "".join(x["text"] for x in para_atoms(p))[:80]  # the paragraph as Word now reads it
+                for w, was, now in why:
+                    miss(was, now, w, here)
+            elif why:
                 miss(a[i][1], b[j][1], why)
             elif OBJECT_MD.findall(footnote(a[i][1])) != OBJECT_MD.findall(footnote(b[j][1])):
                 miss(a[i][1], b[j][1], "its text changed in the Word file, but not its equation, image, or footnote mark")
@@ -1815,7 +1835,8 @@ def add_comments(data, notes):
     first = next((p for p, t in zip(paras, texts) if t), paras[0])
     for note in notes:
         # The quote as Word shows it: no markup, and only up to an equation or footnote mark.
-        q = wnorm(re.split(r"\$|\[\^", plain_view(note.get("quote") or "")[0])[0])[:60]
+        quote = re.sub(r"^[^<>]*>", "", note.get("quote") or "")  # a quote cut in the middle of a tag drops its tail
+        q = wnorm(re.split(r"\$|\[\^", plain_view(quote)[0])[0])[:60]
         para = next((p for p, t in zip(paras, texts) if len(q) >= 12 and q in t), None)
         text = note["text"] if para is not None else "(Its passage was not found.) " + note["text"]
         para = para if para is not None else first
@@ -3051,6 +3072,13 @@ def find_span(text, needle, near=None):
     return min(hits, key=lambda h: abs(h[0] - near)) if near is not None else hits[0]
 
 
+def tidy(edit):
+    """An edit with any markup pair it leaves empty taken out: a reviewer striking
+    the 66 in <sup>66</sup> and adding a citation after it gives no <sup></sup>."""
+    a, b, new = edit
+    return a, b, re.sub(r"<(sup|sub|u)>\s*</\1>|\*\*\*\*", "", new)
+
+
 def narrow(text, s, e, new):
     """An edit (s, e, new) on a passage with inline markup, narrowed to the
     characters that change, so markup around them stays: "depicted in **c**"
@@ -3089,6 +3117,10 @@ def narrow(text, s, e, new):
         for (os_, oe), (cs, ce) in pairs:
             if (a <= os_ and oe <= b) != (a <= cs and ce <= b):
                 a, b, changed = min(a, os_), max(b, ce), True
+    if not repl:  # deleting all a pair holds deletes the pair: no <sup></sup> left behind
+        for (os_, oe), (cs, ce) in pairs:
+            if oe == a and cs == b:
+                a, b = os_, ce
     if (a, b) != (a0, b0):
         repl = plain_view(text[a:a0])[0] + repl + plain_view(text[b0:b])[0]
     return a, b, repl
@@ -3289,7 +3321,7 @@ def locate_edits(text, old, new, quote=""):
     near = quote_span[0] if quote_span else None
     span = find_span(text, old, near) or (fuzzy_span(text, old, quote_span) if not ELLIPSIS.search(old) else None)
     if span:
-        return [narrow(text, span[0], span[1], new)]
+        return [tidy(narrow(text, span[0], span[1], new))]
     olds, news = ELLIPSIS.split(old), ELLIPSIS.split(new)
     if len(olds) < 2 or len(olds) != len(news):
         return separate_edits(text, old, new, near)
@@ -3305,7 +3337,7 @@ def locate_edits(text, old, new, quote=""):
         if sp is None:
             return None
         if o != n:
-            edits.append(narrow(text, sp[0], sp[1], n))
+            edits.append(tidy(narrow(text, sp[0], sp[1], n)))
         pos = sp[1]
     return edits or None
 
@@ -3323,7 +3355,7 @@ def separate_edits(text, old, new, near):
         if sp is None:
             return None
         if o != n:
-            edits.append(narrow(text, sp[0], sp[1], n))
+            edits.append(tidy(narrow(text, sp[0], sp[1], n)))
     edits.sort()
     if any(a[1] > b[0] for a, b in zip(edits, edits[1:])):
         return None
@@ -4491,16 +4523,21 @@ def serve(path):
         def do_POST(self):
             self.reply("POST")
 
-    pages = json.loads((RUNS_DIR / "pages.json").read_text()) if (RUNS_DIR / "pages.json").exists() else {}
-    # A fixed port keeps one forwarded URL in a codespace. Otherwise reuse this file's
-    # last port, so a tab left open works again after a restart. Fall back if it is taken.
-    port = int(os.environ.get("UNIFIED_REVIEW_PORT") or (pages.get(str(page.path)) or {}).get("port") or 0)
-    try:
-        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    except OSError:
-        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    pages[str(page.path)] = {"port": httpd.server_address[1], "pid": os.getpid()}
-    write_atomic(RUNS_DIR / "pages.json", json.dumps(pages, indent=1) + "\n")
+    # Servers starting together would each write back pages.json without the others'
+    # entries, so one at a time reads, binds, and writes it.
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(RUNS_DIR / ".pages.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        pages = json.loads((RUNS_DIR / "pages.json").read_text()) if (RUNS_DIR / "pages.json").exists() else {}
+        # A fixed port keeps one forwarded URL in a codespace. Otherwise reuse this file's
+        # last port, so a tab left open works again after a restart. Fall back if it is taken.
+        port = int(os.environ.get("UNIFIED_REVIEW_PORT") or (pages.get(str(page.path)) or {}).get("port") or 0)
+        try:
+            httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        except OSError:
+            httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        pages[str(page.path)] = {"port": httpd.server_address[1], "pid": os.getpid()}
+        write_atomic(RUNS_DIR / "pages.json", json.dumps(pages, indent=1) + "\n")
     httpd.timeout = 60
     while time.time() - page.last < PAGE_IDLE:
         httpd.handle_request()
