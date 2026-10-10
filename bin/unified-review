@@ -565,7 +565,12 @@ braces only for slots. To add new text, such as a sentence or a
 table row, include the text just before it, unchanged, so the change can be
 placed. Ignore the house rules' cap on findings
 and their ordering rule: report every finding worth making, in any order. This
-script places findings in draft order. Report nothing you would not change or
+script places findings in draft order. Before writing findings, when the draft makes an argument or asks its reader
+to decide something, identify up to three central claims or decision-critical
+commitments, the text, analysis, evidence, citation, or premise that supports
+each, and whether that support establishes the claim, supports a narrower one,
+or leaves it unsupported. Do not report this map: use it to find and rate
+findings. Report nothing you would not change or
 ask about: if
 the draft needs no change, reply with the single line NO FINDINGS.
 {extra}
@@ -580,7 +585,13 @@ quote: <the exact text this finding targets, copied verbatim from the draft or
   the author's focus material. For a finding about one section, its heading
   line. Empty for a finding about the whole draft or its overall structure.>
 ---
-<the point in one or two sentences, then the inline diff per the house rules.
+<the point, then the inline diff per the house rules. For a Major or Minor
+finding, the point states the claim or decision affected, the specific
+evidence, premise, or omission, the consequence for validity or
+interpretation, and the smallest adequate remedy, which the diff makes. For a
+Major finding about a claim, the remedy is the missing support or the narrower
+claim the evidence supports. If no claim is affected, state the decision the
+defect could mislead and why.
 For a question, the question and the readings you see, and no diff.
 Do not repeat the quoted text outside the diff, and do not put the diff in a
 code block. For a Nitpick, the point is a
@@ -2126,6 +2137,28 @@ def since_block(r):
     return "## Since the last review\n\n" + "\n".join(lines)
 
 
+# A numerical result, a reported metric, code, or a data reference: something a
+# reader could try to reproduce.
+EMPIRICAL = re.compile(r"\d\.\d|\d\s?%|±|\bp\s?[<=>]\s?0?\.\d|\bn\s?=\s?\d|```|\b(?:dataset|data set|"
+                       r"github\.com|doi\.org|zenodo|accuracy|AUC|F1|RMSE|ECE)\b", re.I)
+
+
+def not_assessed(r):
+    """What the panel could not check in this run, as one sentence, or ""."""
+    gaps = [] if r.get("verify") else [
+        "whether cited sources say what the draft says they do (`--verify` checks them)"]
+    texts = [p.read_text(errors="replace") for p in map(Path, r.get("files", [])) if p.exists() and not is_pdf(p)]
+    if any(EMPIRICAL.search(t) for t in texts) or any(is_pdf(Path(f)) for f in r.get("files", [])):
+        gaps.append("whether reported numbers reproduce from the data or code")
+    if any(re.search(r"!\[|<img\b", t) for t in texts):
+        gaps.append("the images the draft links to")
+    if not gaps:
+        return ""
+    if len(gaps) > 1:
+        gaps[-1] = "and " + gaps[-1]
+    return "Not assessed by the panel: " + (", " if len(gaps) > 2 else " ").join(gaps) + "."
+
+
 def render(outdir):
     """Write unified.md from results.json."""
     r = json.loads((outdir / "results.json").read_text())
@@ -2185,6 +2218,8 @@ def render(outdir):
     if rejected:
         parts.append("## Not reported\n\nNo second model backed these.\n\n" + "\n".join(
             f"- {g['rep']['title']}" for g in rejected))
+    if not_assessed(r):
+        parts.append(f"*{not_assessed(r)}*")
     ag = r.get("agreement") or {}
     if ag.get("alpha") is not None:
         ci = f", 95% CI {ag['ci95'][0]} to {ag['ci95'][1]}" if ag.get("ci95") else ""
@@ -3361,6 +3396,7 @@ def page_state(path, run):
             "chosen": [{"spec": m, "label": label(panelist(m)), "icon": lab_icon(m)} for m in page_panel(path)],
             "panel_icons": [{"icon": lab_icon(m), "label": labels.get(m, m)} for m in r["reviewers_ok"]],
             "comments": comment_state(run, text), "summary": summary_state(run), "checks": checks(text, path, r.get("deck", False)), "deck": r.get("deck", False),
+            "not_assessed": not_assessed(r),
             "started": r.get("started", ""), "panel": [labels.get(m, m) for m in r["reviewers_ok"]],
             "failures": r.get("failures", []), "text": text, "findings": out, "refs": cited_refs(text, path),
             "edit_review": json.loads((run / "edit-review.json").read_text()) if (run / "edit-review.json").exists() else None}
@@ -3724,7 +3760,9 @@ bold. Rejected findings and the panel's agreement statistic come last.
 
 First, state the draft's key claim: exactly one claim, the one the rest of the
 draft exists to support, in exactly one sentence, in the draft's own terms.
-Take it from the draft, not from the review.
+Make clear the kind of inference it makes: an association, a causal effect, a
+benchmark result, a theorem, or a proposal's aim. Take it from the draft, not
+from the review.
 
 Then summarize the reviews, not the draft, for the draft's author. Group the
 findings into two to six themes, and put every numbered finding in exactly one
