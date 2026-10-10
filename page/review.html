@@ -104,6 +104,9 @@ body.dropping{outline:3px dashed var(--muted);outline-offset:-8px}
 kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var(--line);border-radius:4px;padding:0 4px}
 @media (max-width:900px){main{grid-template-columns:1fr}#side{position:static}}
 </style>
+<!-- Equations. Without the network they show as their TeX source. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" onload="if (S) renderDraft()"></script>
 </head>
 <body>
 <header>
@@ -268,6 +271,13 @@ function renderDraft() {
   const hideRange = (a, b) => { for (let k = a; k < b; k++) hide[k] = true; };
   const refNum = Object.fromEntries((S.refs || []).map((r, k) => [r.key, k + 1]));
   const citeLink = n => `<a class="cite" href="#ref-${n}">${n}</a>`;
+  if (window.katex) {  // $$display$$ and $inline$ math, by pandoc's rules: no space inside the dollars, no digit after
+    for (const m of text.matchAll(/\$\$([\s\S]+?)\$\$|(?<![\\$])\$(?![\s$])((?:\\.|[^$\n\\])+?)(?<!\s)\$(?!\d)/g)) {
+      try { tok[m.index] = katex.renderToString(m[1] || m[2], {displayMode: !!m[1], throwOnError: true}); }
+      catch (e) { continue; }  // TeX that KaTeX cannot read stays as source
+      hideRange(m.index, m.index + m[0].length);
+    }
+  }
   for (const m of text.matchAll(/\[([^\[\]]*@[^\[\]]*)\]/g)) {  // [@Key] and [@A; @B]
     const nums = [...new Set([...m[1].matchAll(/(?<![\w@])-?@([A-Za-z0-9_][\w:.#$%&+?<>~/-]*\w)/g)].map(k => refNum[k[1]]).filter(Boolean))].sort((a, b) => a - b);
     if (!nums.length) continue;
