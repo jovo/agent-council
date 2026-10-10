@@ -4,7 +4,8 @@ votes on every finding. For one Markdown file, a local review page opens with
 the draft and each finding in place, where Accept writes a change into the
 file. unified.md gives the findings by severity, then in draft order, each with
 its votes. An optional web fact-check runs in the background and writes
-factcheck.md.
+factcheck.md. A PDF or Word file is reviewed as a Markdown copy, and
+Download on the page gives the edited copy back in the file's own format.
 
 Usage: unified-review [-o OUTDIR] [-n FOCUS] [-p PANEL] [--context FILE]... [--verify] [--rules FILE] FILE [FILE...]
        unified-review --page FILE                  open the review page for a file
@@ -48,6 +49,7 @@ UNIFIED_REVIEW_TIMEOUT (seconds per model call), UNIFIED_REVIEW_OPEN_APP
 import argparse
 import collections
 import contextlib
+import copy
 import difflib
 import fcntl
 import hashlib
@@ -61,8 +63,12 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+import urllib.parse
+import xml.etree.ElementTree as ET
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -507,10 +513,14 @@ its face, and say why. A separate fact-check pass verifies claims. Otherwise
 follow the Review section of the house rules for each finding's content: state
 the point, then show its inline diff. The 🟢 text is literal text for the
 draft, never an instruction to the author ("add citations ..."). When the fix
-needs new content, such as a definition, a metric and baseline, or a missing
-step, propose that content as the 🟢 text, worded as it would read in the draft,
-so the author can accept, edit, or decline it. Never describe what to add in
-place of proposing it. Only a citation or a measured value cannot be proposed
+needs new content that the draft already implies, such as a definition, a metric
+and baseline, or a missing step, propose that content as the 🟢 text, worded as
+it would read in the draft, so the author can accept, edit, or decline it. When
+the fix depends on a decision or fact only the author has (which hardware, which
+method, what a term means, who decides), do not invent it. Write a question
+finding instead: no diff, and the body is the question to the author, naming
+the readings or options you see and the one you assumed while reading. Never
+describe what to add in place of either. Only a citation or a measured value cannot be proposed
 truthfully: write it as a slot in double braces where it goes, shaped like the
 final text, such as "RECAP {{{{citation: Author, year}}}}" or
 "{{{{measured success rate}}}}", and say in the point what fills it. Use double
@@ -518,7 +528,8 @@ braces only for slots. To add new text, such as a sentence or a
 table row, include the text just before it, unchanged, so the change can be
 placed. Ignore the house rules' cap on findings
 and their ordering rule: report every finding worth making, in any order. This
-script places findings in draft order. Report nothing you would not change: if
+script places findings in draft order. Report nothing you would not change or
+ask about: if
 the draft needs no change, reply with the single line NO FINDINGS.
 {extra}
 Otherwise output only findings, each in exactly this form, and nothing else:
@@ -526,12 +537,14 @@ Otherwise output only findings, each in exactly this form, and nothing else:
 === FINDING
 severity: Critical | Substantive | Nitpick
 kind: logic | evidence | clarity | style
+form: edit | question
 title: <under 12 words>
 quote: <the exact text this finding targets, copied verbatim from the draft or
   the author's focus material. For a finding about one section, its heading
   line. Empty for a finding about the whole draft or its overall structure.>
 ---
 <the point in one or two sentences, then the inline diff per the house rules.
+For a question, the question and the readings you see, and no diff.
 Do not repeat the quoted text outside the diff, and do not put the diff in a
 code block. For a Nitpick, the point is a
 few words and the diff covers only the words that change.
@@ -562,7 +575,10 @@ For each finding, decide:
 - vote: agree (real problem, the fix improves the draft), partial (real but
   overstated, narrower, or the fix is flawed), or disagree (not a real problem,
   the quoted text is in neither the draft nor the focus material, or the fix
-  makes the draft worse).
+  makes the draft worse). For a question finding: agree if the draft does not
+  answer it and the answer would change the draft, partial if the draft answers
+  it only later or only implicitly, disagree if the draft answers it where the
+  question arises (say where).
 - severity: Critical, Substantive, or Nitpick, as you would rate it.
 - kind: logic (a step that does not follow, or an inference the evidence does
   not support), evidence (an unsupported or wrong factual claim, or a
@@ -618,7 +634,7 @@ Reply with exactly one line per claim, in order, and nothing else:
 
 # ---------------------------------------------------------------- parsing
 
-END_MARK = re.compile(r"^\s*=+\s*(?:END\s*(?:OF\s*)?FINDING\s*=*)?\s*$", re.M | re.I)  # a stray end marker
+END_MARK = re.compile(r"^\s*=+\s*(?:END\s*(?:OF\s*)?(?:FINDING)?\s*=*)?\s*$", re.M | re.I)  # a stray end marker
 
 
 FENCED_DIFF = re.compile(r"```[a-z]*\n(.*?(?:~~|🟢).*?)\n```", re.S)
@@ -641,15 +657,16 @@ def parse_findings(text):
         head, sep, body = block.partition("\n---")
         if not sep:
             continue
-        f = {"severity": "Substantive", "kind": "", "title": "", "quote": ""}
+        f = {"severity": "Substantive", "kind": "", "form": "edit", "title": "", "quote": ""}
         for line in head.strip().splitlines():
             k, _, v = line.partition(":")
             k = k.strip().lower()
-            if k in ("severity", "kind", "title", "quote"):
+            if k in ("severity", "kind", "form", "title", "quote"):
                 f[k] = v.strip()
         sev = f["severity"].lower().replace("polish", "nitpick")
         f["severity"] = next((s for s in SEVERITIES if s.lower() in sev), "Substantive")
         f["kind"] = next((k for k in KINDS if k in f["kind"].lower()), "")
+        f["form"] = "question" if "question" in f["form"].lower() else "edit"
         f["body"] = strip_end(body)
         if f["body"] or f["title"]:
             out.append(f)
@@ -847,6 +864,7 @@ def score_group(members, votes, voters, owner):
         "score": rep["score"], "n_votes": rep["n_votes"], "frac": rep["frac"],
         "severity": median_severity([v["severity"] for v in judged.values()] or [rep["severity"]]),
         "kind": majority_kind([v.get("kind", "") for v in judged.values()], rep.get("kind", "")),
+        "form": rep.get("form", "edit"),
         "rejected": len(others) >= 2 and len(backers) < 2,
         # Split vote: at least one model agreed and at least one disagreed.
         "contested": n_agree > 0 and n_dis > 0,
@@ -1015,10 +1033,19 @@ def is_pdf(p):
     return Path(p).suffix.lower() == ".pdf"
 
 
+def is_docx(p):
+    return Path(p).suffix.lower() == ".docx"
+
+
 def doc_text(p):
     """A file's text. The panel reads a PDF itself. The script uses its text,
     pages separated by form feeds, only to place quotes and number versions."""
     p = Path(p)
+    if is_docx(p):
+        r = subprocess.run(["pandoc", str(p), "-t", "plain", "--wrap=none"], capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.exit(f"error: could not read {p} (is pandoc installed?)")
+        return r.stdout
     if not is_pdf(p):
         return p.read_text()
     r = subprocess.run(["pdftotext", str(p), "-"], capture_output=True, text=True)
@@ -1110,7 +1137,7 @@ def conversion_gaps(pdf, md):
 
 
 def converted_path(p, text=None):
-    """Where a PDF's Markdown copy lives, named by the PDF's text."""
+    """Where a PDF's or Word file's Markdown copy lives, named by its text."""
     text = doc_text(p) if text is None else text
     return RUNS_DIR / "converted" / f"{p.stem}-{fingerprint(text)[1:]}" / f"{p.stem}.md"
 
@@ -1123,8 +1150,11 @@ def to_markdown(p):
     text = doc_text(p)
     md = converted_path(p, text)
     if md.exists():
+        keep_original(p, md)
         log(f"{p.name}: reviewing its Markdown copy {md}")
         return md
+    if is_docx(p):
+        return docx_to_markdown(p, md)
     if not CLAUDE:
         log(f"{p.name}: claude not found, so the panel reads the PDF itself")
         return None
@@ -1145,6 +1175,7 @@ def to_markdown(p):
         return None
     md.parent.mkdir(parents=True, exist_ok=True)
     md.write_text(out + "\n")
+    keep_original(p, md)
     missing, added = conversion_gaps(p, out)
     report = (f"Words of {p.name} missing from {md.name} ({len(missing)}):\n{' '.join(missing)}\n\n"
               f"Words {md.name} added ({len(added)}):\n{' '.join(added)}\n")
@@ -1157,6 +1188,487 @@ def to_markdown(p):
     else:
         log("  check: every word of the PDF is in the Markdown, and nothing was added")
     return md
+
+
+# Word files convert to GitHub Markdown with $...$ math, which reads back the same.
+DOCX_MD = "gfm-tex_math_gfm+tex_math_dollars"
+
+
+def docx_to_markdown(p, md):
+    """Convert a Word file to Markdown with pandoc: tracked changes accepted,
+    images saved in media/ beside the copy. Returns the copy's path."""
+    md.parent.mkdir(parents=True, exist_ok=True)
+    r = subprocess.run(["pandoc", str(p), "-t", DOCX_MD, "--wrap=none", "--track-changes=accept",
+                        "--extract-media=.", "-o", md.name], cwd=md.parent, capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"error: could not convert {p.name} to Markdown: {r.stderr.strip()[:200]}")
+    keep_original(p, md)
+    log(f"{p.name}: Markdown copy at {md}")
+    return md
+
+
+def keep_original(p, md):
+    """Keep the converted file beside its Markdown copy, so the edited draft can
+    be downloaded in its format (a Word file also lends its styles)."""
+    if not md.with_suffix(p.suffix.lower()).exists():
+        shutil.copyfile(p, md.with_suffix(p.suffix.lower()))
+
+
+def original_of(path):
+    """The PDF or Word file a Markdown copy was converted from, or None."""
+    path = Path(path)
+    if (RUNS_DIR / "converted").resolve() not in path.resolve().parents:
+        return None
+    return next((path.with_suffix(e) for e in (".docx", ".pdf") if path.with_suffix(e).exists()), None)
+
+
+def export_draft(path):
+    """(file name, MIME type, bytes, edits not placed) of the draft as it is now,
+    in the format it came in: a Word file is the original with the edits as
+    tracked changes, a PDF goes through make-pdf, anything else is as is."""
+    path, orig = Path(path), original_of(path)
+    if orig is None:
+        return f"{path.stem}-edited{path.suffix}", "text/plain; charset=utf-8", path.read_bytes(), []
+    ext = orig.suffix
+    if ext == ".docx":
+        data, missed = patch_docx(orig, path.read_text())
+        return (f"{path.stem}-edited.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document", data, missed)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / f"{path.stem}-edited.pdf"
+        r = subprocess.run([str(Path(__file__).resolve().parent / "make-pdf"), path.name, "-o", str(out)],
+                           cwd=path.parent, capture_output=True, text=True)
+        if r.returncode != 0 or not out.exists():
+            raise RuntimeError(f"could not make the PDF: {(r.stderr.strip().splitlines() or ['no output'])[-1][:200]}")
+        return out.name, "application/pdf", out.read_bytes(), []
+
+
+# Patching a Word file in place. The Markdown copy is compared with a fresh
+# conversion of the original, line by line (a table cell counts as a line), and
+# each changed line is written into its paragraph in the original as tracked
+# changes. Nothing else in the file is touched: comments, citation fields,
+# styles, and layout stay as they were. Text inside equations, fields, and
+# footnote marks is not edited, and footnotes, tables' shape, and new
+# formatting are not carried over. Those edits are returned, to make by hand.
+W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
+OBJECT = "\ufffc"  # one character for an equation, image, or footnote mark
+OBJECT_MD = re.compile(r"\$\$.+?\$\$|(?<![\\$])\$(?!\$).+?(?<!\\)\$|!\[[^\]]*\]\([^)]*\)|\[\^[^\]]+\]")
+w_ = lambda tag: f"{{{W}}}{tag}"
+
+
+def md_units(md):
+    """[(kind, Markdown)] for each line of the draft that is one paragraph in
+    Word: a paragraph, heading, list item, or table cell."""
+    units = []
+    for block in re.split(r"\n\s*\n", md.strip()):
+        lines = []
+        for line in block.splitlines():
+            starts = re.match(r"\s*([-*+]|\d+[.)])\s|\s*#|\s*>|\s*\||\s*\[\^[^\]]+\]:|\s*\$\$", line)
+            if lines and not starts and not lines[-1].lstrip().startswith("|"):
+                lines[-1] += " " + line.strip()  # a paragraph wrapped over lines
+            else:
+                lines.append(line)
+        for line in lines:
+            t = line.strip()
+            if re.fullmatch(r"\|?[\s:|-]+\|?", t) and "-" in t:
+                continue  # a table's header rule
+            if t.startswith("|"):
+                cells = re.split(r"(?<!\\)\|", t.strip("|"))
+                units += [("cell", c.strip()) for c in cells]
+            elif re.match(r"\[\^[^\]]+\]:", t):
+                units.append(("footnote", t))
+            elif t.startswith("<"):
+                units.append(("html", t))
+            else:
+                units.append(("text", t))
+    return units
+
+
+def md_plain(units):
+    """Each unit's text as Word shows it: markup removed, and each equation,
+    image, and footnote mark one OBJECT character."""
+    def prep(t):
+        t = re.sub(r"^\s*(#+|>|[-*+]|\d+[.)])\s+", "", t)
+        t = OBJECT_MD.sub(OBJECT, t)
+        return t
+    if not units:
+        return []
+    sep = "XQXSEPXQX"
+    src = f"\n\n{sep}\n\n".join(prep(t) or "​" for t in units)
+    r = subprocess.run(["pandoc", "-f", DOCX_MD, "-t", "plain", "--wrap=none"], input=src,
+                       capture_output=True, text=True, check=True)
+    out = [p.strip().replace("​", "") for p in re.split(rf"\n*^{sep}$\n*", r.stdout, flags=re.M)]
+    if len(out) != len(units):
+        raise RuntimeError("could not read the Markdown's text")
+    return out
+
+
+def para_atoms(p):
+    """The paragraph's text in pieces: [{text, el, run, locked}], where el is the
+    w:t (or other) element and run its w:r. Locked pieces (equations, fields,
+    footnote marks, images) are never edited."""
+    atoms, field = [], [0]
+
+    def walk(el, locked):
+        for c in el:
+            tag = c.tag
+            if tag == w_("r"):
+                for k in c:
+                    if k.tag == w_("fldChar"):
+                        kind = k.get(w_("fldCharType"))
+                        field[0] += {"begin": 1, "end": -1}.get(kind, 0)
+                    elif k.tag == w_("t"):
+                        atoms.append({"text": k.text or "", "el": k, "run": c, "locked": locked or field[0] > 0})
+                    elif k.tag in (w_("tab"), w_("br"), w_("cr")):
+                        atoms.append({"text": " ", "el": k, "run": c, "locked": True})
+                    elif k.tag == w_("noBreakHyphen"):
+                        atoms.append({"text": "-", "el": k, "run": c, "locked": True})
+                    elif k.tag in (w_("drawing"), w_("pict"), w_("object"), w_("sym"),
+                                   w_("footnoteReference"), w_("endnoteReference")):
+                        atoms.append({"text": OBJECT, "el": k, "run": c, "locked": True})
+            elif tag in (f"{{{M}}}oMath", f"{{{M}}}oMathPara"):
+                atoms.append({"text": OBJECT, "el": c, "run": None, "locked": True})
+            elif tag == w_("fldSimple"):
+                walk(c, True)
+            elif tag in (w_("hyperlink"), w_("ins"), w_("smartTag"), w_("sdt"), w_("sdtContent"), w_("customXml")):
+                walk(c, locked)
+            # w:del (text already deleted), w:pPr, bookmarks, and comment marks hold no text
+    walk(p, False)
+    at = 0
+    for a in atoms:
+        a["start"], a["end"] = at, at + len(a["text"])
+        at = a["end"]
+    return atoms
+
+
+def wnorm(t):
+    return re.sub(r"\s+", " ", t.translate(QUOTES).replace(" ", " ")).strip()
+
+
+def tokens(t):
+    return re.findall(r"\s+|\w+|[^\w\s]", t)
+
+
+class Tracker:
+    """Writes tracked insertions and deletions into one document.xml tree."""
+
+    def __init__(self, root):
+        self.root = root
+        ids = [int(v) for e in root.iter() for k, v in e.attrib.items() if k == w_("id") and v.lstrip("-").isdigit()]
+        self.next_id = max(ids, default=0) + 1
+        self.date = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        self.parents = {}
+
+    def mark(self, tag):
+        self.next_id += 1
+        return ET.Element(w_(tag), {w_("id"): str(self.next_id), w_("author"): "Unified review", w_("date"): self.date})
+
+    def parent(self, el):
+        if el not in self.parents:
+            self.parents = {c: p for p in self.root.iter() for c in p}
+        return self.parents[el]
+
+    def split_run(self, run, at):
+        """Move the run's children from index `at` on into a new run after it."""
+        new = ET.Element(run.tag, dict(run.attrib))
+        rpr = run.find(w_("rPr"))
+        if rpr is not None:
+            new.append(copy.deepcopy(rpr))
+        for k in list(run)[at:]:
+            run.remove(k)
+            new.append(k)
+        par = self.parent(run)
+        par.insert(list(par).index(run) + 1, new)
+        self.parents = {}
+
+    def split_at(self, p, off):
+        """Make `off` fall between runs."""
+        for a in para_atoms(p):
+            if a["start"] < off < a["end"]:  # inside a w:t: cut it in two
+                t, k = a["el"], off - a["start"]
+                t2 = ET.Element(w_("t"), {XML_SPACE: "preserve"})
+                t2.text, t.text = t.text[k:], t.text[:k]
+                t.set(XML_SPACE, "preserve")
+                kids = list(a["run"])
+                a["run"].insert(kids.index(t) + 1, t2)
+                break
+        for a in para_atoms(p):
+            if a["start"] == off and a["run"] is not None:
+                kids = list(a["run"])
+                i = kids.index(a["el"])
+                if any(k.tag != w_("rPr") for k in kids[:i]):
+                    self.split_run(a["run"], i)
+                return
+
+    def text_run(self, ref, text):
+        r = ET.Element(w_("r"))
+        rpr = ref.find(w_("rPr")) if ref is not None else None
+        if rpr is not None:
+            r.append(copy.deepcopy(rpr))
+        t = ET.SubElement(r, w_("t"), {XML_SPACE: "preserve"})
+        t.text = text
+        return r
+
+    def replace(self, p, s, e, new):
+        """Replace the paragraph's text [s, e) with `new`, as tracked changes."""
+        if e > s:
+            self.split_at(p, e)
+            self.split_at(p, s)
+        else:
+            self.split_at(p, s)
+        atoms = para_atoms(p)
+        runs = []
+        for a in atoms:
+            if s <= a["start"] and a["end"] <= e and a["end"] > a["start"] and a["run"] not in runs:
+                runs.append(a["run"])
+        before = [a for a in atoms if a["end"] <= s and a["run"] is not None]
+        after = [a for a in atoms if a["start"] >= max(s, e) and a["run"] is not None]
+        ref = runs[0] if runs else (before[-1]["run"] if before else after[0]["run"] if after else None)
+        last = None
+        for run in runs:
+            for k in run:
+                if k.tag == w_("t"):
+                    k.tag = w_("delText")
+            par = self.parent(run)
+            d = self.mark("del")
+            par.insert(list(par).index(run), d)
+            par.remove(run)
+            d.append(run)
+            self.parents = {}
+            last = d
+        if not new:
+            return
+        ins = self.mark("ins")
+        ins.append(self.text_run(ref, new))
+        if last is not None:
+            par = self.parent(last)
+            par.insert(list(par).index(last) + 1, ins)
+        elif before:
+            run = before[-1]["run"]
+            par = self.parent(run)
+            par.insert(list(par).index(run) + 1, ins)
+        elif after:
+            el = after[0]["run"]
+            par = self.parent(el)
+            par.insert(list(par).index(el), ins)
+        else:
+            p.append(ins)
+        self.parents = {}
+
+    def mark_paragraph(self, p, tag):
+        """Mark the paragraph's own mark as inserted or deleted."""
+        ppr = p.find(w_("pPr"))
+        if ppr is None:
+            ppr = ET.Element(w_("pPr"))
+            p.insert(0, ppr)
+        rpr = ppr.find(w_("rPr"))
+        if rpr is None:
+            rpr = ET.Element(w_("rPr"))
+            tail = [i for i, k in enumerate(ppr) if k.tag in (w_("sectPr"), w_("pPrChange"))]
+            ppr.insert(tail[0] if tail else len(ppr), rpr)
+        rpr.insert(0, self.mark(tag))
+
+    def edit(self, p, old, new):
+        """Write the change from old to new (both plain text) into paragraph p.
+        Returns why it could not, or None."""
+        atoms = para_atoms(p)
+        text = "".join(a["text"] for a in atoms)
+        if wnorm(text) != wnorm(old):
+            return "its paragraph in the Word file reads differently"
+        if wnorm(old) == wnorm(new):
+            return "it changes an equation, image, footnote mark, or formatting, which stays as it was"
+        # Keep the paragraph's own leading and trailing spaces (a footnote starts with one).
+        new = text[:len(text) - len(text.lstrip())] + new.strip() + text[len(text.rstrip()):]
+        a_tok, b_tok = tokens(text), tokens(new)
+        key = lambda ts: [" " if t.isspace() else t.translate(QUOTES) for t in ts]
+        offs = [0]
+        for t in a_tok:
+            offs.append(offs[-1] + len(t))
+        codes = difflib.SequenceMatcher(None, key(a_tok), key(b_tok), autojunk=False).get_opcodes()
+        # Changes with only spaces between them read as one change ("in this" -> "at low").
+        merged = []
+        for c in codes:
+            if (merged and c[0] != "equal" and len(merged) > 1 and merged[-1][0] == "equal"
+                    and merged[-2][0] != "equal" and "".join(a_tok[merged[-1][1]:merged[-1][2]]).isspace()):
+                gap, prev = merged.pop(), merged.pop()
+                c = ("replace", prev[1], c[2], prev[3], c[4])
+            merged.append(c)
+        ops = [(offs[i1], offs[i2], "".join(b_tok[j1:j2])) for tag, i1, i2, j1, j2 in merged if tag != "equal"]
+        for s, e, _ in ops:
+            if any(a["locked"] and (a["start"] < e and a["end"] > s if e > s else a["start"] < s < a["end"])
+                   for a in atoms):
+                return "it changes an equation, citation or other field, footnote mark, or image"
+        for s, e, n in reversed(ops):
+            self.replace(p, s, e, n)
+        return None
+
+    def delete_paragraph(self, p):
+        atoms = para_atoms(p)
+        if any(a["locked"] and a["text"] != " " for a in atoms):
+            return "the paragraph holds an equation, citation or other field, footnote mark, or image"
+        if atoms:
+            self.replace(p, 0, atoms[-1]["end"], "")
+        self.mark_paragraph(p, "del")
+        return None
+
+    def insert_paragraph(self, anchor, text, before=False):
+        """A new paragraph after (or before) `anchor`, styled like it. Returns it."""
+        p = ET.Element(w_("p"))
+        ppr = anchor.find(w_("pPr"))
+        if ppr is not None:
+            ppr = copy.deepcopy(ppr)
+            for k in list(ppr):
+                if k.tag in (w_("rPr"), w_("sectPr"), w_("pPrChange")):
+                    ppr.remove(k)
+            p.append(ppr)
+        self.mark_paragraph(p, "ins")
+        ref = next((a["run"] for a in para_atoms(anchor) if a["run"] is not None and not a["locked"]), None)
+        ins = self.mark("ins")
+        ins.append(self.text_run(ref, text))
+        p.append(ins)
+        par = self.parent(anchor)
+        par.insert(list(par).index(anchor) + (0 if before else 1), p)
+        self.parents = {}
+        return p
+
+
+def align(a, b):
+    """[(i, j)] pairing the original's units with the edited draft's, in order:
+    (i, None) for a unit deleted, (None, j) for a unit added. Within a changed
+    stretch, units pair when they are of one kind and alike."""
+    out = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, [u[1] for u in a], [u[1] for u in b],
+                                                        autojunk=False).get_opcodes():
+        if tag == "equal" or (i2 - i1 == j2 - j1 and all(a[i][0] == b[j][0] for i, j in
+                                                         zip(range(i1, i2), range(j1, j2)))):
+            out += zip(range(i1, i2), range(j1, j2))  # lines edited in place
+            continue
+        j = j1
+        for i in range(i1, i2):
+            k = next((k for k in range(j, j2) if a[i][0] == b[k][0] and
+                      difflib.SequenceMatcher(None, a[i][1], b[k][1]).ratio() >= 0.4), None)
+            if k is None:
+                out.append((i, None))
+                continue
+            out += [(None, n) for n in range(j, k)] + [(i, k)]
+            j = k + 1
+        out += [(None, n) for n in range(j, j2)]
+    return out
+
+
+def patch_docx(orig, md):
+    """(bytes of the Word file `orig` with the Markdown `md`'s changes written in
+    as tracked changes, [edits not placed, as {"old", "new", "why"}])."""
+    with tempfile.TemporaryDirectory() as tmp:
+        # The same command as docx_to_markdown, so image paths match.
+        r = subprocess.run(["pandoc", str(Path(orig).resolve()), "-t", DOCX_MD, "--wrap=none", "--track-changes=accept",
+                            "--extract-media=."], cwd=tmp, capture_output=True, text=True, check=True)
+    a, b = md_units(r.stdout), md_units(md)
+    pairs = align(a, b)
+    if all(i is not None and j is not None and a[i][1] == b[j][1] for i, j in pairs):
+        return Path(orig).read_bytes(), []
+    footnote = lambda t: re.sub(r"^\[\^[^\]]+\]:\s*", "", t)
+    plain_a = md_plain([footnote(t) for _, t in a])
+    plain_b = md_plain([footnote(t) for _, t in b])
+    parts, roots = {}, {}
+    with zipfile.ZipFile(orig) as z:
+        for name in ("word/document.xml", "word/footnotes.xml"):
+            if name in z.namelist():
+                parts[name] = z.read(name).decode("utf-8")
+    for xml in parts.values():
+        for prefix, uri in re.findall(r'xmlns:(\w+)="([^"]+)"', xml):
+            ET.register_namespace(prefix, uri)
+    roots = {n: ET.fromstring(x) for n, x in parts.items()}
+    trackers = {n: Tracker(r) for n, r in roots.items()}
+    start = max(t.next_id for t in trackers.values())
+    for t in trackers.values():  # revision ids unique across both parts
+        t.next_id = start
+    body = trackers["word/document.xml"]
+    notes = trackers.get("word/footnotes.xml")
+
+    class Paras:
+        """A part's paragraphs, found by their text, searching forward first."""
+        def __init__(self, root):
+            self.paras = list(root.iter(w_("p")))
+            self.at = collections.defaultdict(list)
+            for k, p in enumerate(self.paras):
+                self.at[wnorm("".join(x["text"] for x in para_atoms(p)))].append(k)
+            self.last = -1
+
+        def find(self, text):
+            hits = self.at.get(wnorm(text), [])
+            k = next((k for k in hits if k > self.last), hits[0] if hits else None)
+            if k is None:
+                return None
+            self.last = k
+            return self.paras[k]
+
+    body_paras = Paras(body.root)
+    note_paras = Paras(notes.root) if notes else None
+    missed = []
+    miss = lambda old, new, why: missed.append({"old": old, "new": new, "why": why})
+
+    def where(i):
+        """(tracker, paragraph) of the original's unit i, or (None, None)."""
+        if a[i][0] == "footnote":
+            return (notes, note_paras.find(plain_a[i])) if notes else (None, None)
+        if a[i][0] == "html":
+            return None, None
+        return body, body_paras.find(plain_a[i])
+
+    prev, waiting = None, []  # the last paragraph placed, and new units with none before them yet
+    for i, j in pairs:
+        if i is None:
+            if b[j][0] != "text":
+                miss("", b[j][1], "new table cells and footnotes are not added to the Word file")
+            elif prev is None:
+                waiting.append(j)
+            else:
+                prev = body.insert_paragraph(prev, plain_b[j])
+            continue
+        tr, p = where(i)
+        if j is not None and a[i][1] == b[j][1]:
+            pass
+        elif p is None:
+            miss(a[i][1], b[j][1] if j is not None else "",
+                 "HTML tables are not edited in the Word file" if a[i][0] == "html"
+                 else "its paragraph was not found in the Word file")
+        elif j is None:
+            why = tr.delete_paragraph(p) if a[i][0] == "text" else "table cells and footnotes are not removed"
+            if why:
+                miss(a[i][1], "", why)
+        else:
+            why = tr.edit(p, plain_a[i], plain_b[j])
+            if why:
+                miss(a[i][1], b[j][1], why)
+            elif OBJECT_MD.findall(footnote(a[i][1])) != OBJECT_MD.findall(footnote(b[j][1])):
+                miss(a[i][1], b[j][1], "its text changed in the Word file, but not its equation, image, or footnote mark")
+        if p is not None and tr is body:
+            if waiting:  # new units at the very start go before the first paragraph found
+                for n in waiting:
+                    body.insert_paragraph(p, plain_b[n], before=True)
+                waiting = []
+            prev = p
+    for n in waiting:
+        miss("", b[n][1], "there was no paragraph to place it by")
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(orig) as zin, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename in roots:
+                xml = parts[item.filename]
+                new = ET.tostring(roots[item.filename], encoding="unicode")
+                # ElementTree drops namespace declarations it does not use, but Word
+                # needs the ones mc:Ignorable names. Keep the original root tag.
+                head, keep = re.match(r"<[^>]+>", new)[0], re.search(r"<(?!\?)[^>]+>", xml)[0]
+                more = "".join(f" {d}" for d in re.findall(r'xmlns:\w+="[^"]*"', head) if d not in keep)
+                new = keep[:-1] + more + ">" + new[len(head):]
+                data = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n' + new).encode("utf-8")
+            zout.writestr(item, data)
+    return out.getvalue(), missed
 
 
 def locate(quote, files):
@@ -1395,6 +1907,7 @@ def render(outdir):
         # Escape headings inside a reviewer's diff so they do not become sections here.
         body = re.sub(r"^(\s*(?:🟢\s*)?(?:\*\*)?)#", r"\1\\#", strip_end(g["rep"]["body"]), flags=re.M)
         tag = ((f" ({sev})" if group == "Logic" else f" ({g['kind']})" if g.get("kind") else "")
+               + (" (question)" if g.get("form") == "question" else "")
                + (" (contested)" if g.get("contested") else "")
                )
         parts.append(f"### {n}. {g['rep']['title']}{tag} {marks(g, voters)}".rstrip() + "\n\n"
@@ -1430,7 +1943,7 @@ def render(outdir):
         ci = f", 95% CI {ag['ci95'][0]} to {ag['ci95'][1]}" if ag.get("ci95") else ""
         key = " · ".join(sorted({f"{GLYPH.get(lab_icon(m), lab_icon(m))} {short(m)}" for m in voters}))
         parts.append(f"## Agreement\n\nBeside each title: the labs that flagged it ({key}), then each other "
-                     "model's vote, ✓ agree, ~ partial, ✗ disagree.\n\n*Krippendorff's alpha {ag['alpha']}{ci}, {ag['units']} findings.*")
+                     f"model's vote, ✓ agree, ~ partial, ✗ disagree.\n\n*Krippendorff's alpha {ag['alpha']}{ci}, {ag['units']} findings.*")
     write_atomic(outdir / "unified.md", "\n\n".join(parts) + "\n")
 
 
@@ -1568,7 +2081,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         for i, f in enumerate(fs, 1):
             flat.append({**f, "id": f"{letters[m]}{i}", "pos": position(dnorm, f["quote"])})
     flat.sort(key=lambda f: (f["pos"], f["id"]))
-    fmt = lambda f: f"[{f['id']}] ({f['severity']}) {f['title']}\nquote: {f['quote'] or '(none)'}\n{f['body']}"
+    fmt = lambda f: f"[{f['id']}] ({f['severity']}{', question' if f.get('form') == 'question' else ''}) {f['title']}\nquote: {f['quote'] or '(none)'}\n{f['body']}"
     log(f"2/3 vote on {len(flat)} findings: {', '.join(ok)}")
 
     def vote(m):
@@ -2420,7 +2933,7 @@ def page_state(path, run):
         if d is None and reason and reason.startswith("this change is already in the file"):
             d = {"decision": "applied", "note": "Done: the change is already in the file"}
         out.append({
-            "n": n, "severity": sev, "kind": g.get("kind", ""), "section": where_label, "title": rep["title"], "where": g["where"],
+            "n": n, "severity": sev, "kind": g.get("kind", ""), "form": g.get("form", "edit"), "section": where_label, "title": rep["title"], "where": g["where"],
             "point": strip_end(rep["body"]).split("\n\n")[0], "body": strip_end(rep["body"]), "quote": rep["quote"],
             "old": old, "new": new if old is not None else None, "reason": reason,
             "span": list(span or quote_span or []) or None, "editable": span is not None,
@@ -2452,6 +2965,7 @@ def page_state(path, run):
     return {"file": str(path), "name": Path(path).name, "run": run.name, "version": vers.get("number"),
             "edited": bool(vers.get("version")) and fingerprint(text) != vers.get("version"),
             "readonly": read_only(path), "pdf": is_pdf(path),
+            "draft_format": (original_of(path) or Path(path)).suffix,
             "chosen": [{"spec": m, "label": label(panelist(m)), "icon": lab_icon(m)} for m in page_panel(path)],
             "panel_icons": [{"icon": lab_icon(m), "label": labels.get(m, m)} for m in r["reviewers_ok"]],
             "comments": comment_state(run, text), "summary": summary_state(run), "checks": checks(text, path, r.get("deck", False)), "deck": r.get("deck", False),
@@ -2681,7 +3195,7 @@ def review_passage(path, run, passage):
                            for m, fs in found.items() for i, f in enumerate(fs, 1)), key=lambda f: (f["pos"], f["id"]))
             new = []
             if flat:
-                listed = "\n\n".join(f"[{f['id']}] ({f['severity']}) {f['title']}\nquote: {f['quote'] or '(none)'}\n{f['body']}" for f in flat)
+                listed = "\n\n".join(f"[{f['id']}] ({f['severity']}{', question' if f.get('form') == 'question' else ''}) {f['title']}\nquote: {f['quote'] or '(none)'}\n{f['body']}" for f in flat)
                 prompt_v = VOTE.format(draft=draft, findings=listed, decided=decided, context="",
                                        focus=f"\n<author_focus>\n{focus}\n</author_focus>\n")
                 votes = {m: v for m, r in parallel(lambda m: call(m, prompt_v, run / f"edit-{stamp}-votes-{m}.txt",
@@ -3111,7 +3625,7 @@ class PageServer:
         before (Re-review there runs a new review), else a background review of it, in place."""
         if target.suffix.lower() not in UPLOAD_TYPES:
             return 400, "application/json", json.dumps({"error": f"choose a {', '.join(UPLOAD_TYPES)} file"})
-        reviewed = converted_path(target) if is_pdf(target) else target
+        reviewed = converted_path(target) if is_pdf(target) or is_docx(target) else target
         if runs_for(reviewed):
             url = page_url(reviewed)
             return 200, "application/json", json.dumps({"page": public_url(url) if url else None, "name": target.name})
@@ -3140,6 +3654,10 @@ class PageServer:
             return 200, "application/json", json.dumps(st)
         if method == "GET" and route == "/api/ping":
             return 200, "application/json", json.dumps({"file": str(self.path)})
+        if method == "GET" and route == "/api/draft":  # the edited draft, in the format it came in
+            name, mime, data, missed = export_draft(self.path)
+            return 200, mime, data, {"Content-Disposition": f'attachment; filename="{name}"',
+                                     "X-Not-Placed": urllib.parse.quote(json.dumps(missed))}
         if method == "GET" and route == "/api/markdown":
             return 200, "application/json", json.dumps(
                 {"name": f"{self.path.stem}-review.md", "markdown": review_markdown(self.run_folder())})
@@ -3158,7 +3676,6 @@ class PageServer:
                 return 200, "application/json", json.dumps({"cancelled": True})
             return self.open_file(Path(chosen).resolve())
         if method == "POST" and route.startswith("/api/locate/"):
-            import urllib.parse
             name = Path(urllib.parse.unquote(route[len("/api/locate/"):])).name
             found = find_original(name, body)
             if len(found) == 1:
@@ -3320,7 +3837,7 @@ def static(method, route):
 
 
 UPLOAD = "upload"  # the upload page's key in pages.json, and its --serve argument
-UPLOAD_TYPES = (".pdf", ".md", ".txt", ".tex")
+UPLOAD_TYPES = (".pdf", ".docx", ".md", ".txt", ".tex")
 
 
 JOBS = {}  # upload id -> the process reviewing it, for the uploads this server started
@@ -3485,7 +4002,6 @@ class UploadServer:
         if method == "GET" and route == "/api/ping":
             return ok({"file": UPLOAD})
         if method == "POST" and route.startswith("/api/upload/"):
-            import urllib.parse
             try:
                 return ok({"id": start_upload(urllib.parse.unquote(route[len("/api/upload/"):]), body)})
             except ValueError as e:
@@ -3526,11 +4042,13 @@ def serve(path):
             try:
                 raw = self.rfile.read(n) if method == "POST" else b""
                 body = raw if self.path.startswith(("/api/upload/", "/api/locate/", "/api/transcribe/")) else json.loads(raw or b"{}")
-                code, ctype, data = page.handle(method, self.path.split("?")[0], body)
+                code, ctype, data, *extra = page.handle(method, self.path.split("?")[0], body)
             except Exception as e:  # report to the page, keep serving
-                code, ctype, data = 500, "application/json", json.dumps({"error": str(e)})
+                code, ctype, data, extra = 500, "application/json", json.dumps({"error": str(e)}), []
             data = data.encode() if isinstance(data, str) else data
             self.send_response(code)
+            for k, v in (extra[0] if extra else {}).items():
+                self.send_header(k, v)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
@@ -3786,7 +4304,8 @@ def main():
         files.append(p)
     workdir = files[0].parent
     # A PDF is converted to Markdown and the Markdown is reviewed, so findings
-    # cite lines and the review page can apply them.
+    # cite lines and the review page can apply them. A Word file always is.
+    files = [to_markdown(p) if is_docx(p) else p for p in files]
     if not a.no_md and not a.factcheck_only:
         files = [(to_markdown(p) or p) if is_pdf(p) else p for p in files]
     texts = [doc_text(p) for p in files]  # read once: this is the version reviewed

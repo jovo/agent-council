@@ -35,6 +35,15 @@ The Markdown is a copy: edits there do not reach the PDF's source document.
 figures, tables, or equations is opened by each panelist directly. Findings
 then cite pages, and accepted changes go in the source document.
 
+The file can also be a Word file (.docx). pandoc converts it to Markdown in the
+same folder, with tracked changes accepted, and the review page edits that
+copy. Download on the page gives the review as Markdown, or the edited draft in
+the format it came in. A Word file comes back as the original with each edit
+written in as a tracked change, so its comments, citation fields, styles, and
+layout are untouched. Edits it cannot place (inside an equation, citation, or
+footnote mark, new formatting, new table cells) are listed for the user to make
+by hand. A PDF comes back through make-pdf.
+
 The default panel is `claude,gpt,gemini` (Claude Sonnet, GPT-5.6 Luna at low
 effort, Gemini 3.8 Flash Low via cursor-agent). If one fails, Grok 4.7 Low Fast stands in automatically, so three models
 still vote. Pass
@@ -171,7 +180,8 @@ stopping to ask between rounds.
    - it is Critical or Substantive and a majority of voters agreed (more ✓
      than half the votes; ~ counts as not agreeing).
    Skip everything else, and always skip contested findings, whole-draft
-   findings, and findings whose quoted text is no longer in the file. Do not
+   findings, question findings, and findings whose quoted text is no longer
+   in the file. Do not
    ask about skipped findings during the loop.
 4. Apply edits as in "Addressing items" (minimal, at the current line, fixed
    to the user's writing rules). Then record every decision:
@@ -201,6 +211,11 @@ Reviewer instructions for feedback on drafts. This covers verification and how f
 
 - Logical gaps, overstated claims, unaddressed counterarguments, internal redundancy.
 - House-style violations: citation key format, equation tagging, cross-reference syntax, table size.
+- Places where the intended reader has to guess: a term or acronym used before it is defined, two words that may name the same thing, a sentence with two readings, steps that may be one test or several, what the draft asks its reader to decide or provide, who decides, and what has to happen first (approval, purchases). Say what you guessed. When a later passage resolves the guess, flag that the information arrives after the first place it was needed.
+- Categories the draft names but does not apply. When it sets up a split, check that each method or condition it mentions falls in exactly one category and that each category is defined well enough to place them. Ask where each one falls when the draft does not say.
+- Mechanisms that cannot produce the stated effect given how the system was built or trained, such as a policy expected to adapt to an input it was never trained on.
+- For each experiment the draft proposes, check that a reader could set it up from the text: the hardware, the task as given to the system (its instruction or goal), what varies and what stays fixed, and for a simulation, what is modeled and what is idealized. Ask about each missing piece.
+- What an expert in the draft's field expects and does not find: standard benchmarks (including well-known ones missing from a list the draft gives), accepted definitions or standards for key terms. Ask, since the omission may be deliberate.
 
 ### What not to touch
 
@@ -210,6 +225,7 @@ Reviewer instructions for feedback on drafts. This covers verification and how f
 ### Output format
 
 - Group findings by severity: **Critical** (breaks the argument or is factually wrong), then **Substantive** (weakens the argument or is unclear), then **Nitpick** (style, phrasing, typos: a few words of point at most, and a diff of only the words that change). Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Critical first, so a finding can be cited by number alone. For each finding, state the point, then immediately show its diff, before moving to the next finding. Do not collect all diffs into a separate list at the end.
+- A question finding has no diff. State the question in one or two sentences, list the readings or options you see, and say which one you assumed. Use it only when the answer is the author's to give. When the draft already implies the answer, propose the edit.
 - Show every diff as an **inline revision of the original text**, not as a `Replace:` / `With:` pair. Strike deletions with `~~tildes~~`. Bold each addition and prefix it with `🟢 `. Tildes mark deletions only, never additions. Leave genuinely unchanged sentences plain, and for a mostly-rewritten paragraph strike the whole old block and follow it with the whole new one rather than a word-level diff.
 
 ### Math and markup inside a diff

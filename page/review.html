@@ -112,13 +112,15 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
     <span class="meta" id="meta" style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
     <span style="position:relative"><button id="panelbtn" title="Models used for Re-review and Ask"></button><div id="panelmenu" class="menu" hidden></div></span>
     <span class="meta" id="tally"></span>
-    <button id="mdbtn" title="Download this review as Markdown: every finding with its proposed change">Download</button>
+    <span style="position:relative"><button id="dlbtn" title="Download the review, or the edited draft">Download</button><div id="dlmenu" class="menu" hidden style="min-width:220px">
+      <div class="mi" id="dlreview" title="Every finding with its proposed change">Review (.md)</div>
+      <div class="mi" id="dldraft" title="The draft as it is now, in the format it came in">Edited draft</div></div></span>
     <button id="openbtn" title="Choose another file in Finder and review it in a new tab">Open…</button>
     <button id="update" title="Run a new review of the current text">Re-review</button>
   </div>
   <div class="row meta" id="fail" style="margin-top:4px"></div>
   <div class="row" style="margin-top:8px">
-    <span class="menubar"><span class="mb" id="f-kind"></span><span class="mb" id="f-sev"></span><span class="mb" id="f-tag"></span><span class="mb" id="f-status"></span></span>
+    <span class="menubar"><span class="mb" id="f-kind"></span><span class="mb" id="f-form"></span><span class="mb" id="f-sev"></span><span class="mb" id="f-tag"></span><span class="mb" id="f-status"></span></span>
     <span class="spacer"></span>
     <button id="sumbtn" class="on" title="Show or hide the summary of the main findings">Summary</button>
     <button id="askbtn" title="Ask the panel about the whole draft">Ask</button>
@@ -135,7 +137,7 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
 const SEV = ["Critical", "Substantive", "Nitpick"];
 const TAGS = ["Unanimous", "Majority", "Contested"];
 const KINDS = ["Logic", "Evidence", "Clarity", "Style"];
-let S = null, cur = null, filt = {kind: "All", sev: "All", tag: "All", status: "Open"}, mode = null, lastRun = null;
+let S = null, cur = null, filt = {kind: "All", form: "All", sev: "All", tag: "All", status: "Open"}, mode = null, lastRun = null;
 let commentOpen = false, passage = "";  // passage: text selected in the draft that the next Ask is about
 let logicAuto = null;  // the logic-first view, set when a review loads and lifted when no logic finding is open
 
@@ -164,7 +166,8 @@ function diffHtml(body) {
   return marks(esc(paras.join("\n\n")));
 }
 const kindOf = f => f.kind ? f.kind[0].toUpperCase() + f.kind.slice(1) : "";
-const shown = f => f.severity !== "Typo" && (filt.kind === "All" || kindOf(f) === filt.kind) && (filt.sev === "All" || f.severity === filt.sev) && (filt.tag === "All" || f.tag === filt.tag)
+const formOf = f => f.form === "question" ? "Question" : "Edit";  // runs before questions existed are all edits
+const shown = f => f.severity !== "Typo" && (filt.kind === "All" || kindOf(f) === filt.kind) && (filt.form === "All" || formOf(f) === filt.form) && (filt.sev === "All" || f.severity === filt.sev) && (filt.tag === "All" || f.tag === filt.tag)
   && (filt.status === "All" || (filt.status === "Open" ? !f.status : !!f.status));
 
 async function api(route, body) {
@@ -228,7 +231,7 @@ async function toggleMic(ta) {
 
 // A menu-bar filter, like a macOS menu: its name, and the current choice when
 // it is not the default; a click drops the options, with a check by the choice.
-const MENU_NAME = {kind: "Type", sev: "Severity", tag: "Agreement", status: "Status"};
+const MENU_NAME = {kind: "Type", form: "Form", sev: "Severity", tag: "Agreement", status: "Status"};
 let openMenu = null;
 function chips(id, key, opts, allLabel, dflt = "All") {
   const el = document.getElementById(id), values = [[allLabel, "All"], ...opts.map(o => [o, o])];
@@ -462,18 +465,20 @@ function renderCard() {
   let actions = "";
   if (!f.status) {
     if (mode === "edit") actions = `<textarea id="edtext">${esc(f.new || "")}</textarea><div class="row" style="margin-top:8px"><button id="save">Apply edited text</button><button id="cancel">Cancel</button></div>`;
+    else if (mode === "answer") actions = `<textarea id="qtext" placeholder="Your answer. The panel proposes the edit that follows from it." style="min-height:70px"></textarea><div class="row" style="margin-top:8px"><button id="send">Send to all panelists</button><button id="cancel">Cancel</button><span class="meta">⌘Enter sends</span></div>`;
     else if (mode === "ask") actions = `<textarea id="qtext" placeholder="Why this change? Would this alternative work?" style="min-height:70px"></textarea><div class="row" style="margin-top:8px"><button id="send">Ask all panelists</button><button id="cancel">Cancel</button><span class="meta">⌘Enter sends</span></div>`;
     else if (S.readonly) actions = `<button id="dec">Decline</button> <button id="ask">Ask</button>`;
     else actions = (f.applicable ? `<button id="acc">Accept</button> ` : "")
       + (f.slot ? `<button id="fill"${f.fill && f.fill.status === "pending" ? " disabled" : ""} title="Search the web for what goes in the blanks">${f.fill && f.fill.status === "pending" ? "Filling…" : "Fill"}</button> ` : "")
+      + (f.form === "question" ? `<button id="answer">Answer</button> ` : "")
       + (f.editable ? `<button id="edt">Edit</button> ` : "") + `<button id="dec">Decline</button> <button id="ask">Ask</button>` + (f.editable ? "" : ` <button id="copy" title="Copy a one-line request to paste into Claude Code or Codex, which can make this change">Copy for agent</button>`);
   }
-  el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity}${f.kind ? " · " + kindOf(f) : ""} · ${f.tag}${f.added ? " · from your edit" : ""}</div>
+  el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity}${f.kind ? " · " + kindOf(f) : ""}${f.form === "question" ? " · Question" : ""} · ${f.tag}${f.added ? " · from your edit" : ""}</div>
     <div class="title">${esc(f.title)} <span class="flagged">${flagged}</span></div>${f.severity === "Nitpick" ? "" : `<p class="point">${inline(pointOf(f))}</p>`}
     ${f.body.includes("~~") || f.body.includes("🟢") ? `<div class="diff">${f.old != null && f.new != null ? revHtml(f) : diffHtml(f.body)}</div>` : ""}
 
     ${S.readonly && !f.status ? `<p class="reason">Read-only: make this change in the source document.</p>` : ""}
-    ${!S.readonly && !f.status && !f.applicable && !f.editable ? `<p class="reason">Cannot apply here: ${esc(f.reason || "it is about the whole draft")}.</p>` : ""}
+    ${!S.readonly && !f.status && !f.applicable && !f.editable && f.form !== "question" ? `<p class="reason">Cannot apply here: ${esc(f.reason || "it is about the whole draft")}.</p>` : ""}
     ${!f.status && f.fill && f.fill.status === "failed" ? `<p class="reason">Fill found nothing: ${esc(f.fill.reason)}</p>` : ""}
     ${!f.status && f.fill && f.fill.status === "done" && f.fill.sources && f.fill.sources.length ? `<p class="meta">Filled from ${f.fill.sources.map(u => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u.replace(/^https?:\/\/(www\.)?/, "").slice(0, 50))}</a>`).join(" · ")}</p>` : ""}
     ${!f.status && f.changed ? `<div class="row" style="margin-bottom:6px"><button id="done">Mark done</button></div>` : ""}
@@ -490,9 +495,11 @@ function renderCard() {
   on("save", () => act("/api/accept", {n: f.n, text: document.getElementById("edtext").value}));
   on("cancel", () => { mode = null; renderCard(); });
   on("ask", () => { mode = "ask"; renderCard(); document.getElementById("qtext").focus(); });
+  on("answer", () => { mode = "answer"; renderCard(); document.getElementById("qtext").focus(); });
   const sendQ = async () => {
-    const q = document.getElementById("qtext").value.trim();
-    if (!q) { document.getElementById("err").textContent = "Type a question first."; return; }
+    const t = document.getElementById("qtext").value.trim();
+    if (!t) { document.getElementById("err").textContent = mode === "answer" ? "Type an answer first." : "Type a question first."; return; }
+    const q = mode === "answer" ? ANSWER + t + "\n\nPropose the edit to the draft that follows from this answer." : t;
     try { await api("/api/ask", {n: f.n, question: q}); mode = null; await load(); }
     catch (e) { document.getElementById("err").textContent = e.message; }
   };
@@ -515,9 +522,11 @@ function revHtml(a) {
     + (n.length - i - j > 0 ? "<ins>" + esc(n.slice(i, n.length - j).join("")) + "</ins>" : "") + esc(o.slice(o.length - j).join(""));
 }
 
+const ANSWER = "My answer: ";  // the author's answer to a question finding, sent to the panel as a question
+
 function thread(f) {
   if (!f.questions || !f.questions.length) return "";
-  return f.questions.map((q, k) => `<div class="qa"><div class="q">You asked: ${esc(q.question)}</div>` +
+  return f.questions.map((q, k) => `<div class="qa"><div class="q">${q.question.startsWith(ANSWER) ? "You answered: " + esc(q.question.slice(ANSWER.length).split("\n\nPropose the edit")[0]) : "You asked: " + esc(q.question)}</div>` +
     Object.entries(q.answers).map(([m, a]) => `<div class="ans"><div class="who">${icon(a.icon, a.label || a.model)}${a.seconds ? ` ${a.seconds} s` : ""}</div>` +
       (a.status === "pending" ? `<div class="meta">Thinking…</div>` : a.status === "failed" ? `<div class="err">No answer: ${esc(a.reason || "the model call failed")}</div>` :
         `<div>${inline(a.text)}</div>` + (a.old ? `<div class="diff" style="margin-top:6px">${revHtml(a)}</div>` +
@@ -698,7 +707,7 @@ function render() {
   const openLogic = S.findings.filter(f => f.kind === "logic" && !f.status).length;
   if (logicAuto === null) { logicAuto = openLogic > 0; if (logicAuto) filt.kind = "Logic"; }
   if (logicAuto && !openLogic) { logicAuto = false; filt.kind = "All"; }
-  chips("f-kind", "kind", KINDS, "All"); chips("f-sev", "sev", SEV, "All");
+  chips("f-kind", "kind", KINDS, "All"); chips("f-form", "form", ["Edit", "Question"], "All"); chips("f-sev", "sev", SEV, "All");
   chips("f-tag", "tag", TAGS, "Any");
   chips("f-status", "status", ["Open", "Done"], "All", "Open");
   const vis = S.findings.filter(shown);
@@ -803,7 +812,7 @@ document.getElementById("card").addEventListener("click", e => {
 });
 // Drop a draft from Finder anywhere on the page. The server finds the original
 // with Spotlight (same name, same bytes), and a new tab reviews it in place.
-const DROP_TYPES = [".pdf", ".md", ".txt", ".tex"];
+const DROP_TYPES = [".pdf", ".docx", ".md", ".txt", ".tex"];
 const hasFiles = e => [...(e.dataTransfer?.types || [])].includes("Files");
 document.addEventListener("dragover", e => { if (hasFiles(e)) { e.preventDefault(); document.body.classList.add("dropping"); } });
 document.addEventListener("dragleave", e => { if (!e.relatedTarget) document.body.classList.remove("dropping"); });
@@ -829,15 +838,41 @@ document.addEventListener("drop", async e => {
   } catch (err) { say(`<span class="err">${esc(err.message)}</span>`); }
 });
 
-document.getElementById("mdbtn").onclick = async () => {
+function save(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+document.getElementById("dlbtn").onclick = e => {
+  e.stopPropagation();
+  const el = document.getElementById("dlmenu");
+  el.hidden = !el.hidden;
+  document.getElementById("dldraft").textContent = `Edited draft (${(S && S.draft_format) || ".md"})`;
+};
+document.addEventListener("click", e => { const el = document.getElementById("dlmenu"); if (!el.contains(e.target)) el.hidden = true; });
+document.getElementById("dlreview").onclick = async () => {
+  document.getElementById("dlmenu").hidden = true;
   try {
     const j = await api("/api/markdown");
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([j.markdown], {type: "text/markdown"}));
-    a.download = j.name;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  } catch (e) { alert("Could not get the Markdown: " + e.message); }
+    save(new Blob([j.markdown], {type: "text/markdown"}), j.name);
+  } catch (e) { alert("Could not get the review: " + e.message); }
+};
+document.getElementById("dldraft").onclick = async () => {
+  const item = document.getElementById("dldraft");
+  item.textContent = "Making the file…";
+  try {
+    const r = await fetch("/api/draft");
+    if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+    const name = (r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/);
+    save(await r.blob(), name ? name[1] : "draft");
+    // A Word file gets the edits as tracked changes. List the ones it could not take, to make by hand.
+    const missed = JSON.parse(decodeURIComponent(r.headers.get("X-Not-Placed") || "%5B%5D"));
+    if (missed.length) alert(`${missed.length} edit${missed.length > 1 ? "s were" : " was"} not placed in the Word file. Make ${missed.length > 1 ? "them" : "it"} by hand:\n\n` +
+      missed.map(m => `• ${m.why}\n  was: ${m.old || "(nothing)"}\n  now: ${m.new || "(removed)"}`).join("\n\n"));
+  } catch (e) { alert("Could not get the draft: " + e.message); }
+  document.getElementById("dlmenu").hidden = true;
 };
 document.getElementById("openbtn").onclick = () => window.open(location.origin + "/open", "_blank");
 document.getElementById("sumbtn").onclick = () => { summaryOpen = !summaryOpen; renderSide(); if (summaryOpen) document.getElementById("side").scrollTop = 0; };

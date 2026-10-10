@@ -40,5 +40,5 @@ Logic comes first. A draft whose steps do not follow fails however well it reads
 ## Reporting a logic finding
 
 - Name the step that fails and the kind of failure: missing premise, non sequitur, circular setup, unaddressed alternative, overclaim, underclaim, term drift, or order.
-- State the missing premise explicitly. Then give the fix: either the sentence that supplies the premise, or the weaker conclusion that no longer needs it. "Unclear" alone is not a finding.
+- State the missing premise explicitly. Then give the fix: either the sentence that supplies the premise, or the weaker conclusion that no longer needs it. "Unclear" alone is not a finding. When the missing premise depends on a decision the draft has not made, ask the author which premise holds and name the options, in place of supplying one.
 - Severity: a broken step in the central argument is Critical. A leap in a supporting point is Substantive. A connective or referent that blurs a step that does hold is Nitpick.

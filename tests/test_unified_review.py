@@ -7,6 +7,8 @@ import sys
 import tempfile
 import time
 import unittest
+import urllib.parse
+import zipfile
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
@@ -62,6 +64,16 @@ class Parsing(unittest.TestCase):
         self.assertEqual(fs[0]["quote"], "Rome was founded in 1066.")
         self.assertEqual(fs[1]["quote"], "")
         self.assertIn("753 BC", fs[0]["body"])
+
+    def test_parse_question_form(self):
+        fs = ur.parse_findings("=== FINDING\nseverity: Substantive\nkind: clarity\nform: question\n"
+                               "title: Which gripper\nquote: a robot arm\n---\nTwo-finger or three-finger?\n")
+        self.assertEqual(fs[0]["form"], "question")
+        self.assertEqual(ur.parse_findings(REVIEW)[0]["form"], "edit")  # no form line means an edit
+
+    def test_prompts_allow_questions(self):
+        self.assertIn("form: edit | question", ur.review_prompt("draft", "", "rules"))
+        self.assertIn("For a question finding", ur.VOTE)
 
     def test_parse_votes_is_tolerant_but_strict_on_vote_words(self):
         v = ur.parse_votes(VOTES)
@@ -247,6 +259,12 @@ class Rendering(unittest.TestCase):
                 "severity": severity, "frac": 1, "score": 2, "n_votes": 2, "raised_by": ["claude"],
                 "votes": {"claude": vote("agree"), "gpt": vote("disagree" if contested else "agree")},
                 "contested": contested, "rejected": rejected}
+
+    def test_question_finding_is_labeled(self):
+        dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
+        q = "Rome was founded in 1066."
+        self.results([{**self.group("Which founding", q, "draft", ur.position(dn, q)), "form": "question"}])
+        self.assertIn("### 1. Which founding (question)", ur.review_markdown(self.tmp))
 
     def test_summary_is_logic_first_then_theme_titles(self):
         dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
@@ -1234,7 +1252,7 @@ class ReviewPage(unittest.TestCase):
     def test_upload_reviews_a_copy_and_returns_unified(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d)):
             page = ur.UploadServer()
-            code, _, _ = page.handle("POST", "/api/upload/notes.docx", b"x")
+            code, _, _ = page.handle("POST", "/api/upload/notes.pptx", b"x")
             self.assertEqual(code, 400)
             with mock.patch.object(ur.subprocess, "Popen") as popen:
                 popen.return_value.poll.return_value = None
@@ -1266,7 +1284,7 @@ class ReviewPage(unittest.TestCase):
             self.assertIn("<html", page.handle("GET", "/open", b"")[2])
             with mock.patch.object(ur, "choose_file", lambda start: (None, None)):
                 self.assertEqual(json.loads(page.handle("POST", "/api/open", {})[2]), {"cancelled": True})
-            with mock.patch.object(ur, "choose_file", lambda start: (str(Path(d) / "notes.docx"), None)):
+            with mock.patch.object(ur, "choose_file", lambda start: (str(Path(d) / "notes.pptx"), None)):
                 self.assertEqual(page.handle("POST", "/api/open", {})[0], 400)
             with mock.patch.object(ur, "choose_file", lambda start: (str(other), None)), \
                     mock.patch.object(ur.subprocess, "Popen") as popen:
@@ -1304,6 +1322,84 @@ class ReviewPage(unittest.TestCase):
                 code, _, data = page.handle("POST", "/api/locate/memo.md", b"# Memo\n")
                 self.assertEqual(code, 404)
                 self.assertIn("2 identical copies", json.loads(data)["error"])
+
+    @unittest.skipUnless(shutil.which("pandoc"), "needs pandoc")
+    def test_word_file_is_edited_as_markdown_and_downloads_with_tracked_changes(self):
+        def as_md(f, changes="accept"):
+            return subprocess.run(["pandoc", str(f), "-t", ur.DOCX_MD, "--wrap=none", f"--track-changes={changes}"],
+                                  capture_output=True, text=True, check=True).stdout
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+            src = Path(d) / "memo.md"
+            src.write_text(
+                "# Memo\n\nThe cortex learns **slowly and steadily** from [work](https://x.org).[^1]\n\n"
+                "The energy is $E = mc^2$ in this regime, which [Ann's note.]{.comment-start id=\"0\" author=\"Ann\" "
+                "date=\"2026-01-01T00:00:00Z\"}matters[]{.comment-end id=\"0\"} here.\n\nThis one goes.\n\n"
+                "| A | B |\n|---|---|\n| 1 | 2 |\n\n- first\n- second\n\nLast paragraph stays CITE.\n\n[^1]: A footnote.\n")
+            docx = Path(d) / "memo.docx"
+            subprocess.run(["pandoc", str(src), "-o", str(docx)], check=True)
+            # Make it look like Word wrote it: a run split mid-word, and a citation field.
+            with zipfile.ZipFile(docx) as z:
+                parts = {i: z.read(i.filename) for i in z.infolist()}
+            for i in parts:
+                if i.filename == "word/document.xml":
+                    parts[i] = parts[i].decode().replace(
+                        '<w:t xml:space="preserve">Last paragraph stays CITE.</w:t></w:r>',
+                        '<w:t xml:space="preserve">Last para</w:t></w:r><w:proofErr w:type="spellStart"/>'
+                        '<w:r><w:t xml:space="preserve">graph stays </w:t></w:r>'
+                        '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> ADDIN ZOTERO_ITEM </w:instrText></w:r>'
+                        '<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>(Smith 2020)</w:t></w:r>'
+                        '<w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t>.</w:t></w:r>').encode()
+            with zipfile.ZipFile(docx, "w") as z:
+                for i, data in parts.items():
+                    z.writestr(i, data)
+            md = ur.to_markdown(docx)
+            self.assertIn(ur.RUNS_DIR / "converted", md.parents)
+            self.assertFalse(ur.read_only(md))
+            self.assertEqual(ur.original_of(md), md.with_suffix(".docx"))
+            before = md.read_text()
+            self.assertIn("$E = mc^{2}$", before)
+            self.assertIn("Last paragraph stays (Smith 2020).", before)
+            after = (before.replace("**slowly and steadily**", "**slowly**")
+                     .replace("in this regime", "at low speed").replace("This one goes.\n\n", "")
+                     .replace("| 2 ", "| 3 ").replace("- second", "- second, revised")
+                     .replace("Last paragraph stays (Smith 2020).", "Last paragraph now stays (Smith 2021).\n\nA new one.")
+                     .replace("[^1]: A footnote.", "[^1]: A changed footnote."))
+            md.write_text(after)
+            self.assertEqual(ur.to_markdown(docx), md)  # the same file again keeps the edits
+            self.assertEqual(md.read_text(), after)
+            page = ur.PageServer(md)
+            code, mime, data, headers = page.handle("GET", "/api/draft", b"")
+            self.assertEqual((code, mime), (200, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+            self.assertEqual(headers["Content-Disposition"], 'attachment; filename="memo-edited.docx"')
+            missed = json.loads(urllib.parse.unquote(headers["X-Not-Placed"]))
+            self.assertEqual([m["why"] for m in missed], ["it changes an equation, citation or other field, footnote mark, or image"])
+            out = Path(d) / "out.docx"
+            out.write_bytes(data)
+            plain = lambda m: subprocess.run(["pandoc", "-f", ur.DOCX_MD, "-t", "plain", "--wrap=none"], input=m,
+                                             capture_output=True, text=True).stdout
+            # Accepting every change gives the edited draft, less the edit not placed. Rejecting gives the original.
+            self.assertEqual(plain(as_md(out)), plain(after.replace(
+                "Last paragraph now stays (Smith 2021).", "Last paragraph stays (Smith 2020).")))
+            self.assertEqual(plain(as_md(out, "reject")), plain(before))
+            self.assertRegex(as_md(out, "all"), r'"deletion"[^>]*>in this regime<.*"insertion"[^>]*>at low speed<')  # one change, not word by word
+            with zipfile.ZipFile(docx) as a, zipfile.ZipFile(out) as b:
+                self.assertEqual(a.read("word/comments.xml"), b.read("word/comments.xml"))
+                self.assertIn(b"ZOTERO_ITEM", b.read("word/document.xml"))
+
+    def test_draft_downloads_in_the_format_it_came_in(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+            draft = Path(d) / "draft.md"
+            draft.write_text("# Draft\n")
+            self.assertEqual(ur.export_draft(draft), ("draft-edited.md", "text/plain; charset=utf-8", b"# Draft\n", []))
+            md = ur.RUNS_DIR / "converted" / "paper-abc" / "paper.md"
+            md.parent.mkdir(parents=True)
+            md.write_text("# Paper\n")
+            md.with_suffix(".pdf").write_bytes(b"%PDF")
+            def make_pdf(cmd, **k):
+                Path(cmd[cmd.index("-o") + 1]).write_bytes(b"%PDF-edited")
+                return SimpleNamespace(returncode=0, stderr="")
+            with mock.patch.object(ur.subprocess, "run", make_pdf) as run:
+                self.assertEqual(ur.export_draft(md), ("paper-edited.pdf", "application/pdf", b"%PDF-edited", []))
 
 if __name__ == "__main__":
     unittest.main()

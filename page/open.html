@@ -29,7 +29,7 @@ pre{white-space:pre-wrap;font:13px/1.45 ui-monospace,Menlo,monospace;color:var(-
   <div id="pick">
     <div id="drop">
       <p>Drop a draft here from Finder</p>
-      <div class="meta">PDF, Markdown, text, or TeX. The review edits the original file.</div>
+      <div class="meta">PDF, Word, Markdown, text, or TeX. The review edits a Markdown file in place, and a PDF or Word file as a Markdown copy.</div>
     </div>
     <button id="finder">Choose in Finder…</button>
   </div>
@@ -40,7 +40,7 @@ pre{white-space:pre-wrap;font:13px/1.45 ui-monospace,Menlo,monospace;color:var(-
 // A browser gives a dropped file's contents but not its path. The server finds
 // the original with Spotlight (same name, same bytes) and reviews it in place.
 // If it cannot find exactly one, it says so, and Choose in Finder still works.
-const TYPES = [".pdf", ".md", ".txt", ".tex"];
+const TYPES = [".pdf", ".docx", ".md", ".txt", ".tex"];
 const esc = t => (t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const note = html => { document.getElementById("note").innerHTML = html; };
 const fail = msg => note(`<span class="err">${esc(msg)}</span>`);
