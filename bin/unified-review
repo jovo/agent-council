@@ -2163,6 +2163,7 @@ def render(outdir):
 LAST_RUN = Path.home() / ".local/state/unified-review/last-run"
 # Runs live in one folder outside every project.
 RUNS_DIR = Path(os.environ.get("UNIFIED_REVIEW_RUNS") or Path.home() / ".local/share/unified-review/runs")
+RUN_METADATA = {}  # results.json path -> (mtime_ns, reviewed files)
 
 
 def latest_run():
@@ -3178,14 +3179,23 @@ def change_mark(text, span, old, new):
 
 def runs_for(path):
     """Run folders that reviewed exactly this file, newest first."""
-    out = []
+    target, out, seen = str(path), [], set()
     for rj in RUNS_DIR.glob("*/results.json"):
+        seen.add(rj)
         try:
-            if json.loads(rj.read_text()).get("files") == [str(path)]:
-                out.append(rj.parent)
-        except ValueError:
+            stamp = rj.stat().st_mtime_ns
+            cached = RUN_METADATA.get(rj)
+            if not cached or cached[0] != stamp:
+                cached = (stamp, json.loads(rj.read_text()).get("files"))
+                RUN_METADATA[rj] = cached
+            if cached[1] == [target]:
+                out.append((stamp, rj.parent))
+        except (OSError, ValueError):
             continue
-    return sorted(out, key=lambda d: (d / "results.json").stat().st_mtime, reverse=True)
+    for rj in list(RUN_METADATA):
+        if rj not in seen:
+            RUN_METADATA.pop(rj, None)  # another thread may have pruned it
+    return [run for _, run in sorted(out, key=lambda row: row[0], reverse=True)]
 
 
 def vote_tag(g):
