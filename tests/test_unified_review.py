@@ -18,7 +18,70 @@ from types import SimpleNamespace
 from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
+
+
+def tree_metadata(root):
+    """Metadata for the real state directories, used as a test guard."""
+    root = Path(root)
+    if not root.exists():
+        return None
+    paths = [root, *sorted(root.rglob("*"))]
+    state = {}
+    for path in paths:
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            continue
+        state[str(path.relative_to(root))] = (info.st_size, info.st_mtime_ns)
+    return state
+
+
+def changed_paths(before, after):
+    before, after = before or {}, after or {}
+    return sorted(path for path in set(before) | set(after) if before.get(path) != after.get(path))
+
+
+ORIGINAL_HOME = os.environ.get("HOME")
+ORIGINAL_RUNS = os.environ.get("UNIFIED_REVIEW_RUNS")
+ORIGINAL_MODEL_BINS = {name: os.environ.get(name) for name in ("CLAUDE_BIN", "CODEX_BIN", "CURSOR_BIN")}
+REAL_HOME = Path(ORIGINAL_HOME) if ORIGINAL_HOME else Path.home()
+REAL_RUNS_DIR = Path(ORIGINAL_RUNS) if ORIGINAL_RUNS else REAL_HOME / ".local/share/unified-review/runs"
+REAL_STATE_DIR = REAL_HOME / ".local/state/unified-review"
+REAL_RUNS_STATE = tree_metadata(REAL_RUNS_DIR)
+REAL_STATE_STATE = tree_metadata(REAL_STATE_DIR)
+TEST_STATE = tempfile.TemporaryDirectory()
+MODEL_STUB = Path(TEST_STATE.name) / "model-stub"
+MODEL_STUB.write_text("#!/bin/sh\nexit 1\n")
+MODEL_STUB.chmod(0o700)
+os.environ["HOME"] = TEST_STATE.name
+os.environ["UNIFIED_REVIEW_RUNS"] = str(Path(TEST_STATE.name) / "runs")
+for name in ORIGINAL_MODEL_BINS:
+    os.environ[name] = str(MODEL_STUB)
+
 ur = SourceFileLoader("unified_review", str(REPO / "bin" / "unified-review")).load_module()
+
+
+def tearDownModule():
+    try:
+        runs_changed = changed_paths(REAL_RUNS_STATE, tree_metadata(REAL_RUNS_DIR))
+        state_changed = changed_paths(REAL_STATE_STATE, tree_metadata(REAL_STATE_DIR))
+        assert not runs_changed, "tests changed the real run directory: " + ", ".join(runs_changed)
+        assert not state_changed, "tests changed the real state directory: " + ", ".join(state_changed)
+    finally:
+        if ORIGINAL_HOME is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = ORIGINAL_HOME
+        if ORIGINAL_RUNS is None:
+            os.environ.pop("UNIFIED_REVIEW_RUNS", None)
+        else:
+            os.environ["UNIFIED_REVIEW_RUNS"] = ORIGINAL_RUNS
+        for name, value in ORIGINAL_MODEL_BINS.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        TEST_STATE.cleanup()
 
 REVIEW = """Some preamble the parser should ignore.
 
@@ -1129,6 +1192,7 @@ class ReviewPage(unittest.TestCase):
                 "headings": [], "groups": [
                     g("Sky", "The sky is green today.", "Wrong.\n\nThe sky ~~is green~~ 🟢 **is blue** today."),
                     g("Water", "Water is dry.", "Wrong.\n\nWater is ~~dry~~ 🟢 **wet**.")]}))
+            (run / "summary.json").write_text('{"themes": []}')
             page = ur.PageServer(doc)
             code, _, out = page.handle("GET", "/api/state", {})
             st = json.loads(out)
