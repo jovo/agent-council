@@ -58,6 +58,16 @@ def vote(v, same="NONE", severity="Substantive"):
 
 
 class Parsing(unittest.TestCase):
+    def test_request_bodies_have_route_specific_limits(self):
+        self.assertEqual(ur.read_request_body({"Content-Length": "2"}, io.BytesIO(b"{}"), "POST", "/api/update"), b"{}")
+        with self.assertRaisesRegex(ur.RequestBodyError, "Content-Length"):
+            ur.read_request_body({}, io.BytesIO(), "POST", "/api/update")
+        with self.assertRaisesRegex(ur.RequestBodyError, "invalid"):
+            ur.read_request_body({"Content-Length": "-1"}, io.BytesIO(), "POST", "/api/update")
+        with self.assertRaisesRegex(ur.RequestBodyError, "1 MiB"):
+            ur.read_request_body({"Content-Length": str(ur.JSON_BODY_LIMIT + 1)}, io.BytesIO(), "POST", "/api/update")
+        self.assertEqual(ur.read_request_body({"Content-Length": str(ur.JSON_BODY_LIMIT + 1)}, io.BytesIO(b"x"), "POST", "/api/upload/memo.md"), b"x")
+
     def test_parse_findings(self):
         fs = ur.parse_findings(REVIEW)
         self.assertEqual([f["title"] for f in fs], ["Date is wrong", "Wordy opener"])

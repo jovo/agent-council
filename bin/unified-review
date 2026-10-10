@@ -77,6 +77,35 @@ from pathlib import Path
 from types import SimpleNamespace
 
 SEVERITIES = ["Critical", "Substantive", "Nitpick"]
+JSON_BODY_LIMIT = 1 * 1024 * 1024
+UPLOAD_BODY_LIMIT = 50 * 1024 * 1024
+AUDIO_BODY_LIMIT = 25 * 1024 * 1024
+
+
+class RequestBodyError(ValueError):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
+def read_request_body(headers, stream, method, route):
+    """Read a bounded POST body before dispatching it to a page handler."""
+    if method != "POST":
+        return b""
+    length = headers.get("Content-Length")
+    if length is None:
+        raise RequestBodyError(411, "Content-Length is required")
+    try:
+        size = int(length)
+    except ValueError:
+        raise RequestBodyError(400, "invalid Content-Length") from None
+    if size < 0:
+        raise RequestBodyError(400, "invalid Content-Length")
+    limit = (UPLOAD_BODY_LIMIT if route.startswith(("/api/upload/", "/api/locate/")) else
+             AUDIO_BODY_LIMIT if route.startswith("/api/transcribe/") else JSON_BODY_LIMIT)
+    if size > limit:
+        raise RequestBodyError(413, f"request body exceeds the {limit // (1024 * 1024)} MiB limit")
+    return stream.read(size)
 
 
 def canon_sev(s):
@@ -4408,11 +4437,13 @@ def serve(path):
             pass
 
         def reply(self, method):
-            n = int(self.headers.get("Content-Length") or 0)
+            route = self.path.split("?")[0]
             try:
-                raw = self.rfile.read(n) if method == "POST" else b""
-                body = raw if self.path.startswith(("/api/upload/", "/api/locate/", "/api/transcribe/")) else json.loads(raw or b"{}")
-                code, ctype, data, *extra = page.handle(method, self.path.split("?")[0], body)
+                raw = read_request_body(self.headers, self.rfile, method, route)
+                body = raw if route.startswith(("/api/upload/", "/api/locate/", "/api/transcribe/")) else json.loads(raw or b"{}")
+                code, ctype, data, *extra = page.handle(method, route, body)
+            except RequestBodyError as e:
+                code, ctype, data, extra = e.status, "application/json", json.dumps({"error": str(e)}), []
             except Exception as e:  # report to the page, keep serving
                 code, ctype, data, extra = 500, "application/json", json.dumps({"error": str(e)}), []
             data = data.encode() if isinstance(data, str) else data
