@@ -1276,21 +1276,28 @@ def to_docx(md, reader, folder):
         return out.read_bytes()
 
 
-def export_draft(path, fmt=None):
+def export_draft(path, fmt=None, notes=()):
     """(file name, MIME type, bytes, edits not placed) of the draft as it is now,
     as Markdown, Word, or (for a draft that came as a PDF) PDF. The default is the
     format it came in. A draft that came as a Word file comes back as the original
-    with the edits as tracked changes. Any other Word file is made by pandoc."""
+    with the edits as tracked changes. Any other Word file is made by pandoc. In a
+    Word file, each note {"quote", "text"} is a comment on its passage, and so is
+    each edit the tracked changes could not place."""
     path, orig = Path(path), original_of(path)
     fmt = fmt or (orig.suffix[1:] if orig else "md")
     name = f"{path.stem}-edited.{fmt}"
     if fmt == "md":
         return name, MD_MIME, path.read_bytes(), []
     if fmt == "docx":
+        missed = []
         if orig is not None and orig.suffix == ".docx":
             data, missed = patch_docx(orig, path.read_text())
-            return name, DOCX_MIME, data, missed
-        return name, DOCX_MIME, to_docx(path.read_text(), "markdown", path.parent), []
+        else:
+            data = to_docx(path.read_text(), "markdown", path.parent)
+        unplaced = [{"quote": m["old"] or m["new"], "text": "This edit is in the reviewed draft but could not be "
+                     f"placed here as a tracked change ({m['why']}). Make it by hand.\nWas: {m['old'] or '(nothing)'}"
+                     f"\nNow: {m['new'] or '(removed)'}"} for m in missed]
+        return name, DOCX_MIME, add_comments(data, list(notes) + unplaced), missed
     if fmt == "pdf" and orig is not None and orig.suffix == ".pdf":
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / name
@@ -1730,16 +1737,95 @@ def patch_docx(orig, md):
         for item in zin.infolist():
             data = zin.read(item.filename)
             if item.filename in roots:
-                xml = parts[item.filename]
-                new = ET.tostring(roots[item.filename], encoding="unicode")
-                # ElementTree drops namespace declarations it does not use, but Word
-                # needs the ones mc:Ignorable names. Keep the original root tag.
-                head, keep = re.match(r"<[^>]+>", new)[0], re.search(r"<(?!\?)[^>]+>", xml)[0]
-                more = "".join(f" {d}" for d in re.findall(r'xmlns:\w+="[^"]*"', head) if d not in keep)
-                new = keep[:-1] + more + ">" + new[len(head):]
-                data = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n' + new).encode("utf-8")
+                data = xml_bytes(roots[item.filename], parts[item.filename])
             zout.writestr(item, data)
     return out.getvalue(), missed
+
+
+def xml_bytes(root, original):
+    """A Word part's XML tree as bytes. ElementTree drops namespace declarations
+    it does not use, but Word needs the ones mc:Ignorable names, so the original
+    root tag is kept, with any declarations ElementTree moved up to the root."""
+    for prefix, uri in re.findall(r'xmlns:(\w+)="([^"]+)"', original):
+        ET.register_namespace(prefix, uri)
+    new = ET.tostring(root, encoding="unicode")
+    head, keep = re.match(r"<[^>]+>", new)[0], re.search(r"<(?!\?)[^>]+>", original)[0]
+    keep = re.sub(r"\s*/>$", ">", keep)  # an empty part's root closes itself
+    if head.endswith("/>"):  # and so may the tree's, when it is still empty
+        return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n' + original.split("?>", 1)[-1].lstrip()).encode("utf-8")
+    more = "".join(f" {d}" for d in re.findall(r'xmlns:\w+="[^"]*"', head) if d not in keep)
+    new = keep[:-1] + more + ">" + new[len(head):]
+    return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n' + new).encode("utf-8")
+
+
+COMMENTS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments"
+COMMENTS_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"
+
+
+def add_comments(data, notes):
+    """A Word file's bytes with each note {"quote", "text"} added as a comment by
+    "Unified review" on the paragraph holding its quote, or on the first
+    paragraph, saying so, when the quote is not found."""
+    if not notes:
+        return data
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        files = {i.filename: z.read(i.filename) for i in z.infolist()}
+        infos = z.infolist()
+    doc_xml = files["word/document.xml"].decode("utf-8")
+    for prefix, uri in re.findall(r'xmlns:(\w+)="([^"]+)"', doc_xml):
+        ET.register_namespace(prefix, uri)
+    root = ET.fromstring(doc_xml)
+    paras = list(root.find(w_("body")).iter(w_("p")))
+    texts = [wnorm("".join(a["text"] for a in para_atoms(p))) for p in paras]
+    old = files.get("word/comments.xml", b"").decode("utf-8")
+    croot = ET.fromstring(old) if old else ET.Element(w_("comments"))
+    ids = [int(c.get(w_("id"))) for c in croot if (c.get(w_("id")) or "").isdigit()]
+    ids += [int(e.get(w_("id"))) for e in root.iter(w_("commentRangeStart")) if (e.get(w_("id")) or "").isdigit()]
+    next_id, date = max(ids, default=-1) + 1, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    first = next((p for p, t in zip(paras, texts) if t), paras[0])
+    for note in notes:
+        # The quote as Word shows it: no markup, and only up to an equation or footnote mark.
+        q = wnorm(re.split(r"\$|\[\^", plain_view(note.get("quote") or "")[0])[0])[:60]
+        para = next((p for p, t in zip(paras, texts) if len(q) >= 12 and q in t), None)
+        text = note["text"] if para is not None else "(Its passage was not found.) " + note["text"]
+        para = para if para is not None else first
+        cid = str(next_id)
+        next_id += 1
+        c = ET.SubElement(croot, w_("comment"), {w_("id"): cid, w_("author"): "Unified review",
+                                                 w_("date"): date, w_("initials"): "UR"})
+        for k, line in enumerate(text.split("\n")):
+            cp = ET.SubElement(c, w_("p"))
+            if k == 0:
+                ET.SubElement(ET.SubElement(cp, w_("r")), w_("annotationRef"))
+            t = ET.SubElement(ET.SubElement(cp, w_("r")), w_("t"), {XML_SPACE: "preserve"})
+            t.text = line
+        ppr = para.find(w_("pPr"))
+        para.insert(1 if ppr is not None else 0, ET.Element(w_("commentRangeStart"), {w_("id"): cid}))
+        para.append(ET.Element(w_("commentRangeEnd"), {w_("id"): cid}))
+        ref = ET.SubElement(para, w_("r"))
+        ET.SubElement(ET.SubElement(ref, w_("rPr")), w_("rStyle"), {w_("val"): "CommentReference"})
+        ET.SubElement(ref, w_("commentReference"), {w_("id"): cid})
+    files["word/document.xml"] = xml_bytes(root, doc_xml)
+    files["word/comments.xml"] = (xml_bytes(croot, old) if old else
+                                  b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+                                  + ET.tostring(croot, encoding="utf-8").split(b"?>", 1)[-1].lstrip())
+    rels = files["word/_rels/document.xml.rels"].decode("utf-8")
+    if COMMENTS_REL not in rels:
+        rid = next(f"rIdUR{k}" for k in range(1, 1000) if f'Id="rIdUR{k}"' not in rels)
+        rels = rels.replace("</Relationships>", f'<Relationship Id="{rid}" Type="{COMMENTS_REL}" Target="comments.xml"/></Relationships>')
+        files["word/_rels/document.xml.rels"] = rels.encode("utf-8")
+    types = files["[Content_Types].xml"].decode("utf-8")
+    if "/word/comments.xml" not in types:
+        types = types.replace("</Types>", f'<Override PartName="/word/comments.xml" ContentType="{COMMENTS_TYPE}"/></Types>')
+        files["[Content_Types].xml"] = types.encode("utf-8")
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+        names = [i.filename for i in infos]
+        for i in infos:
+            zout.writestr(i, files[i.filename])
+        if "word/comments.xml" not in names:
+            zout.writestr("word/comments.xml", files["word/comments.xml"])
+    return out.getvalue()
 
 
 def locate(quote, files):
@@ -2813,9 +2899,18 @@ def diff_parts(body, slots=False):
     old, new = spaces(old), spaces(re.sub(r"[ \t]+\n", "\n", re.sub(r" +([.,;:])", r"\1", new)))
     if not slots and has_slot(new):
         return None, SLOT
+    if "🟢" in old + new:  # an addition marked 🟢 without bold: where it ends is unclear
+        return None, MALFORMED
     if old == new:
+        if re.search(r"🟢(?![ \t]*\*\*)", text) or not (DEL.search(text) or ADD.search(text)):
+            # An addition marked 🟢 without bold, or no marked change at all: where it starts or ends is unclear.
+            return None, MALFORMED
         return None, "the change only removes spaces at the end of a line, which Markdown does not show"
     return old, new
+
+
+MALFORMED = ("the reviewer's change is malformed: what it adds or removes is not marked clearly, "
+             "so it cannot be placed. Make it by hand, then mark it done")
 
 
 def has_slot(new):
@@ -2855,26 +2950,118 @@ def placed_diff(text, body, quote, slots=False):
             if e:
                 return o, n, e
     edits = locate_edits(text, old, new, quote) if old else None
-    if old is not None and not edits:
+    if (old is not None and not edits) or new == MALFORMED:
         o, n = lenient_diff(body, slots)
         e = locate_edits(text, o, n, quote) if o else None
-        if e:
+        e = [trim_overlap(text, *x) for x in e] if e else None
+        if e and None not in e:
             return o, n, e
+        if new == MALFORMED:
+            return None, MALFORMED, None
     return old, new, edits
+
+
+# Inline markup a reviewer quoting the text as it reads leaves out: bold and italic
+# asterisks, underline and super- and subscript tags (as Word files bring), and the
+# backslash of an escaped character (\# for #).
+MARKUP = re.compile(r"\*\*|(?<!\\)\*|</?(?:u|sup|sub)>|\\(?=[!-/:-@\[-`{-~])")
+
+
+def plain_view(text):
+    """(text without inline markup, idx) where idx[i] is the position in text of
+    the plain text's character i."""
+    plain, idx, at = [], [], 0
+    for m in MARKUP.finditer(text):
+        plain.append(text[at:m.start()])
+        idx.extend(range(at, m.start()))
+        at = m.end()
+    plain.append(text[at:])
+    idx.extend(range(at, len(text)))
+    return "".join(plain), idx
+
+
+def trim_overlap(text, a, b, new):
+    """An edit (a, b, new) whose new text ends with the text that already follows
+    it in the draft, trimmed so that text is not added twice. Reading 🟢 without
+    bold as an addition to the end of the line can give such an edit:
+    "reduced ~~efficiently~~🟢 efficiency, given..." adds "efficiency, given..."
+    before the ", given..." already there."""
+    keep = 0
+    while keep < min(b - a, len(new)) and text[a + keep] == new[keep]:
+        keep += 1
+    after = plain_view(text[b:b + len(new) + 40])[0]
+    for k in range(keep, len(new)):
+        tail = plain_view(new[k:])[0]
+        if tail and after.startswith(tail):  # the longest overlap, down to a closing period
+            return a, b, new[:k]
+    added = plain_view(new[keep:])[0]
+    if len(added) >= 12 and added[-12:] in after:  # it would repeat what follows, with a word changed: unclear
+        return None
+    return a, b, new
 
 
 def find_span(text, needle, near=None):
     """(start, end) of needle in text, matching through differences in spacing
-    and quote marks. With several matches, the one nearest `near`. None if absent."""
+    and quote marks, and through inline markup the needle leaves out. With
+    several matches, the one nearest `near`. None if absent."""
     if not needle.strip():
         return None
-    parts = [re.escape(w.translate(QUOTES)) for w in needle.split()]
-    pat = r"\s+".join(parts)
-    pat = pat.replace("'", "['‘’]").replace('"', '["“”]')
-    hits = [(m.start(), m.end()) for m in re.finditer(pat, text)]
+    def search(hay, needle):
+        parts = [re.escape(w.translate(QUOTES)) for w in needle.split()]
+        pat = r"\s+".join(parts).replace("'", "['‘’]").replace('"', '["“”]')
+        return [(m.start(), m.end()) for m in re.finditer(pat, hay)]
+    hits = search(text, needle)
+    if not hits:  # the reviewer quoted the text as it reads, without its markup
+        plain, idx = plain_view(text)
+        bare = plain_view(needle)[0]
+        if plain != text and bare.strip():
+            hits = [(idx[a], idx[b - 1] + 1) for a, b in search(plain, bare)]
     if not hits:
         return None
     return min(hits, key=lambda h: abs(h[0] - near)) if near is not None else hits[0]
+
+
+def narrow(text, s, e, new):
+    """An edit (s, e, new) on a passage with inline markup, narrowed to the
+    characters that change, so markup around them stays: "depicted in **c**"
+    to "depicted in f" changes only the c. A new text with markup of its own
+    replaces the whole passage."""
+    seg = text[s:e]
+    plain, idx = plain_view(seg)
+    if plain == seg or plain_view(new)[0] != new:
+        return s, e, new
+    p = 0
+    while p < min(len(plain), len(new)) and plain[p] == new[p]:
+        p += 1
+    q = 0
+    while q < min(len(plain), len(new)) - p and plain[len(plain) - 1 - q] == new[len(new) - 1 - q]:
+        q += 1
+    a = s + (idx[p] if p < len(plain) else len(seg))
+    b = s + idx[len(plain) - q - 1] + 1 if len(plain) - q > p else a
+    repl = new[p:len(new) - q]
+    if a > s and text[a - 1] == "\\":  # the backslash escaping a changed character goes with it
+        a -= 1
+    # Markup pairs cut by the change ("moderate<u>-low</u> affinity" changing "-low
+    # affinity") widen it to the whole pair, so no tag is left open. The widened
+    # part keeps its text but not its markup.
+    pairs, open_ = [], {}
+    for m in MARKUP.finditer(text, s, e):
+        tok = m[0].replace("/", "")
+        if tok.startswith("\\"):
+            continue
+        if tok in open_ and (m[0].startswith("</") or tok in ("**", "*")):
+            pairs.append((open_.pop(tok), m.span()))
+        else:
+            open_[tok] = m.span()
+    a0, b0, changed = a, b, True
+    while changed:  # a pair is cut when the change holds one of its tags but not the other
+        changed = False
+        for (os_, oe), (cs, ce) in pairs:
+            if (a <= os_ and oe <= b) != (a <= cs and ce <= b):
+                a, b, changed = min(a, os_), max(b, ce), True
+    if (a, b) != (a0, b0):
+        repl = plain_view(text[a:a0])[0] + repl + plain_view(text[b0:b])[0]
+    return a, b, repl
 
 
 def fuzzy_span(text, old, quote_span):
@@ -2958,6 +3145,8 @@ def unplaced_reason(text, reviewed, old, new, quote):
     if not re.sub(r"\(.*\)", "", old).strip():  # empty, or a stand-in such as "(no row)"
         return "the change adds text without quoting where it goes, so it cannot be placed. Add it by hand, then mark it done"
     if reviewed is not None and not locate_edits(reviewed, old, new, quote):
+        if quote and find_span(reviewed, quote):  # the quote is there; the change does not match it
+            return MALFORMED
         return "the reviewer quoted text that is not in the draft as reviewed, so the change cannot be placed. Apply it by hand, then mark it done"
     now = closest_sentence(text, old)
     if now:
@@ -3070,7 +3259,7 @@ def locate_edits(text, old, new, quote=""):
     near = quote_span[0] if quote_span else None
     span = find_span(text, old, near) or (fuzzy_span(text, old, quote_span) if not ELLIPSIS.search(old) else None)
     if span:
-        return [(span[0], span[1], new)]
+        return [narrow(text, span[0], span[1], new)]
     olds, news = ELLIPSIS.split(old), ELLIPSIS.split(new)
     if len(olds) < 2 or len(olds) != len(news):
         return separate_edits(text, old, new, near)
@@ -3086,7 +3275,7 @@ def locate_edits(text, old, new, quote=""):
         if sp is None:
             return None
         if o != n:
-            edits.append((sp[0], sp[1], n))
+            edits.append(narrow(text, sp[0], sp[1], n))
         pos = sp[1]
     return edits or None
 
@@ -3104,7 +3293,7 @@ def separate_edits(text, old, new, near):
         if sp is None:
             return None
         if o != n:
-            edits.append((sp[0], sp[1], n))
+            edits.append(narrow(text, sp[0], sp[1], n))
     edits.sort()
     if any(a[1] > b[0] for a, b in zip(edits, edits[1:])):
         return None
@@ -3743,7 +3932,13 @@ class PageServer:
             # Download the review or the edited draft, as Markdown or Word (or a PDF draft as PDF).
             missed = []
             if m[1] == "draft":
-                name, mime, data, missed = export_draft(self.path, m[2])
+                # Questions and changes the page cannot apply go in a Word file as comments on their passages.
+                notes = [] if m[2] != "docx" or not runs_for(self.path) else [
+                    {"quote": f["quote"], "text": f"{f['n']}. {f['severity']}: {f['title']}\n{f['body'].strip()}"
+                     + ("" if f.get("form") == "question" else f"\nNot applied: {f['reason']}")}
+                    for f in page_state(self.path, self.run_folder())["findings"]
+                    if not f.get("status") and (f.get("form") == "question" or not f["applicable"])]
+                name, mime, data, missed = export_draft(self.path, m[2], notes)
             elif m[2] in ("md", "docx"):
                 md, name = review_markdown(self.run_folder()), f"{self.path.stem}-review.{m[2]}"
                 mime, data = (MD_MIME, md) if m[2] == "md" else (DOCX_MIME, to_docx(md, "gfm", self.run_folder()))

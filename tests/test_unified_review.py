@@ -323,6 +323,33 @@ class Rendering(unittest.TestCase):
         self.assertIn("*Whole draft*", md)
         self.assertNotIn("Warning", md)
 
+    def test_changes_place_through_markup_and_reviewer_slips(self):
+        def apply(text, body, quote=""):
+            _, why, edits = ur.placed_diff(text, body, quote)
+            if not edits:
+                return why
+            for a, b, r in sorted(edits, reverse=True):
+                text = text[:a] + r + text[b:]
+            return text
+        # The reviewer quotes the text as it reads; the draft has bold, underline, and an escape.
+        self.assertEqual(apply("staining depicted in **c**. FLAG", "Change c to f.\n\nstaining depicted in ~~c~~ **🟢 f**."),
+                         "staining depicted in **f**. FLAG")
+        self.assertEqual(apply("the use of a moderate<u>-low</u> affinity scFv",
+                               "Reword.\n\nthe use of a ~~moderate-low affinity~~ **🟢 moderately low-affinity** scFv"),
+                         "the use of a moderately low-affinity scFv")  # the cut underline goes, no tag left open
+        self.assertEqual(apply("<u>He was **very** happy</u> today.", "Reword.\n\nHe was ~~very~~ **🟢 quite** happy today."),
+                         "<u>He was **quite** happy</u> today.")
+        self.assertEqual(apply("from DSMZ (ACC \\#777) RPMI", "Fix.\n\nfrom DSMZ (ACC ~~#777~~ **🟢 #778**) RPMI"),
+                         "from DSMZ (ACC \\#778) RPMI")  # only the changed digit: the escape stays
+        # 🟢 without bold: the addition ends where the draft's own text resumes, and is never added twice.
+        t = "at a reduced efficiently, given a high enough affinity<sup>64</sup>. This suggested"
+        self.assertEqual(apply(t, "Fix.\n\nat a reduced ~~efficiently~~🟢 efficiency, given a high enough affinity<sup>64</sup>."),
+                         "at a reduced efficiency, given a high enough affinity<sup>64</sup>. This suggested")
+        self.assertEqual(apply("depicted in **c**. FLAG", "Fix.\n\ndepicted in ~~c~~🟢 f."), "depicted in **f**. FLAG")
+        # An addition that would repeat what follows with a word changed is refused, not guessed.
+        self.assertEqual(apply("as the starting point and add potency as required. Next",
+                               "Fix.\n\nas the starting point 🟢 to add potency as required."), ur.MALFORMED)
+
     def test_diff_in_the_first_paragraph_still_applies(self):
         text = "Intro.\n\nThe method is only one possible solution enhancing potency. Done.\n"
         body = "Add the missing word. The method is only one possible solution **🟢 for** enhancing potency."
@@ -1468,9 +1495,14 @@ class ReviewPage(unittest.TestCase):
                 "Last paragraph now stays (Smith 2021).", "Last paragraph stays (Smith 2020).")))
             self.assertEqual(plain(as_md(out, "reject")), plain(before))
             self.assertRegex(as_md(out, "all"), r'"deletion"[^>]*>in this regime<.*"insertion"[^>]*>at low speed<')  # one change, not word by word
-            with zipfile.ZipFile(docx) as a, zipfile.ZipFile(out) as b:
-                self.assertEqual(a.read("word/comments.xml"), b.read("word/comments.xml"))
+            with zipfile.ZipFile(out) as b:
                 self.assertIn(b"ZOTERO_ITEM", b.read("word/document.xml"))
+            # Ann's comment stays, and the edit that could not be placed is a comment on its paragraph.
+            comments = as_md(out, "all")
+            self.assertIn('author="Ann"', comments)
+            self.assertRegex(comments, r'author="Unified review"[^>]*>This edit is in the reviewed draft but could not be placed[^<]*'
+                                       r'Was: Last paragraph stays \(Smith 2020\)\.')
+            self.assertRegex(comments, r'comment-end[^>]*></span>Last paragraph|Last paragraph[^\n]*comment-end')
 
     def test_forget_sets_aside_reviews_decisions_and_versions(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):

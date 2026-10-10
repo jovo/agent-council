@@ -926,10 +926,9 @@ async function download(what, fmt) {
     if (!r.ok) throw new Error((await r.json()).error || r.statusText);
     const file = (r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/);
     save(await r.blob(), file ? file[1] : `${what}.${fmt}`);
-    // A Word draft gets the edits as tracked changes. List the ones it could not take, to make by hand.
+    // A Word draft gets the edits as tracked changes. Ones it could not take are comments in the file.
     const missed = JSON.parse(decodeURIComponent(r.headers.get("X-Not-Placed") || "%5B%5D"));
-    if (missed.length) alert(`${missed.length} edit${missed.length > 1 ? "s were" : " was"} not placed in the Word file. Make ${missed.length > 1 ? "them" : "it"} by hand:\n\n` +
-      missed.map(m => `• ${m.why}\n  was: ${m.old || "(nothing)"}\n  now: ${m.new || "(removed)"}`).join("\n\n"));
+    if (missed.length) alert(`${missed.length} edit${missed.length > 1 ? "s" : ""} could not be placed as tracked changes. Each is a comment on its passage in the Word file, to make by hand.`);
   } catch (e) { alert(`Could not get the ${what === "review" ? "review" : "draft"}: ${e.message}`); }
   drawDl();
 }
@@ -940,16 +939,10 @@ document.getElementById("update").onclick = async () => { await api("/api/update
 document.getElementById("acceptall").onclick = async () => {
   // Typos live in the Nitpicks list, so they count as shown when nitpicks would be.
   const open = S.findings.filter(f => !f.status && (shown(f) || (f.severity === "Typo" && shown({...f, severity: "Nitpick"}))));
-  const todo = open.filter(f => f.applicable), left = open.filter(f => !f.applicable);
-  // Say what is left and why: a question has no text to apply, and some changes no longer match the draft.
-  const LEFT = {question: ["question to answer", "questions to answer"], changed: ["passage changed since the review", "passages changed since the review"],
-    point: ["point with no change to apply", "points with no change to apply"], other: ["change the page cannot apply", "changes the page cannot apply"]};
-  const why = f => f.form === "question" ? "question" : /not in the draft/.test(f.reason || "") ? "changed" : /no diff/.test(f.reason || "") ? "point" : "other";
-  const counts = Object.entries(left.reduce((c, f) => (c[why(f)] = (c[why(f)] || 0) + 1, c), {}))
-    .map(([k, n]) => `${n} ${LEFT[k][n > 1 ? 1 : 0]}`);
-  const rest = left.length ? `\n\nLeft for you: ${counts.join(", ")}.` : "";
-  if (!todo.length) { alert(`Nothing shown can be applied.${rest}`); return; }
-  if (!confirm(`Apply ${todo.length} change${todo.length > 1 ? "s" : ""} to ${S.name}?${rest}`)) return;
+  const todo = open.filter(f => f.applicable);
+  // What cannot be applied (questions, malformed or misquoted changes) goes to the Word download as comments.
+  if (!todo.length) { alert("Nothing shown can be applied. Questions and changes to make by hand are comments in Download ▸ Edited draft ▸ Word."); return; }
+  if (!confirm(`Apply ${todo.length} change${todo.length > 1 ? "s" : ""} to ${S.name}?`)) return;
   const failed = [];
   for (const f of todo) { try { await api("/api/accept", {n: f.n}); } catch (e) { failed.push(`${f.n}. ${f.title}: ${e.message}`); } }
   if (failed.length) alert(`${failed.length} could not be applied, often because an earlier change rewrote the same passage:\n\n${failed.join("\n")}`);
