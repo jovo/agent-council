@@ -862,7 +862,7 @@ class MechanicalChecks(unittest.TestCase):
             (d / "refs.bib").write_text(bib or "@article{Friston10,\n title={x}}\n")
             doc = d / "memo.md"
             doc.write_text(text)
-            with mock.patch.object(ur, "BIB", d / "refs.bib"):
+            with mock.patch.object(ur.document_io, "BIB", d / "refs.bib"):
                 return [c["what"] for c in ur.checks(text, doc)]
 
     def test_equations(self):
@@ -1007,7 +1007,7 @@ class Decks(unittest.TestCase):
     def test_a_handle_link_is_not_a_citation(self):
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "refs.bib").write_text("@article{Friston10,\n}\n")
-            with mock.patch.object(ur, "BIB", Path(d) / "refs.bib"):
+            with mock.patch.object(ur.document_io, "BIB", Path(d) / "refs.bib"):
                 out = ur.checks("Play at [@Floyd](https://lichess.org/@/Floyd).", Path(d) / "x.md")
         self.assertEqual(out, [])
 
@@ -1476,7 +1476,8 @@ class ReviewPage(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("pandoc"), "needs pandoc")
     def test_upload_of_a_reviewed_word_file_offers_open_again_or_fresh(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
+                mock.patch.object(ur.document_io, "RUNS_DIR", Path(d) / "runs"):
             src = Path(d) / "memo.md"
             src.write_text("# Memo\n\nSome text.\n")
             docx = Path(d) / "memo.docx"
@@ -1557,7 +1558,8 @@ class ReviewPage(unittest.TestCase):
         def as_md(f, changes="accept"):
             return subprocess.run(["pandoc", str(f), "-t", ur.DOCX_MD, "--wrap=none", f"--track-changes={changes}"],
                                   capture_output=True, text=True, check=True).stdout
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
+                mock.patch.object(ur.document_io, "RUNS_DIR", Path(d) / "runs"):
             src = Path(d) / "memo.md"
             src.write_text(
                 "# Memo\n\nThe cortex learns **slowly and steadily** from [work](https://x.org).[^1]\n\n"
@@ -1676,7 +1678,8 @@ class ReviewPage(unittest.TestCase):
                     p.wait()
 
     def test_draft_downloads_in_the_format_it_came_in(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
+                mock.patch.object(ur.document_io, "RUNS_DIR", Path(d) / "runs"):
             draft = Path(d) / "draft.md"
             draft.write_text("# Draft\n")
             self.assertEqual(ur.export_draft(draft), ("draft-edited.md", ur.MD_MIME, b"# Draft\n", []))
