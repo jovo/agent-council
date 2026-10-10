@@ -177,6 +177,11 @@ Use this when the user asks to review, apply the changes, and repeat ("iterate
 on memo.md", "iterate 5 rounds", "keep going until it's clean"). Run it without
 stopping to ask between rounds.
 
+The same loop also runs in the script: `unified-review --iterate N FILE`, or
+the review page's **Iterate** button. The script applies each agreed diff as
+written. The steps below have you fix each edit to the user's writing rules,
+so follow them when the user asks you to iterate.
+
 1. Rounds: 3 unless the user gives a number. Before the first round, run
    `unified-review --snapshot FILE`. It saves the starting text beside the file
    as `<name>-v<N>` (for example `memo-v7.md`) and adds a pattern for these

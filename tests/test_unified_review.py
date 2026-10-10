@@ -1182,6 +1182,54 @@ class AuthErrors(unittest.TestCase):
             self.assertIsNotNone(ur.AUTH_ERROR.search(msg), msg)
 
 
+class Iterate(unittest.TestCase):
+    def f(self, **kw):
+        base = {"status": None, "form": "edit", "where": "draft", "tag": "Unanimous", "applicable": True,
+                "slot": False, "severity": "Nitpick"}
+        return {**base, **kw}
+
+    def test_auto_applies(self):
+        self.assertTrue(ur.auto_applies(self.f()))
+        self.assertTrue(ur.auto_applies(self.f(tag="Majority", severity="Minor")))
+        self.assertFalse(ur.auto_applies(self.f(tag="Majority")))  # a nitpick needs every voter
+        for kw in ({"tag": "Contested", "severity": "Major"}, {"where": "overview"}, {"form": "question"},
+                   {"slot": True}, {"applicable": False}, {"status": "declined"}, {"tag": "No majority", "severity": "Major"}):
+            self.assertFalse(ur.auto_applies(self.f(**kw)), kw)
+
+    def test_loop_applies_agreed_findings_and_stops_when_nothing_applies(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+            doc = Path(d).resolve() / "memo.md"
+            doc.write_text("# Memo\n\nThe sky is green today.\n\nWater is dry.\n")
+            g = lambda t, q, body, votes, contested=False: {
+                "rep": {"title": t, "quote": q, "body": body}, "severity": "Major", "where": "draft", "pos": 0,
+                "rejected": False, "contested": contested, "raised_by": ["claude"], "frac": 1.0,
+                "votes": {m: {"vote": v} for m, v in votes.items()}}
+            rounds = [[g("Sky", "The sky is green today.", "Wrong.\n\nThe sky ~~is green~~ 🟢 **is blue** today.",
+                         {"gpt": "agree", "gemini": "agree"}),
+                       g("Water", "Water is dry.", "Wrong.\n\nWater is ~~dry~~ 🟢 **wet**.",
+                         {"gpt": "agree", "gemini": "disagree"}, contested=True)], []]
+            def review(path, panel):
+                i = len(list((Path(d) / "runs").glob("r*")))
+                run = Path(d) / "runs" / f"r{i}"
+                run.mkdir(parents=True)
+                (run / "results.json").write_text(json.dumps({
+                    "files": [str(path)], "labels": {}, "reviewers_ok": ["claude"], "voters": ["gpt", "gemini"],
+                    "verify": False, "failures": [], "headings": [], "groups": rounds[i]}))
+                time.sleep(0.01)  # runs are ordered by when their results were written
+                return True
+            with contextlib.redirect_stderr(io.StringIO()):
+                done = ur.iterate(doc, 3, ["claude"], review=review)
+            self.assertEqual([r["applied"] for r in done], [[[1, "Sky"]], []])
+            self.assertEqual(done[0]["skipped"], 1)
+            self.assertEqual(done[0]["attention"], [[2, "Water"]])
+            self.assertIn("The sky is blue today.", doc.read_text())
+            self.assertIn("Water is dry.", doc.read_text())
+            decided = {x["title"]: (x["decision"], x["note"]) for x in ur.load_decisions()[str(doc)]}
+            self.assertEqual(decided, {"Sky": ("applied", "auto-loop"), "Water": ("ignore", "auto-loop: skipped")})
+            self.assertTrue((doc.parent / "memo-v1.md").exists())
+            self.assertTrue((doc.parent / "memo-v1-to-v2.md").exists())
+
+
 class ReviewPage(unittest.TestCase):
     def test_diff_parts_variants(self):
         body = "Point.\n\nThe sky ~~is green~~ 🟢 **is blue** today."

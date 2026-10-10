@@ -2545,6 +2545,67 @@ def snapshot(p):
     return copy
 
 
+def auto_applies(f):
+    """Whether the iterate loop applies a finding on its own: every voter agreed,
+    or it is Major or Minor and a majority agreed. Contested, whole-draft, and
+    question findings, findings with a blank to fill, and findings whose text is
+    no longer in the file are left to the author."""
+    if (f.get("status") or f["form"] == "question" or f["where"] == "overview" or f["tag"] == "Contested"
+            or not f["applicable"] or f["slot"]):
+        return False
+    return f["tag"] == "Unanimous" or (f["severity"] in ("Major", "Minor") and f["tag"] == "Majority")
+
+
+def review_once(path, panel):
+    """Run one review of the file in a child process, without opening a page.
+    True when it finished."""
+    env = {**os.environ, "UNIFIED_REVIEW_NO_PAGE": "1"}
+    r = subprocess.run([sys.executable, os.path.abspath(__file__), str(path), "-p", ",".join(panel)],
+                       cwd=str(Path(path).parent), env=env, stdin=subprocess.DEVNULL, stdout=sys.stderr)
+    return r.returncode == 0
+
+
+def iterate(path, rounds, panel, review=review_once):
+    """Review, apply the findings auto_applies() picks, record the rest as
+    declined, and review again, for up to `rounds` rounds. Stops early when a
+    round applies nothing. Saves a snapshot before the first round and after
+    each round that changed the file, then writes the changes since the start.
+    Returns [{round, version, run, applied: [[n, title]], skipped, attention: [[n, title]]}]."""
+    p = Path(path).resolve()
+    snapshot(p)
+    start = version_number(p, fingerprint(doc_text(p)))
+    done = []
+    for i in range(1, rounds + 1):
+        version = version_number(p, fingerprint(doc_text(p)))
+        log(f"iterate: round {i} of {rounds}, reviewing version {version}")
+        if not review(p, panel):
+            log(f"iterate: the review in round {i} failed, stopping")
+            break
+        run = runs_for(p)[0]
+        st = page_state(p, run)
+        applied = []
+        for f in (f for f in st["findings"] if auto_applies(f)):
+            if apply_change(p, f["old"], f["new"], f["quote"]) is None:
+                applied.append(f)
+        left = [f for f in st["findings"] if not f.get("status") and f not in applied]
+        with contextlib.redirect_stdout(io.StringIO()):
+            if applied:
+                record_decisions(",".join(str(f["n"]) for f in applied), "applied", "auto-loop", run)
+            if left:
+                record_decisions(",".join(str(f["n"]) for f in left), "ignore", "auto-loop: skipped", run)
+        done.append({"round": i, "version": version, "run": str(run), "applied": [[f["n"], f["title"]] for f in applied], "skipped": len(left),
+                     "attention": [[f["n"], f["title"]] for f in left if f["severity"] in ("Major", "Minor")
+                                   and (f["tag"] == "Contested" or f["where"] == "overview")]})
+        log(f"iterate: round {i} applied {len(applied)}, skipped {len(left)}")
+        if not applied:
+            break
+        snapshot(p)
+    if any(r["applied"] for r in done):
+        out = write_changes(p, start)
+        log(f"iterate: changes since version {start} are in {out}")
+    return done
+
+
 def inline_diff(old, new):
     """One paragraph's changes in the house format: ~~deleted~~ and 🟢 **added**.
     A mostly rewritten paragraph is struck whole and followed by the new one."""
@@ -4026,7 +4087,7 @@ def edit_block(path, old, new, start=None):
     return None
 
 
-WRITE_ROUTES = ("/api/accept", "/api/fix", "/api/fill", "/api/change", "/api/edit")
+WRITE_ROUTES = ("/api/accept", "/api/fix", "/api/fill", "/api/change", "/api/edit", "/api/iterate")
 
 
 def read_only(path):
@@ -4039,7 +4100,8 @@ def read_only(path):
 class PageServer:
     def __init__(self, path):
         self.path = Path(path).resolve()
-        self.job = None  # the running Re-review, if any
+        self.job = None  # the running Re-review or Iterate, if any
+        self.job_kind = None
         self.last = time.time()
 
     def open_file(self, target):
@@ -4221,6 +4283,20 @@ class PageServer:
                                             + (["-n", focus] if focus else []),
                                             cwd=str(self.path.parent), env=env, stdin=subprocess.DEVNULL,
                                             stdout=log_file, stderr=log_file)
+                self.job_kind = "review"
+            return 200, "application/json", json.dumps({"job": self.job_state()})
+        if method == "POST" and route == "/api/iterate":
+            rounds = body.get("rounds", 3)
+            if not isinstance(rounds, int) or not 1 <= rounds <= 10:
+                return 400, "application/json", json.dumps({"error": "rounds must be 1 to 10"})
+            if not self.job or self.job.poll() is not None:
+                env = {**os.environ, "UNIFIED_REVIEW_NO_PAGE": "1"}
+                log_file = open(RUNS_DIR / "page-iterate.log", "w")
+                self.job = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--iterate", str(rounds),
+                                             str(self.path), "-p", ",".join(page_panel(self.path))],
+                                            cwd=str(self.path.parent), env=env, stdin=subprocess.DEVNULL,
+                                            stdout=log_file, stderr=log_file)
+                self.job_kind = "iterate"
             return 200, "application/json", json.dumps({"job": self.job_state()})
         if method == "GET" and route in ("/", "/index.html"):
             return 200, "text/html; charset=utf-8", (PAGE_DIR / "review.html").read_text()
@@ -4230,7 +4306,12 @@ class PageServer:
         if not self.job:
             return None
         code = self.job.poll()
-        return {"running": code is None, "ok": code == 0 if code is not None else None}
+        st = {"running": code is None, "ok": code == 0 if code is not None else None, "kind": self.job_kind}
+        if self.job_kind == "iterate":  # the loop's last progress line, such as "round 2 of 3, reviewing version 9"
+            lines = [l for l in (RUNS_DIR / "page-iterate.log").read_text(errors="replace").splitlines()
+                     if l.startswith("iterate: ")] if (RUNS_DIR / "page-iterate.log").exists() else []
+            st["progress"] = lines[-1][len("iterate: "):] if lines else ""
+        return st
 
 
 def transcribe(audio, ext):
@@ -4757,6 +4838,8 @@ def main():
                     help="save a copy of FILE beside it named by its version (memo-v8.md)")
     ap.add_argument("--changes", metavar="N",
                     help="write and open what changed in FILE since saved version N")
+    ap.add_argument("--iterate", metavar="N", type=int,
+                    help="review FILE, apply what the panel agrees on, and repeat, for up to N rounds")
     ap.add_argument("--slides", action="store_true",
                     help="review FILE as a Marp slide deck (automatic when its front matter says marp: true)")
     ap.add_argument("--page", action="store_true",
@@ -4794,6 +4877,16 @@ def main():
             (latest_run() / "results.json").read_text())["files"][0])
         if not open_page(target):
             sys.exit("error: the review page did not start")
+        return
+    if a.iterate:
+        if len(a.files) != 1:
+            ap.error("--iterate takes one FILE")
+        rounds = iterate(a.files[0], a.iterate, [panelist(m.strip()) for m in a.panel.split(",") if m.strip()])
+        for r in rounds:
+            print(f"Round {r['round']} (version {r['version']}): applied {', '.join(str(n) for n, _ in r['applied']) or 'nothing'}, "
+                  f"skipped {r['skipped']}")
+            for n, t in r["attention"]:
+                print(f"  worth a look: {n}. {t} ({r['run']})")
         return
     if a.snapshot or a.changes:
         if len(a.files) != 1:
