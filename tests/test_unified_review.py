@@ -166,6 +166,12 @@ class Parsing(unittest.TestCase):
         self.assertIn("form: edit | question", ur.review_prompt("draft", "", "rules"))
         self.assertIn("For a question finding", ur.VOTE)
 
+    def test_reviewer_rules_require_claim_map_and_decision_relevant_findings(self):
+        rules = ur.reviewer_rules()
+        self.assertIn("identify up to three central claims", rules)
+        self.assertIn("smallest adequate remedy", rules)
+        self.assertIn("Keep Nitpicks terse", rules)
+
     def test_parse_votes_is_tolerant_but_strict_on_vote_words(self):
         v = ur.parse_votes(VOTES)
         self.assertEqual(set(v), {"A1", "A2", "B1"})
