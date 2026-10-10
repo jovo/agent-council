@@ -1340,6 +1340,15 @@ class ReviewPage(unittest.TestCase):
             self.assertTrue((Path(d) / "uploads" / first / "upload" / "memo.md").exists())
             self.assertTrue((Path(d) / "uploads" / second / "upload" / "memo.md").exists())
 
+    def test_repeated_opens_get_distinct_job_ids(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
+                mock.patch.object(ur.subprocess, "Popen"):
+            doc = Path(d) / "memo.md"
+            doc.write_text("# Memo\n")
+            first, second = ur.start_review(doc), ur.start_review(doc)
+            self.assertNotEqual(first, second)
+            self.assertEqual((Path(d) / "runs" / "opens" / second / "file.txt").read_text(), str(doc))
+
     @unittest.skipUnless(shutil.which("pandoc"), "needs pandoc")
     def test_upload_of_a_reviewed_word_file_offers_open_again_or_fresh(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):

@@ -4141,7 +4141,7 @@ def choose_file(start):
 def start_review(path):
     """Review a file in place in the background, as `unified-review FILE` does.
     Returns the job id, read with upload_job(id, "opens")."""
-    jid = time.strftime("%Y-%m-%d-%H%M%S-") + hashlib.sha1(str(path).encode()).hexdigest()[:6]
+    jid = time.strftime("%Y-%m-%d-%H%M%S-") + secrets.token_hex(12)
     folder = RUNS_DIR / "opens" / jid
     folder.mkdir(parents=True)
     (folder / "file.txt").write_text(str(path))
