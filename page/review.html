@@ -90,8 +90,7 @@ input.note{width:100%;border:1px solid var(--line);border-radius:6px;padding:4px
 .ico.badge{background:none;border:1px solid currentColor;border-radius:4px;font:700 10px/13px "NewCM Title",Arial,sans-serif;text-align:center;width:15px;height:15px}
 .menu .arrow{margin-left:auto;color:var(--faint)}
 body.dropping{outline:3px dashed var(--muted);outline-offset:-8px}
-#sumpanel{flex-shrink:0}#sumpanel>.card{max-height:60vh;overflow-y:auto;overscroll-behavior:contain}
-.sumscroll{max-height:9.5em;overflow-y:auto}  /* about a paragraph; scroll for more */
+#sumpanel{flex-shrink:0}#sumpanel>.card{max-height:75vh;overflow-y:auto;overscroll-behavior:contain}
 .themes{margin:6px 0 0;padding-left:0;list-style:none}.themes li{margin:0 0 8px}.themes summary{cursor:pointer}.themes .outline{padding-left:16px}.outline{font-size:14px;margin-top:3px}.outline .sev{text-decoration:none}
 .overview a{cursor:pointer;text-decoration:underline;text-decoration-color:var(--faint)}
 .list{font-size:14px}
@@ -651,7 +650,7 @@ function renderSummary() {
   // model's themes follow for everything else. All are listed the same way.
   const logic = S.findings.filter(f => f.kind === "logic");
   const typed = S.findings.some(f => f.kind);
-  const theme = t => `<li><details data-theme="${esc(t.theme)}"${openThemes.has(t.theme) ? " open" : ""}><summary><b>${esc(t.theme)}</b></summary>${outline(t.fs)}</details></li>`;
+  const theme = t => `<li><details data-theme="${esc(t.theme)}"${openThemes.has(t.theme) ? " open" : ""}><summary><b>${esc(t.theme)}</b> <span class="meta">(${t.fs.length})</span></summary>${outline(t.fs)}</details></li>`;
   const noLogic = !typed ? `<li><b>Logical flaws:</b> this review has no type labels. Re-review to sort them out.</li>`
     : !logic.length ? `<li><b>Logical flaws:</b> none found.</li>` : "";
   const used = new Set(logic.map(f => f.n)), themes = logic.length ? [{theme: "Logical flaws", fs: logic}] : [];
@@ -659,11 +658,11 @@ function renderSummary() {
     const byN = Object.fromEntries(S.findings.map(f => [f.n, f]));
     for (const t of sm.themes) themes.push({theme: t.theme, fs: t.findings.filter(n => byN[n] && !used.has(n) && used.add(n)).map(n => byN[n])});
   }
-  const rest = S.findings.filter(f => !used.has(f.n) && (sm.status === "done" || f.severity !== "Nitpick"));
+  const rest = S.findings.filter(f => !used.has(f.n));
   if (rest.length) themes.push({theme: sm.status === "done" ? "Other" : "Other findings", fs: rest});
   const body = (sm.status === "pending" ? `<div class="meta" style="margin:8px 0">Grouping the reviews by theme…</div>`
       : sm.status === "failed" ? `<div class="err" style="margin:8px 0">No summary: ${esc(sm.reason || "the model call failed")}</div>` : "")
-    + (S.findings.length ? `<ul class="themes sumscroll">${noLogic}${themes.filter(t => t.fs.length).map(theme).join("")}</ul>`
+    + (S.findings.length ? `<ul class="themes">${noLogic}${themes.filter(t => t.fs.length).map(theme).join("")}</ul>`
        : `<p style="margin:8px 0">No findings in this review.</p>`);
   // Say whether this summary describes the text as it is now.
   const er = S.edit_review;

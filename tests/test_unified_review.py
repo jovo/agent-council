@@ -274,7 +274,7 @@ class Rendering(unittest.TestCase):
         (self.tmp / "summary.json").write_text(json.dumps({"themes": [
             {"theme": "Wording", "gist": "Long gist sentence.", "findings": [1, 2, 3]}]}))
         block = ur.review_markdown(self.tmp).split("## Substantive")[0]
-        self.assertIn("## Summary\n\n- **Logical flaws:**\n  - Step fails (1)\n- **Wording:**\n  - Vague term (2)\n  - Odd word (3)\n", block)
+        self.assertIn("## Summary\n\n- **Logical flaws (1 finding):**\n  - Step fails (1)\n- **Wording (2 findings):**\n  - Vague term (2)\n  - Odd word (3)\n", block)
         self.assertNotIn("Long gist", block)
 
     def test_summary_says_when_there_are_no_logic_flaws(self):
@@ -315,11 +315,28 @@ class Rendering(unittest.TestCase):
         md = (self.tmp / "unified.md").read_text()
         order = [md.index(t) for t in ("## Critical", "### 1. Date (contested)", "## Substantive", "### 2. Overall",
                                        "### 3. Early substantive", "### 4. Late substantive", "## Nitpicks",
-                                       "**5.**")]
+                                       "- **5.** Late polish")]
         self.assertEqual(order, sorted(order))
         self.assertNotIn("draft.md, line", md)  # no section, file, or line for a finding
         self.assertIn("*Whole draft*", md)
         self.assertNotIn("Warning", md)
+
+    def test_nitpick_shows_where_and_the_change_without_votes(self):
+        dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
+        q = "Rome was founded in 1066."
+        nit = self.group("Missing word", q, "draft", ur.position(dn, q), severity="Nitpick")
+        nit["rep"]["body"] = "Add the year's era. Rome was founded in ~~1066~~ **🟢 753 BC**."  # the diff in the first paragraph
+        ask = self.group("Why this date", q, "draft", ur.position(dn, q), severity="Nitpick")
+        ask["rep"]["body"] = "Which source gives this date?"
+        self.results([nit, ask])
+        ur.render(self.tmp)
+        md = (self.tmp / "unified.md").read_text()
+        self.assertIn("- **1.** Missing word (*", md)
+        self.assertIn("): Add the year's era. Rome was founded in ~~1066~~ **🟢 753 BC**.\n", md)
+        self.assertIn("- **2.** Why this date (*", md)
+        self.assertIn("): Which source gives this date?", md)
+        nits = md[md.index("## Nitpicks"):]
+        self.assertFalse(re.search("[✓✗✳֍✦]", nits))  # no votes on a nitpick
 
     def test_locate_pdf_quote_across_table_columns(self):
         pdf = self.tmp / "report.pdf"

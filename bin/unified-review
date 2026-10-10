@@ -1900,9 +1900,13 @@ def render(outdir):
         if group != current:
             current = group
             parts.append({"Nitpick": "## Nitpicks", "Logic": "## Logical flaws"}.get(group, f"## {group}"))
-        if group == "Nitpick":  # one line: the diff and the votes
-            diff = " ".join(p for p in strip_end(g["rep"]["body"]).split("\n\n")[1:] if "~~" in p or "🟢" in p)
-            parts.append(f"**{n}.** {marks(g, voters)} {diff or g['rep']['title']}".replace("  ", " "))
+        if group == "Nitpick":  # one item: where it is, and the change, or the point when it has no diff
+            paras = [p.strip() for p in strip_end(g["rep"]["body"]).split("\n\n") if p.strip()]
+            diff = " ".join(p for p in paras if "~~" in p or "🟢" in p) or " ".join(paras[:1])
+            loc = locate(g["rep"]["quote"], r["files"]) if g["rep"]["quote"].strip() and g["where"] != "focus" else None
+            at = ", ".join(x for x in (where_label if where_label not in [Path(f).name for f in r["files"]] else "",
+                                       f"{loc[2]} {loc[1]}" if loc else "") if x)  # a draft with no headings: just the line
+            parts.append(f"- **{n}.** {g['rep']['title']}{f' (*{at}*)' if at else ''}: {diff}".replace("\n", " "))
             continue
         # Escape headings inside a reviewer's diff so they do not become sections here.
         body = re.sub(r"^(\s*(?:🟢\s*)?(?:\*\*)?)#", r"\1\\#", strip_end(g["rep"]["body"]), flags=re.M)
@@ -3967,10 +3971,10 @@ def review_markdown(run):
         return md
     sm = json.loads(sf.read_text())
     # Titles and kinds come from the results, not from the headings. A finding sits
-    # under its first theme, findings in no theme go under "Other", and nitpicks
-    # stay out of the summary.
+    # under its first theme, and findings in no theme go under "Other". Every
+    # finding counts, typos and nitpicks too, as on the review page.
     r = json.loads((run / "results.json").read_text())
-    found = {n: g for n, sev, _, g in ordered_findings(r) if sev not in ("Nitpick", "Typo")}
+    found = {n: g for n, sev, _, g in ordered_findings(r)}
     ns = list(found)
     logic = [n for n in ns if found[n].get("kind") == "logic"]
     typed = not ns or any(found[n].get("kind") for n in ns)
@@ -3985,9 +3989,10 @@ def review_markdown(run):
         themes.append(("Other", sorted(rest)))
     titles = lambda fs: "".join(f"  - {found[n]['rep']['title']} ({n})\n" for n in fs)
     # The first bullet is always the logic flaws, or that there are none.
-    first = (("- **Logical flaws:**\n" + titles(logic)) if logic else "- **Logical flaws:** none found.\n"
+    count = lambda fs: f"{len(fs)} finding{'' if len(fs) == 1 else 's'}"
+    first = ((f"- **Logical flaws ({count(logic)}):**\n" + titles(logic)) if logic else "- **Logical flaws:** none found.\n"
              ) if typed else "- **Logical flaws:** this review has no type labels.\n"
-    block = "## Summary\n\n" + first + "".join(f"- **{name}:**\n{titles(fs)}" for name, fs in themes)
+    block = "## Summary\n\n" + first + "".join(f"- **{name} ({count(fs)}):**\n{titles(fs)}" for name, fs in themes)
     title, _, rest = md.partition("\n")
     return f"{title}\n\n{block}\n{rest.lstrip(chr(10))}"
 
