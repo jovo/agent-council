@@ -1083,6 +1083,21 @@ class Summary(unittest.TestCase):
         self.assertEqual(ur.one_sentence(None), "")
 
 
+class NotAssessed(unittest.TestCase):
+    def test_lists_what_the_panel_could_not_check(self):
+        with tempfile.TemporaryDirectory() as d:
+            plain, fig = Path(d) / "a.md", Path(d) / "b.md"
+            plain.write_text("Text only.\n")
+            fig.write_text("See ![fit](fig1.png).\n")
+            self.assertEqual(ur.not_assessed({"files": [str(plain)], "verify": False}),
+                             "Not assessed by the panel: whether cited sources say what the draft says they do "
+                             "(`--verify` checks them) and whether reported numbers reproduce from the data or code.")
+            self.assertEqual(ur.not_assessed({"files": [str(fig)], "verify": True}),
+                             "Not assessed by the panel: whether reported numbers reproduce from the data or code "
+                             "and the images the draft links to.")
+            self.assertIn(", and the images", ur.not_assessed({"files": [str(fig)], "verify": False}))
+
+
 class SinceLast(unittest.TestCase):
     def results(self, since):
         g = lambda t, seen, pos: {"rep": {"title": t, "quote": "", "body": "Point."}, "severity": "Major",

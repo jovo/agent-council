@@ -678,6 +678,7 @@ function renderSummary() {
   const body = (sm.status === "pending" ? `<div class="meta" style="margin:8px 0">Grouping the reviews by theme…</div>`
       : sm.status === "failed" ? `<div class="err" style="margin:8px 0">No summary: ${esc(sm.reason || "the model call failed")}</div>` : "")
     + (sm.claim ? `<p style="margin:8px 0"><b>Key claim:</b> ${esc(sm.claim)}</p>` : "")
+    + (S.not_assessed ? `<p class="meta" style="margin:8px 0">${esc(S.not_assessed).replace(/`([^`]+)`/g, "<code>$1</code>")}</p>` : "")
     + (S.findings.length ? `<ul class="themes">${noLogic}${themes.filter(t => t.fs.length).map(theme).join("")}</ul>`
        : `<p style="margin:8px 0">No findings in this review.</p>`);
   // Say whether this summary describes the text as it is now.
