@@ -1401,5 +1401,22 @@ class ReviewPage(unittest.TestCase):
             with mock.patch.object(ur.subprocess, "run", make_pdf) as run:
                 self.assertEqual(ur.export_draft(md), ("paper-edited.pdf", "application/pdf", b"%PDF-edited", []))
 
+    def test_job_progress_reads_each_model_from_the_log(self):
+        lines = ["memo.pdf: converting to Markdown", "memo.pdf: Markdown copy at /x/memo.md",
+                 "1/3 review (no web): claude, gpt, gemini", "  gpt: review done, 12 findings (31 s)",
+                 "  gemini: review attempt 1 failed (timeout), retrying"]
+        with mock.patch.object(ur, "SEEN", {}):
+            st = ur.job_progress("j", lines, True)
+            self.assertEqual([(s["label"], s["state"]) for s in st], [("Convert to Markdown", "done"), ("Review", "running")])
+            self.assertEqual([(m["name"], m["state"], m["note"]) for m in st[1]["models"]],
+                             [("claude", "running", ""), ("gpt", "done", "12 findings (31 s)"), ("gemini", "running", "retrying")])
+            lines += ["  gemini: review failed (no reply)", "  claude: review done, 20 findings (200 s)",
+                      "2/3 vote on 32 findings: claude, gpt", "3/3 render: 32 findings in 30 groups, 0 rejected by vote"]
+            st = ur.job_progress("j", lines, False)
+            self.assertEqual([s["state"] for s in st], ["done", "done", "done", "done"])
+            self.assertEqual([m["state"] for m in st[1]["models"]], ["done", "done", "failed"])
+            self.assertEqual([m["state"] for m in st[2]["models"]], ["done", "done"])  # finished, though not logged
+            self.assertEqual(st[1]["secs"], 200)  # the slowest model's time
+
 if __name__ == "__main__":
     unittest.main()

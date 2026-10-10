@@ -2060,6 +2060,8 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
             if attempt == 2:
                 fail("review", m, "reply had no findings in the expected format, after one retry")
         timings[f"review_{m}"] = round(time.time() - t, 1)
+        if fs is not None:
+            log(f"  {m}: review done, {len(fs)} finding{'' if len(fs) == 1 else 's'} ({timings[f'review_{m}']:.0f} s)")
         return fs
     found = {m: fs for m, fs in parallel(review, panel).items() if fs is not None}
     if len(found) < len(panel) and STANDIN not in panel:
@@ -2107,6 +2109,8 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
             if attempt == 2:
                 fail("vote", m, "reply had no vote lines in the expected format, after one retry")
         timings[f"vote_{m}"] = round(time.time() - t, 1)
+        if v:
+            log(f"  {m}: vote done, {len(v)} vote{'' if len(v) == 1 else 's'} ({timings[f'vote_{m}']:.0f} s)")
         return v or None
     if not flat:  # every reviewer found nothing to change: nothing to vote on
         log("  no findings to vote on")
@@ -3865,6 +3869,57 @@ def start_upload(name, body):
     return uid
 
 
+SEEN = {}  # (job id, stage) -> when the server first saw that stage in the job's log
+
+
+def job_progress(uid, lines, running):
+    """The stages of a background review, read from its log: [{"label", "state"
+    (running, done, failed), "secs", "models": [{"name", "state", "note"}]}].
+    A stage's start is when the server first saw it, so polls set its clock."""
+    stages = []
+
+    def stage(key, label, models=()):
+        if stages and stages[-1]["state"] == "running":
+            stages[-1]["state"] = "done"
+        stages.append({"key": key, "label": label, "state": "running",
+                       "models": [{"name": m, "state": "running", "note": ""} for m in models]})
+    for line in lines:
+        if line.endswith(": converting to Markdown"):
+            stage("convert", "Convert to Markdown")
+        elif m := re.match(r"([123])/3 (review|vote|render)\b(.*)", line):
+            names = [n.strip() for n in m[3].rsplit(":", 1)[-1].split(",")] if m[2] != "render" else []
+            stage(m[2], {"review": "Review", "vote": "Vote on each other's findings", "render": "Merge"}[m[2]], names)
+        elif stages and (m := re.match(r"\s+(\S+) stands in (?:to vote )?for", line)):
+            stages[-1]["models"].append({"name": m[1], "state": "running", "note": "standing in"})
+        elif stages and (m := re.match(r"\s+(\S+): (\w+) (done|failed|attempt 1 failed)(.*)", line)):
+            for x in stages[-1]["models"]:
+                if x["name"] == m[1]:
+                    x["state"] = {"done": "done", "failed": "failed"}.get(m[3], "running")
+                    note = m[4].strip(" ,")
+                    if note.startswith("(") and note.endswith(")"):  # "failed (no reply)"
+                        note = note[1:-1]
+                    x["note"] = "retrying" if m[3].startswith("attempt") else note
+        elif stages and stages[-1]["key"] == "convert" and ("Markdown copy" in line or "conversion failed" in line):
+            stages[-1]["state"] = "done"
+    if stages and not running:
+        stages[-1]["state"] = "done"
+    now = time.time()
+    for st in stages:
+        st["secs"] = round(now - SEEN.setdefault((uid, st["key"]), now))
+        if st["state"] == "running":
+            continue
+        for x in st["models"]:  # a failure is always logged, so a model still open finished
+            if x["state"] == "running":
+                x["state"] = "done"
+    for a, b in zip(stages, stages[1:]):  # a finished stage lasted until the next began
+        a["secs"] = max(0, a["secs"] - b["secs"])
+    for st in stages:  # or as long as its slowest model, which the log times exactly
+        took = [int(t) for x in st["models"] for t in re.findall(r"\((\d+) s\)", x["note"])]
+        if st["state"] != "running" and took:
+            st["secs"] = max(took)
+    return [{k: st[k] for k in ("label", "state", "secs", "models")} for st in stages]
+
+
 def upload_job(uid, kind="uploads"):
     """Where a background review stands, for an upload or (kind "opens") a file
     chosen with Open: {"running", "name", "log"}, and when it is done,
@@ -3877,8 +3932,14 @@ def upload_job(uid, kind="uploads"):
     read = lambda f: (folder / f).read_text(errors="replace") if (folder / f).exists() else ""
     names = ([Path(read("file.txt").strip()).name] if kind == "opens"
              else [p.name for p in (folder / "upload").glob("*")])
-    st = {"running": job is not None and job.poll() is None, "name": names[0] if names else uid,
-          "log": read("stderr.log").splitlines()[-12:]}
+    lines = read("stderr.log").splitlines()
+    running = job is not None and job.poll() is None
+    try:  # the id starts with the time the review started
+        began = time.mktime(time.strptime(Path(uid).name[:17], "%Y-%m-%d-%H%M%S"))
+    except ValueError:
+        began = time.time()
+    st = {"running": running, "name": names[0] if names else uid, "log": lines[-12:],
+          "elapsed": round(time.time() - began), "stages": job_progress(uid, lines, running)}
     if st["running"]:
         return st
     # The review prints the path of unified.md as its last line.

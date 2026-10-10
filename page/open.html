@@ -20,6 +20,10 @@ button:hover{border-color:var(--muted)}
 #drop p{margin:0 0 8px}
 .meta{color:var(--muted);font-size:14px}
 .err{color:var(--crit-ink)}
+.stages{margin:12px 0;font-size:15px}
+.stage{padding:6px 0;border-bottom:1px solid var(--line)}
+.stage.running>b{color:var(--ink)}.stage.done>b,.stage.done .models{color:var(--muted)}.stage .failed{color:var(--crit-ink)}
+.models{display:flex;flex-wrap:wrap;gap:4px 18px;margin:2px 0 0 20px;font-size:14px}
 pre{white-space:pre-wrap;font:13px/1.45 ui-monospace,Menlo,monospace;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
 </style>
 </head>
@@ -34,7 +38,8 @@ pre{white-space:pre-wrap;font:13px/1.45 ui-monospace,Menlo,monospace;color:var(-
     <button id="finder">Choose in Finder…</button>
   </div>
   <div class="meta" id="note" style="margin-top:12px"></div>
-  <pre id="log" hidden></pre>
+  <div id="progress"></div>
+  <details id="logbox" hidden><summary class="meta">Log</summary><pre id="log"></pre></details>
 </main>
 <script>
 // A browser gives a dropped file's contents but not its path. The server finds
@@ -46,6 +51,16 @@ const note = html => { document.getElementById("note").innerHTML = html; };
 const fail = msg => note(`<span class="err">${esc(msg)}</span>`);
 const title = t => { document.getElementById("title").textContent = t; document.title = t; };
 let busy = false;
+// Progress, read from the review's log: each stage, and each model's state in it.
+const clock = s => s < 60 ? `${s} s` : `${Math.floor(s / 60)} m ${String(s % 60).padStart(2, "0")} s`;
+function progress(j) {
+  const mark = {done: "✓", failed: "✗", running: "…"};
+  return `<div class="stages">` + (j.stages || []).map(st => `<div class="stage ${st.state}"><b>${mark[st.state]} ${esc(st.label)}</b>` +
+    (st.secs ? ` <span class="meta">${clock(st.secs)}</span>` : "") +
+    (st.models.length ? `<div class="models">` + st.models.map(m => `<span class="${m.state}">${mark[m.state]} ${esc(m.name)}` +
+      ` <span class="meta">${esc(m.note || (m.state === "running" && st.state === "running" ? "working" : ""))}</span></span>`).join("") + `</div>` : "") +
+    `</div>`).join("") + `</div>`;
+}
 
 async function post(route, body) {
   const r = await fetch(route, {method: "POST", body});
@@ -59,7 +74,7 @@ async function opened(j) {  // the server's reply for a chosen file
   if (j.page) { location.replace(j.page); return; }
   document.getElementById("pick").hidden = true;
   title(`Reviewing ${j.name}`);
-  note("The panel takes about two minutes. This tab turns into the review page when it finishes.");
+  note("This tab turns into the review page when the review finishes. A long draft takes several minutes.");
   poll(j.id);
 }
 
@@ -67,9 +82,11 @@ async function poll(id) {
   let j;
   try { const r = await fetch("/api/job/" + encodeURIComponent(id)); j = await r.json(); if (!r.ok) throw new Error(j.error); }
   catch (e) { fail(e.message); return; }
-  const log = document.getElementById("log");
-  log.hidden = !j.log.length; log.textContent = j.log.join("\n");
-  if (j.error) { title(`Review of ${j.name} failed`); fail(j.error); return; }
+  document.getElementById("logbox").hidden = !j.log.length;
+  document.getElementById("log").textContent = j.log.join("\n");
+  document.getElementById("progress").innerHTML = progress(j);
+  if (j.running) title(`Reviewing ${j.name} · ${clock(j.elapsed)}`);
+  if (j.error) { title(`Review of ${j.name} failed`); fail(j.error); document.getElementById("logbox").open = true; return; }
   if (j.page) { location.replace(j.page); return; }
   setTimeout(poll, 2000, id);
 }

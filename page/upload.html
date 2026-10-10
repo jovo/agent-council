@@ -25,6 +25,10 @@ main{max-width:860px;margin:0 auto;padding:24px 16px 80px}
 #drop.over{border-color:var(--ink)}
 #drop p{margin:0 0 8px}
 #status{margin-top:16px}
+.stages{margin:12px 0;font-size:15px}
+.stage{padding:6px 0;border-bottom:1px solid var(--line)}
+.stage.running>b{color:var(--ink)}.stage.done>b,.stage.done .models{color:var(--muted)}.stage .failed{color:var(--crit-ink)}
+.models{display:flex;flex-wrap:wrap;gap:4px 18px;margin:2px 0 0 20px;font-size:14px}
 pre{white-space:pre-wrap;font:13px/1.45 ui-monospace,Menlo,monospace;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
 .err{color:var(--crit-ink)}
 #result{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:24px 32px}
@@ -58,7 +62,17 @@ pre{white-space:pre-wrap;font:13px/1.45 ui-monospace,Menlo,monospace;color:var(-
 <script>
 const $ = id => document.getElementById(id);
 const esc = t => (t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-let started = null, markdown = "", name = "";
+let markdown = "", name = "";
+// Progress, read from the review's log: each stage, and each model's state in it.
+const clock = s => s < 60 ? `${s} s` : `${Math.floor(s / 60)} m ${String(s % 60).padStart(2, "0")} s`;
+function progress(j) {
+  const mark = {done: "✓", failed: "✗", running: "…"};
+  return `<div class="stages">` + (j.stages || []).map(st => `<div class="stage ${st.state}"><b>${mark[st.state]} ${esc(st.label)}</b>` +
+    (st.secs ? ` <span class="meta">${clock(st.secs)}</span>` : "") +
+    (st.models.length ? `<div class="models">` + st.models.map(m => `<span class="${m.state}">${mark[m.state]} ${esc(m.name)}` +
+      ` <span class="meta">${esc(m.note || (m.state === "running" && st.state === "running" ? "working" : ""))}</span></span>`).join("") + `</div>` : "") +
+    `</div>`).join("") + `</div>`;
+}
 
 async function upload(file) {
   $("status").innerHTML = `<div class="meta">Uploading ${esc(file.name)}…</div>`;
@@ -88,12 +102,11 @@ function show(j) {
   $("result").hidden = !(j && j.markdown);
   name = j ? j.name : ""; $("name").textContent = name;
   if (idle) { $("status").innerHTML = ""; return; }
-  const log = j.log.length ? `<pre>${esc(j.log.join("\n"))}</pre>` : "";
+  const log = j.log.length ? `<details><summary class="meta">Log</summary><pre>${esc(j.log.join("\n"))}</pre></details>` : "";
   if (j.running) {
-    started = started || Date.now();
-    $("status").innerHTML = `<div class="meta">Reviewing… ${Math.round((Date.now() - started) / 1000)} s</div>${log}`;
+    $("status").innerHTML = `<div class="meta">Reviewing for ${clock(j.elapsed)}. Each model's state is below. A long draft takes several minutes.</div>${progress(j)}${log}`;
   } else if (j.error) {
-    $("status").innerHTML = `<div class="err">${esc(j.error)}</div>${log}`;
+    $("status").innerHTML = `<div class="err">${esc(j.error)}</div>${progress(j)}<pre>${esc(j.log.join("\n"))}</pre>`;
   } else {
     if (j.page) { location.href = j.page; return; }  // the full review page for the copy
     $("status").innerHTML = "";
@@ -118,7 +131,7 @@ $("download").onclick = () => {
   a.download = name.replace(/\.[^.]+$/, "") + "-unified-review.md";
   a.click();
 };
-window.onhashchange = () => { started = null; poll(); };
+window.onhashchange = poll;
 poll();
 </script>
 </body>
