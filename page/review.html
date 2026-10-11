@@ -121,7 +121,7 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
     <span class="meta" id="tally"></span>
     <span class="mb" id="dl" title="Download the review, or the edited draft"></span>
     <button id="openbtn" title="Choose another file in Finder and review it in a new tab">Open…</button>
-    <span style="position:relative"><button id="update" title="Run a new review of the current text">Re-review</button><button id="updmore" title="Review options: start over, fact-check">▾</button><div id="updmenu" class="menu" hidden></div></span>
+    <span style="position:relative"><button id="update" title="Run a new review of the current text">Re-review</button><button id="updmore" title="Review options: start over, iterate, fact-check">▾</button><div id="updmenu" class="menu" hidden></div></span>
   </div>
   <div class="row meta" id="fail" style="margin-top:4px"></div>
   <div class="row" style="margin-top:8px">
@@ -788,6 +788,7 @@ function renderSummary() {
   const er = S.edit_review;
   const fresh = er && er.status === "pending" ? `<div class="overview banner" style="margin:8px 0;font-size:14px">Reviewing your edit to “${esc(er.passage.slice(0, 80))}${er.passage.length > 80 ? "…" : ""}”. New findings appear at the end of the list, usually within a minute.</div>`
     : er && er.status === "failed" && !(S.job && S.job.running) ? `<div class="err" style="margin:8px 0">The review of your edit failed: ${esc(er.reason || "unknown error")}</div>`
+    : S.job && S.job.running && S.job.kind === "iterate" ? `<div class="overview banner" style="margin:8px 0;font-size:14px">Iterating: ${esc(S.job.progress || "starting")}. Each round reviews the text, applies the findings the panel agrees on, and declines the rest. The page shows the newest review as each round finishes.</div>`
     : S.job && S.job.running ? `<div class="overview banner" style="margin:8px 0;font-size:14px">Reviewing the current text now. The new review replaces this one when the panel finishes, usually in a minute or two.</div>`
     : S.edited && !(er && er.status === "done") ? `<div class="overview banner" style="margin:8px 0;font-size:14px">The draft changed since this review. Click Re-review to review the current text.</div>` : "";
   el.innerHTML = `<div class="card overview" style="margin-bottom:12px"><div class="row"><span class="title" style="font-size:15px">Summary</span><span class="meta" style="font-size:13px;margin-left:8px">${sevs}</span><span class="spacer"></span><a id="closesum" class="meta" style="cursor:pointer">Hide</a></div>${fresh}${body}</div>`;
@@ -856,7 +857,7 @@ function render() {
   const acc = S.findings.filter(f => f.status === "accepted").length, dec = S.findings.filter(f => f.status === "declined").length;
   document.getElementById("tally").textContent = `${acc} accepted · ${dec} declined · ${S.findings.length - acc - dec} open`;
   const job = S.job && S.job.running;
-  const up = document.getElementById("update"); up.textContent = job ? "Reviewing…" : "Re-review"; up.disabled = !!job;
+  const up = document.getElementById("update"); up.textContent = !job ? "Re-review" : S.job.kind === "iterate" ? "Iterating…" : "Reviewing…"; up.disabled = !!job;
   document.getElementById("updmore").disabled = !!job;
   const openLogic = S.findings.filter(f => f.kind === "logic" && !f.status).length;
   if (logicAuto === null) { logicAuto = openLogic > 0; if (logicAuto) filt.kind = "Logic"; }
@@ -1057,15 +1058,29 @@ document.getElementById("updmore").onclick = e => {
   if (!m.hidden) { m.hidden = true; return; }
   m.innerHTML = `<label><input type="radio" name="updmode" value="again" checked><span>Review again<span class="meta">Earlier reviews still apply: open findings carry over, points you declined stay hidden, and recently changed passages are held back.</span></span></label>
     <label><input type="radio" name="updmode" value="fresh"><span>Start over<span class="meta">Set aside this file's earlier reviews, decisions, and versions (not deleted), and review the current text as version 1.</span></span></label>
+    ${S.readonly ? "" : `<label><input type="radio" name="updmode" value="iterate"><span>Iterate <input type="number" id="updrounds" value="3" min="1" max="10" style="width:3.5em;background:var(--bg);color:inherit;border:1px solid var(--line);border-radius:4px;font:inherit"> rounds<span class="meta">Each round reviews, applies the findings every voter agreed with (or Major and Minor findings a majority agreed with), declines the rest, and saves a snapshot beside the file. Stops early when a round applies nothing.</span></span></label>`}
     <hr><label><input type="checkbox" id="updverify"><span>Also fact-check claims<span class="meta">Web search, about 2 more minutes. Writes factcheck.md.</span></span></label>
     <div class="row"><button id="updrun">Run</button></div>`;
   m.hidden = false;
   m.onclick = ev => ev.stopPropagation();
+  // The loop does not fact-check, so the box is off while Iterate is chosen.
+  m.querySelectorAll("input[name=updmode]").forEach(r => r.onchange = () => {
+    const it = m.querySelector("input[name=updmode]:checked").value === "iterate";
+    document.getElementById("updverify").disabled = it;
+    if (it) document.getElementById("updverify").checked = false;
+  });
+  const rounds = document.getElementById("updrounds");
+  if (rounds) rounds.onfocus = () => { m.querySelector("input[value=iterate]").checked = true; m.querySelector("input[value=iterate]").onchange(); };
   document.getElementById("updrun").onclick = async () => {
     m.hidden = true;
-    const fresh = m.querySelector("input[name=updmode]:checked").value === "fresh";
-    try { await api("/api/update", {fresh, verify: document.getElementById("updverify").checked}); }
-    catch (err) { alert(`Could not start the review: ${err.message}`); }
+    const choice = m.querySelector("input[name=updmode]:checked").value;
+    try {
+      if (choice === "iterate") {
+        const n = parseInt(document.getElementById("updrounds").value, 10);
+        if (!(n >= 1 && n <= 10)) { alert("Give a number of rounds from 1 to 10."); return; }
+        await api("/api/iterate", {rounds: n});
+      } else await api("/api/update", {fresh: choice === "fresh", verify: document.getElementById("updverify").checked});
+    } catch (err) { alert(`Could not start: ${err.message}`); }
     load();
   };
 };
