@@ -245,6 +245,23 @@ class GroupingAndScoring(unittest.TestCase):
         self.assertEqual(g["severity"], "Minor")
         self.assertEqual(g["raised_by"], ["claude", "gpt"])
 
+    def test_a_diff_that_rewrites_the_quote_beats_one_that_only_adds(self):
+        owner = {"A": "claude", "B": "gpt", "C": "gemini"}
+        voters = ["claude", "gpt", "gemini"]
+        quote = "The marketplace gives contributors a local route to the cortex."
+        adds = finding("B1", quote)
+        adds["body"] = f"Local conflicts with cloud use.\n\n{quote} **🟢 Contributors authorize each transfer.**"
+        rewrites = finding("C1", quote)
+        rewrites["body"] = "Local conflicts with cloud use.\n\nThe marketplace gives contributors ~~a local~~ 🟢 **an authorized** route to the cortex."
+        # GPT's insert-only diff has the better votes, but it keeps the sentence the finding says is wrong.
+        votes = {"claude": {"B1": vote("agree"), "C1": vote("partial")},
+                 "gemini": {"B1": vote("agree")}, "gpt": {"C1": vote("partial")}}
+        g = ur.score_group([adds, rewrites], votes, voters, owner)
+        self.assertEqual(g["rep"]["id"], "C1")
+        # With no rewriting diff in the group, an insert-only diff still stands: it may fill an omission.
+        alone = ur.score_group([dict(adds)], votes, voters, owner)
+        self.assertEqual(alone["rep"]["id"], "B1")
+
 
 
 class Agreement(unittest.TestCase):
