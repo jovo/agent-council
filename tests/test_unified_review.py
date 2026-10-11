@@ -1561,11 +1561,49 @@ class ReviewPage(unittest.TestCase):
                  mock.patch.object(ur, "load_rules", lambda p: ("rules", "")):
                 ur.comment_panel(draft, run, "Is this right?", False, "The sky is green.")
                 for _ in range(200):
-                    if ur.load_comments(run)[0]["answers"]["claude"]["status"] != "pending":
+                    if ur.load_comments(run)[0]["overall"]["status"] != "pending":
                         break
                     time.sleep(0.01)
             self.assertIn("<passage>\nThe sky is green.\n</passage>", prompts[0])
             self.assertEqual(ur.load_comments(run)[0]["passage"], "The sky is green.")
+
+    def test_a_comment_gets_one_overall_recommendation_after_every_answer(self):
+        prompts = []
+
+        def call(m, prompt, *a, **k):
+            prompts.append(prompt)
+            if "one overall recommendation" in prompt:
+                return "Accept GPT's edit.\n"
+            if m == "gemini":
+                return None
+            return "Green is wrong.\nCHANGES:\nThe sky is ~~green~~ 🟢 **blue**." if m == "gpt" else "Fine.\nCHANGES: none"
+
+        def wait(run):
+            for _ in range(300):
+                c = ur.load_comments(run)[-1]
+                if c["overall"]["status"] != "pending":
+                    return c
+                time.sleep(0.01)
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "run"
+            run.mkdir()
+            draft = Path(d) / "m.md"
+            draft.write_text("The sky is green.\n")
+            with mock.patch.object(ur, "call", call), mock.patch.object(ur, "page_panel", lambda p: ["claude", "gpt", "gemini"]), \
+                 mock.patch.object(ur, "load_rules", lambda p: ("rules", "")), \
+                 mock.patch.object(ur, "failure_reason", lambda run, stem: "no reply"):
+                ur.comment_panel(draft, run, "Is this right?", False)
+                c = wait(run)
+                self.assertEqual(c["overall"], {"status": "done", "text": "Accept GPT's edit."})
+                rec = prompts[-1]
+                self.assertIn("one overall recommendation", rec)
+                self.assertIn("Green is wrong.", rec)
+                self.assertIn("Proposed edit: 'The sky is green.' -> 'The sky is blue.'", rec)
+                self.assertNotIn("<answer reviewer=\"Gemini\"", rec)  # a failed answer is left out
+                # No answer at all: no recommendation, and nothing left pending.
+                with mock.patch.object(ur, "call", lambda *a, **k: None):
+                    ur.comment_panel(draft, run, "And this?", False)
+                    self.assertEqual(wait(run)["overall"], {"status": "none"})
 
     def test_a_review_of_an_edit_appends_its_findings_after_the_rest(self):
         review = ("=== FINDING\nseverity: Minor\nkind: logic\ntitle: Claim lacks support\n"

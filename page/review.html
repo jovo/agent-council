@@ -42,7 +42,8 @@ header{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px so
 .meta{color:var(--muted);font-size:14px}
 .spacer{flex:1}
 main{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);gap:24px;padding:16px 24px 80px;max-width:1400px;margin:0 auto}
-#draft{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:24px 32px}
+#draft{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:24px 32px}
+#selbar{position:absolute;left:14px;width:4px;border-radius:2px;background:var(--focus);pointer-events:none}
 #draft p{margin:0 0 .9em;white-space:pre-wrap}
 #draft.pdf p{white-space:normal}  /* a PDF's text breaks at its old line ends; let it flow */
 #draft h1{font-size:26px;margin:.2em 0 .6em}#draft h2{font-size:21px;margin:1.2em 0 .5em}#draft h3,#draft h4{font-size:17px;margin:1em 0 .4em}
@@ -59,7 +60,7 @@ main{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);gap:2
 .hl{border-radius:3px;cursor:pointer;padding:1px 0}
 .hl.Major{background:var(--crit)}.hl.Minor{background:var(--subs)}.hl.Nitpick{background:var(--pol)}
 .hl.declined{background:transparent;border-bottom:1px dotted var(--faint)}
-.hl.sel{outline:2px solid var(--focus);outline-offset:1px}
+.hl.sel{text-decoration:underline 3px var(--focus);text-underline-offset:4px;text-decoration-skip-ink:none}
 #side{position:sticky;top:110px;align-self:start;display:flex;flex-direction:column;gap:12px;max-height:calc(100vh - 126px);overflow-y:auto;padding-bottom:12px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
 .sev{font-size:13px}.sev.Major{color:var(--crit-ink)}.sev.Minor{color:var(--subs-ink)}.sev.Nitpick{color:var(--pol-ink)}
@@ -102,6 +103,7 @@ body.dropping{outline:3px dashed var(--muted);outline-offset:-8px}
 .list .listhead .title{font-size:15px}.list div{padding:3px 0;cursor:pointer;color:var(--muted)}.list div.cur{color:var(--ink)}
 .err{color:var(--crit-ink);font-size:14px;margin-top:8px}
 .qa{border-top:1px solid var(--line);margin-top:14px;padding-top:10px}
+.overall{background:var(--bg);border-radius:8px;padding:8px 12px;margin:8px 0}
 .q{font-size:14px;margin-bottom:8px}.ans{margin:0 0 12px;font-size:15px}.who{font-size:13px;color:var(--muted)}
 .ans button{margin-top:6px}
 .slidebreak{font-size:13px;color:var(--faint);border-top:1px solid var(--line);margin:28px 0 10px;padding-top:6px}
@@ -355,12 +357,12 @@ function scrollToHl(n, flash) {
   window.scrollTo({top: Math.max(0, h.top + window.scrollY - window.innerHeight / 2 + h.h / 2)});
   if (flash) { h.el.classList.remove("flash"); void h.el.offsetWidth; h.el.classList.add("flash"); }
 }
-window.addEventListener("resize", () => { const fr = slideFrame(); if (fr) sizeFrame(fr); });
+window.addEventListener("resize", () => { const fr = slideFrame(); if (fr) sizeFrame(fr); placeBar(); });
 
 function renderDraft() {
   if (S.deck && deckView === "rendered") { renderSlides(); return; }
   const text = S.text, N = text.length, marks = new Array(N).fill(null);
-  const order = f => SEV.indexOf(f.severity) * 1000 + f.n;
+  const order = f => f.n === cur ? -1 : SEV.indexOf(f.severity) * 1000 + f.n;  // the selected finding shows whole
   for (const f of S.findings) {
     if (!f.span || f.status === "accepted" || !shown(f)) continue;
     const [ms, me] = f.mark || f.span;  // the words the change touches, else the whole passage
@@ -561,7 +563,21 @@ function renderDraft() {
   d.querySelectorAll(".hl").forEach(e => e.onclick = () => select(+e.dataset.n, false));
   if (!S.readonly) d.querySelectorAll("[data-a]").forEach(e => e.ondblclick = () => editBlock(e));
   d.classList.toggle("pdf", !!S.pdf);
+  placeBar();
 }
+
+// A bar in the left margin spans the lines of the selected passage.
+function placeBar() {
+  const d = document.getElementById("draft");
+  d.querySelector("#selbar")?.remove();
+  const rs = [...d.querySelectorAll(".hl.sel")].flatMap(e => [...e.getClientRects()]);
+  if (!rs.length) return;
+  const top = Math.min(...rs.map(r => r.top)), bottom = Math.max(...rs.map(r => r.bottom)), at = d.getBoundingClientRect();
+  const bar = document.createElement("div");
+  bar.id = "selbar"; bar.style.top = `${top - at.top - d.clientTop}px`; bar.style.height = `${bottom - top}px`;
+  d.appendChild(bar);
+}
+document.fonts.ready.then(() => S && placeBar());
 
 // Whether saving a paragraph also reviews it, and how much: remembered in this browser.
 let editPref = {on: true, what: "passage"};
@@ -669,9 +685,18 @@ function revHtml(a) {
 
 const ANSWER = "My answer: ";  // the author's answer to a question finding, sent to the panel as a question
 
+// One recommendation weighed from the panel's answers, above them, once every panelist has answered.
+function overall(o, answers) {
+  if (!o || o.status === "none") return "";
+  const box = body => `<div class="overall"><div class="who"><b>Overall</b></div>${body}</div>`;
+  if (o.status === "pending") return box(`<div class="meta">${Object.values(answers).some(a => a.status === "pending") ? "Waiting for every panelist to answer…" : "Weighing the answers…"}</div>`);
+  if (o.status === "failed") return box(`<div class="err">No recommendation: ${esc(o.reason || "the model call failed")}</div>`);
+  return box(`<div>${inline(o.text)}</div>`);
+}
+
 function thread(f) {
   if (!f.questions || !f.questions.length) return "";
-  return f.questions.map((q, k) => `<div class="qa"><div class="q">${q.question.startsWith(ANSWER) ? "You answered: " + esc(q.question.slice(ANSWER.length).split("\n\nPropose the edit")[0]) : "You asked: " + esc(q.question)}</div>` +
+  return f.questions.map((q, k) => `<div class="qa"><div class="q">${q.question.startsWith(ANSWER) ? "You answered: " + esc(q.question.slice(ANSWER.length).split("\n\nPropose the edit")[0]) : "You asked: " + esc(q.question)}</div>` + overall(q.overall, q.answers) +
     Object.entries(q.answers).map(([m, a]) => `<div class="ans"><div class="who">${icon(a.icon, a.label || a.model)}${a.seconds ? ` ${a.seconds} s` : ""}</div>` +
       (a.status === "pending" ? `<div class="meta">Thinking…</div>` : a.status === "failed" ? `<div class="err">No answer: ${esc(a.reason || "the model call failed")}</div>` :
         `<div>${inline(a.text)}</div>` + (a.old ? `<div class="diff" style="margin-top:6px">${revHtml(a)}</div>` +
@@ -707,7 +732,7 @@ askSel.onclick = () => {
 };
 
 function commentThreads() {
-  return (S.comments || []).map((c, k) => `<div class="qa">${c.passage ? `<div class="meta passage">About: “${esc(c.passage)}”</div>` : ""}<div class="q">You: ${esc(c.comment)}${c.focus ? " <span class='meta'>(focus for the next Re-review)</span>" : ""}</div>` +
+  return (S.comments || []).map((c, k) => `<div class="qa">${c.passage ? `<div class="meta passage">About: “${esc(c.passage)}”</div>` : ""}<div class="q">You: ${esc(c.comment)}${c.focus ? " <span class='meta'>(focus for the next Re-review)</span>" : ""}</div>` + overall(c.overall, c.answers) +
     Object.entries(c.answers).map(([m, a]) => `<div class="ans"><div class="who">${icon(a.icon, a.label || a.model || m)}${a.seconds ? ` ${a.seconds} s` : ""}</div>` +
       (a.status === "pending" ? `<div class="meta">Thinking…</div>` : a.status === "failed" ? `<div class="err">No answer: ${esc(a.reason || "the model call failed")}</div>` :
         `<div>${inline(a.text)}</div>` + (a.changes || []).map((ch, i) => `<div class="diff" style="margin-top:6px">${revHtml(ch)}</div>` +
@@ -909,8 +934,8 @@ async function load() {
   if (jump) { const f = S.findings.find(x => x.added === first && !x.status); if (f) { cur = f.n; filt.status = "Open"; filt.kind = "All"; logicAuto = false; mode = null; } }
   if (mode) { renderSide(); } else render();
   if (jump && cur) select(cur, true);
-  const pending = S.findings.some(f => (f.questions || []).some(q => Object.values(q.answers).some(a => a.status === "pending")))
-    || (S.comments || []).some(c => Object.values(c.answers).some(a => a.status === "pending"))
+  const waiting = t => Object.values(t.answers).some(a => a.status === "pending") || (t.overall && t.overall.status === "pending");
+  const pending = S.findings.some(f => (f.questions || []).some(waiting)) || (S.comments || []).some(waiting)
     || (S.summary && S.summary.status === "pending") || S.findings.some(f => f.fill && f.fill.status === "pending")
     || (S.edit_review && S.edit_review.status === "pending");
   if ((S.comments || []).some(c => Object.values(c.answers).some(a => a.status === "pending"))) commentOpen = true;
@@ -1091,7 +1116,15 @@ document.getElementById("acceptall").onclick = async () => {
   // A change with a blank to fill is left out: it needs Fill or your own data, so it is accepted one by one.
   const todo = open.filter(f => f.applicable && !f.slot);
   // What cannot be applied (questions, malformed or misquoted changes) goes to the Word download as comments.
-  if (!todo.length) { alert("Nothing shown can be applied. Questions and changes to make by hand are comments in Download ▸ Edited draft ▸ Word."); return; }
+  if (!todo.length) {
+    const q = open.filter(f => f.form === "question").length, hand = open.filter(f => !f.applicable && f.form !== "question").length;
+    const rest = [[q, "question", "questions", "to answer or decline"], [hand, "change", "changes", "to make by hand"],
+                  [open.length - q - hand, "change", "changes", "with a blank to fill"]]
+      .filter(([k]) => k).map(([k, one, many, why]) => `${k} ${k > 1 ? many : one} ${why}`);
+    alert(!open.length ? "Every shown finding is already accepted or declined."
+      : `No edits left to apply. Still open: ${rest.join(", ")}.` + (q || hand ? "\n\nQuestions and changes to make by hand are also comments in Download ▸ Edited draft ▸ Word." : ""));
+    return;
+  }
   // Say why the count is below the "N shown" in the findings list.
   const vis = S.findings.filter(shown);
   const left = [[vis.filter(f => f.status).length, "already accepted or declined"],
