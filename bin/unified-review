@@ -3832,7 +3832,10 @@ def summary_state(run):
     request starts writing it in the background, kept in summary.json."""
     done, failed = run / "summary.json", run / "summary.failed"
     if done.exists():
-        return {"status": "done", **json.loads(done.read_text())}
+        d = json.loads(done.read_text())
+        if d.get("claim"):  # summaries written before the label was dropped still carry it
+            d["claim"] = one_sentence(d["claim"])
+        return {"status": "done", **d}
     if failed.exists():
         return {"status": "failed", "reason": failed.read_text().strip()}
     if not (run / "unified.md").exists():
@@ -4543,7 +4546,7 @@ def review_markdown(run):
     count = lambda fs: f"{len(fs)} finding{'' if len(fs) == 1 else 's'}"
     first = ((f"- **Logical flaws ({count(logic)}):**\n" + titles(logic)) if logic else "- **Logical flaws:** none found.\n"
              ) if typed else "- **Logical flaws:** this review has no type labels.\n"
-    claim = f"**Key claim:** {sm['claim']}\n\n" if sm.get("claim") else ""
+    claim = f"**Key claim:** {one_sentence(sm['claim'])}\n\n" if sm.get("claim") else ""
     block = f"## Summary ({count(ns)})\n\n" + claim + first + "".join(f"- **{name} ({count(fs)}):**\n{titles(fs)}" for name, fs in themes)
     title, _, rest = md.partition("\n")
     return f"{title}\n\n{block}\n{rest.lstrip(chr(10))}"

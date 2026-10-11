@@ -1086,6 +1086,12 @@ class Summary(unittest.TestCase):
         self.assertEqual(ur.one_sentence("  A  holds  "), "A holds")
         self.assertEqual(ur.one_sentence(None), "")
 
+    def test_old_summary_loses_its_label_when_read(self):
+        run = Path(tempfile.mkdtemp())
+        (run / "summary.json").write_text(json.dumps({"claim": "X yields Y (a proposal's aim).", "themes": []}))
+        self.assertEqual(ur.summary_state(run)["claim"], "X yields Y.")
+        shutil.rmtree(run)
+
 
 class NotAssessed(unittest.TestCase):
     def test_lists_what_the_panel_could_not_check(self):
