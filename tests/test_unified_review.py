@@ -1079,8 +1079,18 @@ class Summary(unittest.TestCase):
 
     def test_one_sentence(self):
         self.assertEqual(ur.one_sentence("A holds. B holds."), "A holds.")
+        # A label naming the kind of inference is dropped. Other parentheses stay.
+        self.assertEqual(ur.one_sentence("X yields Y (a proposal's aim and hypothesis)."), "X yields Y.")
+        self.assertEqual(ur.one_sentence("X is linked to Y (an association)"), "X is linked to Y")
+        self.assertEqual(ur.one_sentence("X lowers ECE (from 9.1% to 2.3%)."), "X lowers ECE (from 9.1% to 2.3%).")
         self.assertEqual(ur.one_sentence("  A  holds  "), "A holds")
         self.assertEqual(ur.one_sentence(None), "")
+
+    def test_old_summary_loses_its_label_when_read(self):
+        run = Path(tempfile.mkdtemp())
+        (run / "summary.json").write_text(json.dumps({"claim": "X yields Y (a proposal's aim).", "themes": []}))
+        self.assertEqual(ur.summary_state(run)["claim"], "X yields Y.")
+        shutil.rmtree(run)
 
 
 class NotAssessed(unittest.TestCase):
@@ -1093,7 +1103,10 @@ class NotAssessed(unittest.TestCase):
             # Prose with no numbers, code, or data: nothing to reproduce.
             self.assertEqual(ur.not_assessed({"files": [str(prose)], "verify": False}),
                              "Not assessed by the panel: whether cited sources say what the draft says they do "
-                             "(`--verify` checks them).")
+                             "(check them with Also fact-check claims in the review page's Re-review ▾ menu, or `--verify`).")
+            self.assertEqual(ur.not_assessed({"files": [str(prose)], "verify": False}, page=True),
+                             "Not assessed by the panel: whether cited sources say what the draft says they do "
+                             "(check them with Re-review ▾ › Also fact-check claims).")
             self.assertEqual(ur.not_assessed({"files": [str(prose)], "verify": True}), "")
             self.assertEqual(ur.not_assessed({"files": [str(nums)], "verify": True}),
                              "Not assessed by the panel: whether reported numbers reproduce from the data or code.")

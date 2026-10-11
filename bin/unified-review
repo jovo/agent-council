@@ -2144,10 +2144,12 @@ EMPIRICAL = re.compile(r"\d\.\d|\d\s?%|±|\bp\s?[<=>]\s?0?\.\d|\bn\s?=\s?\d|```|
                        r"github\.com|doi\.org|zenodo|accuracy|AUC|F1|RMSE|ECE)\b", re.I)
 
 
-def not_assessed(r):
-    """What the panel could not check in this run, as one sentence, or ""."""
-    gaps = [] if r.get("verify") else [
-        "whether cited sources say what the draft says they do (`--verify` checks them)"]
+def not_assessed(r, page=False):
+    """What the panel could not check in this run, as one sentence, or "".
+    page: the review page's wording, which points to its menu."""
+    how = ("check them with Re-review ▾ › Also fact-check claims" if page else
+           "check them with Also fact-check claims in the review page's Re-review ▾ menu, or `--verify`")
+    gaps = [] if r.get("verify") else [f"whether cited sources say what the draft says they do ({how})"]
     texts = [p.read_text(errors="replace") for p in map(Path, r.get("files", [])) if p.exists() and not is_pdf(p)]
     if any(EMPIRICAL.search(t) for t in texts) or any(is_pdf(Path(f)) for f in r.get("files", [])):
         gaps.append("whether reported numbers reproduce from the data or code")
@@ -3403,7 +3405,7 @@ def page_state(path, run):
             "chosen": [{"spec": m, "label": label(panelist(m)), "icon": lab_icon(m)} for m in page_panel(path)],
             "panel_icons": [{"icon": lab_icon(m), "label": labels.get(m, m)} for m in r["reviewers_ok"]],
             "comments": comment_state(run, text), "summary": summary_state(run), "checks": checks(text, path, r.get("deck", False)), "deck": r.get("deck", False), "slide_starts": starts,
-            "not_assessed": not_assessed(r),
+            "not_assessed": not_assessed(r, page=True),
             "started": r.get("started", ""), "panel": [labels.get(m, m) for m in r["reviewers_ok"]],
             "failures": r.get("failures", []), "text": text, "findings": out, "refs": cited_refs(text, path),
             "edit_review": json.loads((run / "edit-review.json").read_text()) if (run / "edit-review.json").exists() else None}
@@ -3767,9 +3769,10 @@ bold. Rejected findings and the panel's agreement statistic come last.
 
 First, state the draft's key claim: exactly one claim, the one the rest of the
 draft exists to support, in exactly one sentence, in the draft's own terms.
-Make clear the kind of inference it makes: an association, a causal effect, a
-benchmark result, a theorem, or a proposal's aim. Take it from the draft, not
-from the review.
+Let its wording show the kind of inference it makes, as in "X is associated
+with Y", "X causes Y", "X outperforms Y on B", "we prove X", or "we aim to
+show X". Do not add a label or a parenthetical naming the kind. Take it from
+the draft, not from the review.
 
 Then summarize the reviews, not the draft, for the draft's author. Group the
 findings into two to six themes, and put every numbered finding in exactly one
@@ -3810,10 +3813,16 @@ def summary_draft(run):
 
 
 def one_sentence(claim):
-    """The model's key claim, kept to its first sentence."""
+    """The model's key claim, kept to its first sentence, without a trailing
+    label naming its kind of inference, such as "(a proposal's aim)"."""
     text = " ".join(str(claim or "").split())
     m = re.match(r".+?[.!?](?=\s+[A-Z(\"“]|$)", text)
-    return m[0] if m else text
+    text = m[0] if m else text
+    return INFERENCE_LABEL.sub("", text)
+
+
+INFERENCE_LABEL = re.compile(r"\s*\((?:an? |the )?(?:association|associational|causal|benchmark|theorem|"
+                             r"proposal|hypothesis)[^()]*\)(?=[.!?]?$)", re.I)
 SUMMARIZING = set()
 
 
@@ -3823,7 +3832,10 @@ def summary_state(run):
     request starts writing it in the background, kept in summary.json."""
     done, failed = run / "summary.json", run / "summary.failed"
     if done.exists():
-        return {"status": "done", **json.loads(done.read_text())}
+        d = json.loads(done.read_text())
+        if d.get("claim"):  # summaries written before the label was dropped still carry it
+            d["claim"] = one_sentence(d["claim"])
+        return {"status": "done", **d}
     if failed.exists():
         return {"status": "failed", "reason": failed.read_text().strip()}
     if not (run / "unified.md").exists():
@@ -4534,7 +4546,7 @@ def review_markdown(run):
     count = lambda fs: f"{len(fs)} finding{'' if len(fs) == 1 else 's'}"
     first = ((f"- **Logical flaws ({count(logic)}):**\n" + titles(logic)) if logic else "- **Logical flaws:** none found.\n"
              ) if typed else "- **Logical flaws:** this review has no type labels.\n"
-    claim = f"**Key claim:** {sm['claim']}\n\n" if sm.get("claim") else ""
+    claim = f"**Key claim:** {one_sentence(sm['claim'])}\n\n" if sm.get("claim") else ""
     block = f"## Summary ({count(ns)})\n\n" + claim + first + "".join(f"- **{name} ({count(fs)}):**\n{titles(fs)}" for name, fs in themes)
     title, _, rest = md.partition("\n")
     return f"{title}\n\n{block}\n{rest.lstrip(chr(10))}"
