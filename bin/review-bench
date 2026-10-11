@@ -6,11 +6,16 @@ bench/drafts/ with a flawed version, and names the tier a reviewer should give
 it. The bench reviews each planted copy, and each clean draft once as a control,
 then reports per tier:
 
-  raised     some panelist's finding quotes the planted text
-  reported   a finding in the merged review (not rejected, declined, or held) quotes it
+  raised     some panelist's finding is about the planted flaw
+  reported   a finding in the merged review (not rejected, declined, or held) is about it
   tier       that reported finding has the planted tier
-  control    the clean draft got a reported finding on the same passage, so a
-             detection there may not be caused by the plant
+  control    the clean draft got a reported finding of the same kind on the same
+             passage, so a detection there may not be caused by the plant
+
+A finding is about the planted flaw when it quotes the planted passage and its
+title or point uses one of the case's signal words, such as "6.8" or
+"contradict" for a number the prose and table disagree on. A finding that only
+comments on the same sentence does not count.
 
 Every run reviews in its own runs folder, so earlier reviews, decisions, and
 versions of the drafts never carry over. Results go to a JSON file and a
@@ -68,17 +73,25 @@ def hits(text, quote, span):
     return bool(s) and s[0] < span[1] and s[1] > span[0]
 
 
-def match(results, text, passage):
-    """What the review did with the passage: {"raised", "reported", "tier", "finding"}."""
+def says(finding, signals):
+    """Whether a finding's title or point uses one of the signal words."""
+    words = (finding.get("title", "") + " " + ur.strip_end(finding.get("body", "")).split("\n\n")[0]).lower()
+    return any(s.lower() in words for s in signals)
+
+
+def match(results, text, passage, signals):
+    """What the review did with the planted flaw in the passage:
+    {"raised", "reported", "tier", "finding"}. A finding counts when it quotes
+    the passage and uses one of the signal words."""
     i = text.find(passage)
     span = (i, i + len(passage))
-    raised = any(hits(text, f.get("quote", ""), span) for f in results.get("findings", []))
+    on = lambda f: hits(text, f.get("quote", ""), span) and says(f, signals)
+    raised = any(on(f) for f in results.get("findings", []))
     byid = {f["id"]: f for f in results.get("findings", [])}
     for g in results.get("groups", []):
         if g.get("rejected") or g.get("declined") or g.get("held"):
             continue
-        quotes = [g["rep"]["quote"]] + [byid[m]["quote"] for m in g.get("members", []) if m in byid]
-        if any(hits(text, q, span) for q in quotes):
+        if any(on(f) for f in [g["rep"]] + [byid[m] for m in g.get("members", []) if m in byid]):
             sev = "Nitpick" if ur.is_typo(g) else ur.canon_sev(g["severity"])
             return {"raised": True, "reported": True, "tier": sev, "finding": g["rep"]["title"]}
     return {"raised": raised, "reported": False, "tier": None, "finding": None}
@@ -111,8 +124,9 @@ def report(meta, rows, summary):
         lines.append(f"| {tier} | {frac(s['raised'], s['n'])} | {frac(s['reported'], s['n'])} | "
                      f"{frac(s['tier_correct'], s['reported'])} | {frac(s['lost_at_vote'], s['raised'])} | "
                      f"{frac(s['control'], s['n']) if meta['control'] else '–'} |")
-    lines += ["", "Flaws are nested in drafts, so these are counts, not independent samples. "
-              "A reported flaw whose passage the control also flagged may have been found for another reason.",
+    lines += ["", "A finding counts when it quotes the planted passage and uses one of the case's signal words. "
+              "Flaws are nested in drafts, so these are counts, not independent samples. "
+              "A control flag means the clean draft drew the same kind of finding on that passage.",
               "", "<details><summary>Per case</summary>", "",
               "| Case | Planted | Raised | Reported as | Control | Finding |", "|---|---|---|---|---|---|"]
     for r in rows:
@@ -172,9 +186,9 @@ def main():
         row = {"id": c["id"], "draft": c["draft"], "planted_tier": c["tier"], "planted_kind": c["kind"],
                "what": c["what"], "seconds": secs, "ok": res is not None}
         if res is not None:
-            row.update(match(res, planted[c["id"]], c["new"]))
+            row.update(match(res, planted[c["id"]], c["new"], c["signals"]))
             ctl = done.get(f"control-{Path(c['draft']).stem}", (None, 0))[0] if control else None
-            row["control"] = match(ctl, texts[c["draft"]], c["old"])["reported"] if ctl else None
+            row["control"] = match(ctl, texts[c["draft"]], c["old"], c["signals"])["reported"] if ctl else None
         rows.append(row)
     commit, dirty = git_state()
     meta = {"date": time.strftime("%Y-%m-%d %H:%M"), "commit": commit, "dirty": dirty, "panel": panel,

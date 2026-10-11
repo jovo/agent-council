@@ -192,13 +192,13 @@ Then run `./install.sh`. It links `unified-review` and `make-pdf` into `~/.local
 
 ## Benchmark
 
-`bin/review-bench` measures how often the panel finds flaws planted in drafts. Each case in `bench/plants.json` replaces one passage of a draft in `bench/drafts/` with a flawed version and names the tier it deserves. The bench reviews each planted copy, and each clean draft once as a control, then reports per tier how many flaws a panelist raised, how many the merged review reported, how many got the planted tier, and how many raised flaws the vote dropped. A flaw on a passage the control also flagged may have been found for another reason. Each review runs in its own runs folder, so the drafts' earlier reviews and decisions never carry over.
+`bin/review-bench` measures how often the panel finds flaws planted in drafts. Each case in `bench/plants.json` replaces one passage of a draft in `bench/drafts/` with a flawed version, names the tier it deserves, and lists signal words a finding about that flaw would use. A finding counts only when it quotes the planted passage and its title or point uses a signal word, so a comment on the same sentence about something else does not. The bench reviews each planted copy, and each clean draft once as a control, then reports per tier how many flaws a panelist raised, how many the merged review reported, how many got the planted tier, and how many raised flaws the vote dropped. A control flag means the clean draft drew the same kind of finding on that passage, so the plant may not be what was found. Each review runs in its own runs folder, so the drafts' earlier reviews and decisions never carry over.
 
 ```bash
 bin/review-bench --post 31
 ```
 
-`--post 31` adds the report as a comment on [issue 31](https://github.com/jovo/agent-council/issues/31), which collects every run, so results can be compared across commits and panels. Add a case to `bench/plants.json` to grow the data. A run of the ten cases makes twelve reviews and takes roughly ten minutes at two at a time (`--jobs`).
+`--post 31` adds the report as a comment on [issue 31](https://github.com/jovo/agent-council/issues/31), which collects every run, so results can be compared across commits and panels. Add a case to `bench/plants.json` to grow the data. A run of the eleven cases makes thirteen reviews and took about three minutes at two at a time (`--jobs`).
 
 ## Tests
 

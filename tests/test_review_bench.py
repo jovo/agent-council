@@ -14,34 +14,49 @@ class Bench(unittest.TestCase):
     def results(self, groups, findings):
         return {"groups": groups, "findings": findings}
 
-    def group(self, quote, severity="Major", **kw):
-        return {"rep": {"title": "T", "quote": quote, "body": "Point."}, "severity": severity, "members": [],
+    def group(self, quote, severity="Major", title="Overclaim", body="The claim overreaches the data.", **kw):
+        return {"rep": {"title": title, "quote": quote, "body": body}, "severity": severity, "members": [],
                 "rejected": False, **kw}
 
-    def test_every_case_places_once(self):
+    def finding(self, quote, title="Overclaim", body="The claim overreaches the data."):
+        return {"id": "A1", "quote": quote, "title": title, "body": body}
+
+    def test_every_case_places_once_and_has_signals(self):
         cases = json.loads((ROOT / "bench" / "plants.json").read_text())["cases"]
         self.assertEqual(len({c["id"] for c in cases}), len(cases))
         for c in cases:
             text = (ROOT / "bench" / "drafts" / c["draft"]).read_text()
             self.assertIn(c["new"], rb.plant(text, c))
             self.assertIn(c["tier"], rb.TIERS)
+            self.assertTrue(c["signals"], c["id"])
 
     def test_plant_needs_one_match(self):
         with self.assertRaises(ValueError):
             rb.plant("a a", {"id": "x", "draft": "d", "old": "a", "new": "b"})
 
     def test_reported_with_tier(self):
-        r = self.results([self.group("planted claim overreaches")], [{"id": "A1", "quote": "planted claim overreaches"}])
-        self.assertEqual(rb.match(r, self.TEXT, self.PASSAGE),
-                         {"raised": True, "reported": True, "tier": "Major", "finding": "T"})
+        r = self.results([self.group("planted claim overreaches")], [self.finding("planted claim overreaches")])
+        self.assertEqual(rb.match(r, self.TEXT, self.PASSAGE, ["overreach"]),
+                         {"raised": True, "reported": True, "tier": "Major", "finding": "Overclaim"})
+
+    def test_a_finding_on_the_passage_about_something_else_does_not_count(self):
+        r = self.results([self.group("planted claim overreaches", title="Wordy", body="Cut a word.")],
+                         [self.finding("planted claim overreaches", title="Wordy", body="Cut a word.")])
+        self.assertEqual(rb.match(r, self.TEXT, self.PASSAGE, ["overreach"]),
+                         {"raised": False, "reported": False, "tier": None, "finding": None})
+
+    def test_signal_in_the_point_not_the_diff(self):
+        body = "Cut a word.\n\nThe ~~planted~~ claim overreaches badly."
+        self.assertFalse(rb.says({"title": "Wordy", "body": body}, ["overreach"]))
+        self.assertTrue(rb.says({"title": "Wordy", "body": "This OVERREACHES.\n\ndiff"}, ["overreach"]))
 
     def test_raised_but_rejected_or_elsewhere(self):
         r = self.results([self.group("planted claim overreaches", rejected=True), self.group("The first sentence holds.")],
-                         [{"id": "A1", "quote": "planted claim overreaches"}])
-        self.assertEqual(rb.match(r, self.TEXT, self.PASSAGE)["raised"], True)
-        self.assertEqual(rb.match(r, self.TEXT, self.PASSAGE)["reported"], False)
-        r = self.results([self.group("")], [{"id": "A1", "quote": ""}])  # a whole-draft finding does not count
-        self.assertEqual(rb.match(r, self.TEXT, self.PASSAGE)["raised"], False)
+                         [self.finding("planted claim overreaches")])
+        self.assertEqual(rb.match(r, self.TEXT, self.PASSAGE, ["overreach"])["raised"], True)
+        self.assertEqual(rb.match(r, self.TEXT, self.PASSAGE, ["overreach"])["reported"], False)
+        r = self.results([self.group("")], [self.finding("")])  # a whole-draft finding does not count
+        self.assertEqual(rb.match(r, self.TEXT, self.PASSAGE, ["overreach"])["raised"], False)
 
     def test_summary_and_report(self):
         rows = [{"id": "a", "planted_tier": "Major", "ok": True, "raised": True, "reported": True, "tier": "Major",
