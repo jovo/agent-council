@@ -810,10 +810,11 @@ def forget(path):
     write_atomic(reg_file, json.dumps(reg, indent=1) + "\n")
     (out / "forgotten.json").write_text(json.dumps(
         {"file": str(p), "runs": [r.name for r in runs], "decisions": gone, "versions": versions}, indent=1) + "\n")
-    # A review page still open on this file has no review behind it now: stop its server.
+    # A review page still open on this file has no review behind it now: stop its server,
+    # unless this is that server, starting over from its own Re-review menu.
     pages_file = RUNS_DIR / "pages.json"
     pages = json.loads(pages_file.read_text()) if pages_file.exists() else {}
-    if str(p) in pages:
+    if str(p) in pages and pages[str(p)].get("pid") != os.getpid():
         with contextlib.suppress(OSError):
             os.kill(pages[str(p)]["pid"], signal.SIGTERM)
     print(f"{p.name}: set aside {len(runs)} review{'' if len(runs) == 1 else 's'}, {len(gone)} decision"
@@ -4109,6 +4110,9 @@ class PageServer:
             return 409, "application/json", json.dumps(
                 {"error": "this review is read-only: apply changes in the source document"})
         if method == "GET" and route == "/api/state":
+            if not runs_for(self.path) and self.job:  # Start over set the old reviews aside: wait for the new one
+                return 200, "application/json", json.dumps(
+                    {"starting_over": True, "name": self.path.name, "job": self.job_state()})
             st = page_state(self.path, self.run_folder())
             st["job"] = self.job_state()
             return 200, "application/json", json.dumps(st)
@@ -4249,14 +4253,19 @@ class PageServer:
                 return self.handle("POST", "/api/update", {})
             return 200, "application/json", json.dumps({"ok": True})
         if method == "POST" and route == "/api/update":
+            # Options, as on the upload page: fresh sets the file's earlier reviews,
+            # decisions, and versions aside first (Start over). verify adds the fact-check.
             if not self.job or self.job.poll() is not None:
                 env = {**os.environ, "UNIFIED_REVIEW_NO_PAGE": "1"}
                 log_file = open(RUNS_DIR / "page-update.log", "w")
                 focus = "\n".join((f'About "{c["passage"]}": ' if c.get("passage") else "") + c["comment"]
-                                  for c in load_comments(self.run_folder()) if c.get("focus"))
+                                  for c in load_comments(self.run_folder()) if c.get("focus")) if runs_for(self.path) else ""
+                if body.get("fresh") and runs_for(self.path):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        forget(self.path)
                 self.job = subprocess.Popen([sys.executable, os.path.abspath(__file__), str(self.path),
                                              "-p", ",".join(page_panel(self.path))]
-                                            + (["-n", focus] if focus else []),
+                                            + (["-n", focus] if focus else []) + (["--verify"] if body.get("verify") else []),
                                             cwd=str(self.path.parent), env=env, stdin=subprocess.DEVNULL,
                                             stdout=log_file, stderr=log_file)
             return 200, "application/json", json.dumps({"job": self.job_state()})

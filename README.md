@@ -81,7 +81,7 @@ The page shows the current draft, set in New Computer Modern like the PDFs and d
 - **Ask** beside **Accept all shown** sends a question, comment, or request about the whole draft ("tighten the wedge section") to every panelist. Edits they propose appear with their own Accept. Tick "Use as focus for the next Re-review" to pass the comment to the next review.
 - Double-click any paragraph, heading, or table to edit its Markdown in place. Save writes it back, unless it changed in the file since the page loaded.
 - **Panel** chooses the models for Re-review and Ask, saved per file. Its menu lists models by lab, model, version, and setting: those Claude Code and Codex run directly, and every model `cursor-agent models` lists.
-- **Re-review** runs a new review of the current text and loads it. The header gives when the review ran and says "edited since" once the file differs.
+- **Re-review** runs a new review. Its ▾ menu offers the upload page's choices: **Review again** (the default: earlier reviews still carry findings over and hold back churn) or **Start over** (set aside the file's earlier reviews, decisions, and versions, as `--forget` does, and review the current text as version 1), plus **Also fact-check claims** (`--verify`). The new review covers the current text and loads when it finishes. The header gives when the review ran and says "edited since" once the file differs.
 - Keys: `j` and `k` move between findings, `a` accepts, `e` edits, `d` declines, `q` asks, and ⌘Enter saves an edit or sends a question.
 
 The page is served by a small server inside `unified-review`, using only Python's standard library. It listens only on your machine, serves one file, and exits after 8 hours without use. `unified-review --page FILE` reopens it.
