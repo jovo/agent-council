@@ -1234,6 +1234,14 @@ class Iterate(unittest.TestCase):
                 "slot": False, "severity": "Nitpick"}
         return {**base, **kw}
 
+    def test_independent_raisers_count_as_agreement(self):
+        g = {"votes": {}, "raised_by": ["claude", "gpt", "gemini"], "self_voter": "claude"}
+        self.assertEqual(ur.vote_tag(g), "Unanimous")  # all three raised it, so none voted on it
+        g = {"votes": {"gpt": {"vote": "disagree"}}, "raised_by": ["claude", "gemini"], "self_voter": "gemini"}
+        self.assertEqual(ur.vote_tag(g), "No majority")
+        g = {"votes": {"gpt": {"vote": "agree"}}, "raised_by": ["claude"], "self_voter": "claude"}
+        self.assertEqual(ur.vote_tag(g), "Unanimous")
+
     def test_auto_applies(self):
         self.assertTrue(ur.auto_applies(self.f()))
         self.assertTrue(ur.auto_applies(self.f(tag="Majority", severity="Minor")))

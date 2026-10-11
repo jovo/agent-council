@@ -3338,7 +3338,12 @@ def runs_for(path):
 
 
 def vote_tag(g):
+    """Unanimous, Contested, Majority, or No majority. A model that raised the
+    finding on its own casts no vote on it, so each raiser other than the one
+    whose wording is shown counts as agreeing: a finding all three raised is
+    unanimous, not unvoted."""
     vs = [v["vote"] for m, v in g["votes"].items() if m != g.get("self_voter")]
+    vs += ["agree" for m in g.get("raised_by", []) if m != g.get("self_voter") and m not in g["votes"]]
     agree = sum(v == "agree" for v in vs)
     if vs and agree == len(vs):
         return "Unanimous"
