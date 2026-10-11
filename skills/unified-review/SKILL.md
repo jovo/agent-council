@@ -99,8 +99,8 @@ when acting on findings outside the page, take open logic findings first.
 Give the user that
 link and say how many findings there are by severity. The page's summary
 opens with the draft's key claim: exactly one claim, in one sentence, that
-makes clear its kind of inference (association, causal effect, benchmark
-result, theorem, or a proposal's aim). It closes with what the panel could not
+is worded to show its kind of inference ("X is associated with Y",
+"X causes Y", "we aim to show X"), with no label. It closes with what the panel could not
 assess, such as whether cited sources say what the draft says they do, or,
 for a draft with numbers, code, or data, whether its results reproduce. Pass that
 line on when you report the review. Do not paste
