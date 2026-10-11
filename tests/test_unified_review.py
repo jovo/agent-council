@@ -1298,6 +1298,42 @@ class ReviewPage(unittest.TestCase):
             st = json.loads(page.handle("GET", "/api/state", {})[2])
             self.assertEqual([f["status"] for f in st["findings"]], ["accepted", "declined"])
 
+    def test_rereview_options_start_over_and_fact_check(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+            doc = Path(d).resolve() / "memo.md"
+            doc.write_text("# Memo\n\nThe sky is green today.\n")
+            run = Path(d) / "runs" / "r1"
+            run.mkdir(parents=True)
+            (run / "results.json").write_text(json.dumps({
+                "files": [str(doc)], "labels": {}, "reviewers_ok": [], "voters": [], "verify": False,
+                "failures": [], "headings": [], "groups": []}))
+            # The page asking to start over is the file's own server: it must not stop itself.
+            (Path(d) / "runs" / "pages.json").write_text(json.dumps({str(doc): {"port": 1, "pid": os.getpid()}}))
+            started = []
+            class Job:
+                def __init__(self, cmd, **kw): started.append(cmd)
+                def poll(self): return None
+            page = ur.PageServer(doc)
+            kills = []
+            with mock.patch.object(ur.subprocess, "Popen", Job), mock.patch.object(ur, "log", lambda *a: None), \
+                    mock.patch.object(ur.os, "kill", lambda pid, sig: kills.append(pid)):
+                code, _, out = page.handle("POST", "/api/update", {"fresh": True, "verify": True})
+            self.assertEqual(kills, [])
+            self.assertEqual(code, 200)
+            self.assertIn("--verify", started[0])
+            self.assertEqual(ur.runs_for(doc), [])  # set aside, not deleted
+            self.assertTrue(list((Path(d) / "runs" / "forgotten").glob("*/runs/r1/results.json")))
+            st = json.loads(page.handle("GET", "/api/state", {})[2])
+            self.assertEqual((st["starting_over"], st["job"]["running"]), (True, True))
+            # A plain Re-review keeps the history and adds no fact-check.
+            page.job = None
+            run.parent.joinpath("r2").mkdir()
+            (run.parent / "r2" / "results.json").write_text((Path(d) / "runs" / "forgotten").glob("*/runs/r1/results.json").__next__().read_text())
+            with mock.patch.object(ur.subprocess, "Popen", Job):
+                page.handle("POST", "/api/update", {})
+            self.assertNotIn("--verify", started[1])
+            self.assertEqual(len(ur.runs_for(doc)), 1)
+
     def test_parse_answer(self):
         cur = "Intro. We test the links first, which leave one link open. End."
         ans, old, new, ok = ur.parse_answer("Not Critical.\n\nREVISED: We test the links first~~, which leave one link open~~ 🟢 **and name what would refute them**.", cur)
