@@ -25,7 +25,8 @@ that don't carry weight.
 
 Avoid semicolons and em dashes (—) anywhere in text you write: titles, body,
 takeaways, labels, citations. Use a comma, a colon, a period, or a new item
-instead. En dashes in ranges (3.9–2.9 Mya) are fine.
+instead. En dashes in ranges (3.9–2.9 Mya) are fine. Pandoc citation syntax
+is exempt: it separates keys with semicolons, as in `[@Cohen80; @Squire04]`.
 
 Use short prose paragraphs by default. Use lists only when content is
 genuinely list-shaped (3+ parallel items). Don't bold everything.

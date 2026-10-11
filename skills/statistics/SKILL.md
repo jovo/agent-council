@@ -47,4 +47,4 @@ The design decides what the data can conclude. Random assignment permits causal 
 
 - Name the problem: a design that cannot separate the explanations, a mismatched control, the wrong unit, circular selection, a missing difference test, unreported analyses, absence read from non-significance, causal language without manipulation, or extrapolation.
 - State the conclusion the design and data do support. Then give the fix: the analysis or control that would support the original claim, or the weaker claim that fits the evidence.
-- Severity: a flaw that undoes the central result is Critical. A flaw in a supporting result is Substantive. A wording that overstates a result the data do support is Polish.
+- Severity: a flaw that undoes the central result is Critical. A flaw in a supporting result is Substantive. A wording that overstates a result the data do support is Nitpick.

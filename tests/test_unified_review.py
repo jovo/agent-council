@@ -1,23 +1,92 @@
 """Tests for unified-review. Run: python3 -m unittest discover tests"""
+import contextlib
+import io
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+import urllib.parse
+import zipfile
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
+
+
+def tree_metadata(root):
+    """Metadata for the real state directories, used as a test guard."""
+    root = Path(root)
+    if not root.exists():
+        return None
+    paths = [root, *sorted(root.rglob("*"))]
+    state = {}
+    for path in paths:
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            continue
+        state[str(path.relative_to(root))] = (info.st_size, info.st_mtime_ns)
+    return state
+
+
+def changed_paths(before, after):
+    before, after = before or {}, after or {}
+    return sorted(path for path in set(before) | set(after) if before.get(path) != after.get(path))
+
+
+ORIGINAL_HOME = os.environ.get("HOME")
+ORIGINAL_RUNS = os.environ.get("UNIFIED_REVIEW_RUNS")
+ORIGINAL_MODEL_BINS = {name: os.environ.get(name) for name in ("CLAUDE_BIN", "CODEX_BIN", "CURSOR_BIN")}
+REAL_HOME = Path(ORIGINAL_HOME) if ORIGINAL_HOME else Path.home()
+REAL_RUNS_DIR = Path(ORIGINAL_RUNS) if ORIGINAL_RUNS else REAL_HOME / ".local/share/unified-review/runs"
+REAL_STATE_DIR = REAL_HOME / ".local/state/unified-review"
+REAL_RUNS_STATE = tree_metadata(REAL_RUNS_DIR)
+REAL_STATE_STATE = tree_metadata(REAL_STATE_DIR)
+TEST_STATE = tempfile.TemporaryDirectory()
+MODEL_STUB = Path(TEST_STATE.name) / "model-stub"
+MODEL_STUB.write_text("#!/bin/sh\nexit 1\n")
+MODEL_STUB.chmod(0o700)
+os.environ["HOME"] = TEST_STATE.name
+os.environ["UNIFIED_REVIEW_RUNS"] = str(Path(TEST_STATE.name) / "runs")
+for name in ORIGINAL_MODEL_BINS:
+    os.environ[name] = str(MODEL_STUB)
+
 ur = SourceFileLoader("unified_review", str(REPO / "bin" / "unified-review")).load_module()
+
+
+def tearDownModule():
+    try:
+        runs_changed = changed_paths(REAL_RUNS_STATE, tree_metadata(REAL_RUNS_DIR))
+        state_changed = changed_paths(REAL_STATE_STATE, tree_metadata(REAL_STATE_DIR))
+        assert not runs_changed, "tests changed the real run directory: " + ", ".join(runs_changed)
+        assert not state_changed, "tests changed the real state directory: " + ", ".join(state_changed)
+    finally:
+        if ORIGINAL_HOME is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = ORIGINAL_HOME
+        if ORIGINAL_RUNS is None:
+            os.environ.pop("UNIFIED_REVIEW_RUNS", None)
+        else:
+            os.environ["UNIFIED_REVIEW_RUNS"] = ORIGINAL_RUNS
+        for name, value in ORIGINAL_MODEL_BINS.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        TEST_STATE.cleanup()
 
 REVIEW = """Some preamble the parser should ignore.
 
 === FINDING
-severity: Critical
+severity: Major
 title: Date is wrong
 quote: Rome was founded in 1066.
 ---
@@ -33,40 +102,75 @@ quote:
 Cut the throat-clearing.
 
 === FINDING
-severity: Substantive
+severity: Minor
 title: Missing separator, so this one is skipped
 """
 
-VOTES = """A1 | agree | Critical | same:none | Wrong date.
+VOTES = """A1 | agree | Major | same:none | Wrong date.
 **A2** | Partial | polish | same: none | Minor.
-- B1 | disagree | Substantive | same:A1 | Not wrong.
+- B1 | disagree | Minor | same:A1 | Not wrong.
 B2 | maybe | Polish | same:none | Not a valid vote word.
 """
 
 
-def finding(fid, quote="", severity="Substantive", pos=0):
+def finding(fid, quote="", severity="Minor", pos=0):
     return {"id": fid, "quote": quote, "severity": severity, "title": fid, "body": fid, "pos": pos}
 
 
-def vote(v, same="NONE", severity="Substantive"):
+def vote(v, same="NONE", severity="Minor"):
     return {"vote": v, "severity": severity, "same": same, "reason": v}
 
 
 class Parsing(unittest.TestCase):
+    def test_request_bodies_have_route_specific_limits(self):
+        self.assertEqual(ur.read_request_body({"Content-Length": "2"}, io.BytesIO(b"{}"), "POST", "/api/update"), b"{}")
+        with self.assertRaisesRegex(ur.RequestBodyError, "Content-Length"):
+            ur.read_request_body({}, io.BytesIO(), "POST", "/api/update")
+        with self.assertRaisesRegex(ur.RequestBodyError, "invalid"):
+            ur.read_request_body({"Content-Length": "-1"}, io.BytesIO(), "POST", "/api/update")
+        with self.assertRaisesRegex(ur.RequestBodyError, "1 MiB"):
+            ur.read_request_body({"Content-Length": str(ur.JSON_BODY_LIMIT + 1)}, io.BytesIO(), "POST", "/api/update")
+        self.assertEqual(ur.read_request_body({"Content-Length": str(ur.JSON_BODY_LIMIT + 1)}, io.BytesIO(b"x"), "POST", "/api/upload/memo.md"), b"x")
+
+    def test_runs_for_reuses_unchanged_results_metadata(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d)):
+            ur.RUN_METADATA.clear()
+            draft = Path(d) / "memo.md"
+            result = ur.RUNS_DIR / "run" / "results.json"
+            result.parent.mkdir()
+            result.write_text(json.dumps({"files": [str(draft)]}))
+            with mock.patch.object(ur.json, "loads", wraps=ur.json.loads) as loads:
+                self.assertEqual(ur.runs_for(draft), [result.parent])
+                self.assertEqual(ur.runs_for(draft), [result.parent])
+                time.sleep(0.01)  # ensure a distinct mtime on filesystems with coarse clocks
+                result.write_text(json.dumps({"files": [str(Path(d) / "other.md")]}))
+                self.assertEqual(ur.runs_for(draft), [])
+            self.assertEqual(loads.call_count, 2)
+
     def test_parse_findings(self):
         fs = ur.parse_findings(REVIEW)
         self.assertEqual([f["title"] for f in fs], ["Date is wrong", "Wordy opener"])
-        self.assertEqual(fs[0]["severity"], "Critical")
-        self.assertEqual(fs[1]["severity"], "Polish")
+        self.assertEqual(fs[0]["severity"], "Major")
+        self.assertEqual(fs[1]["severity"], "Nitpick")
         self.assertEqual(fs[0]["quote"], "Rome was founded in 1066.")
         self.assertEqual(fs[1]["quote"], "")
         self.assertIn("753 BC", fs[0]["body"])
+
+    def test_parse_question_form(self):
+        fs = ur.parse_findings("=== FINDING\nseverity: Minor\nkind: clarity\nform: question\n"
+                               "title: Which gripper\nquote: a robot arm\n---\nTwo-finger or three-finger?\n")
+        self.assertEqual(fs[0]["form"], "question")
+        self.assertEqual(ur.parse_findings(REVIEW)[0]["form"], "edit")  # no form line means an edit
+
+    def test_prompts_allow_questions(self):
+        self.assertIn("form: edit | question", ur.review_prompt("draft", "", "rules"))
+        self.assertIn("For a question finding", ur.VOTE)
 
     def test_parse_votes_is_tolerant_but_strict_on_vote_words(self):
         v = ur.parse_votes(VOTES)
         self.assertEqual(set(v), {"A1", "A2", "B1"})
         self.assertEqual(v["A2"]["vote"], "partial")
-        self.assertEqual(v["A2"]["severity"], "Polish")
+        self.assertEqual(v["A2"]["severity"], "Nitpick")
         self.assertEqual(v["B1"]["same"], "A1")
 
     def test_parse_rows(self):
@@ -110,22 +214,35 @@ class GroupingAndScoring(unittest.TestCase):
         voters = ["claude", "gpt", "gemini"]
         # Gemini did not vote. Counting Claude's vote on its own finding would make
         # this 1 disagree of 2, not a majority. Without it, 1 of 1 rejects.
-        g = ur.score_group([finding("A1")], {"claude": {"A1": vote("agree", severity="Critical")},
+        g = ur.score_group([finding("A1")], {"claude": {"A1": vote("agree", severity="Major")},
                                              "gpt": {"A1": vote("disagree", severity="Polish")}, "gemini": {}},
                            voters, owner)
         self.assertTrue(g["rejected"])
-        self.assertEqual(g["severity"], "Polish")
-        self.assertIn("claude", g["votes"])  # still shown
+        self.assertEqual(g["severity"], "Nitpick")
+        self.assertNotIn("claude", g["votes"])  # a model's vote on its own finding is ignored
         self.assertEqual(ur.vote_tag(g), "No majority")
+
+    def test_two_models_must_back_a_finding(self):
+        owner = {"A": "claude", "B": "gpt", "C": "gemini"}
+        voters = ["claude", "gpt", "gemini"]
+        backed = ur.score_group([finding("A1")], {"gpt": {"A1": vote("partial")}, "gemini": {"A1": vote("disagree")}},
+                                voters, owner)
+        self.assertFalse(backed["rejected"])  # gpt's partial is a second backer, despite gemini
+        alone = ur.score_group([finding("A1")], {"gpt": {"A1": vote("disagree")}, "gemini": {"A1": vote("disagree")}},
+                               voters, owner)
+        self.assertTrue(alone["rejected"])
+        pair = ur.score_group([finding("A1"), finding("B1")], {"gemini": {"A1": vote("disagree"), "B1": vote("disagree")}},
+                              voters, owner)
+        self.assertFalse(pair["rejected"])  # two models raised the same point
 
     def test_score_group_takes_median_severity_and_raisers(self):
         owner = {"A": "claude", "B": "gpt"}
         g = ur.score_group([finding("A1"), finding("B1")],
-                           {"claude": {"A1": vote("agree", severity="Critical")},
+                           {"claude": {"A1": vote("agree", severity="Major")},
                             "gpt": {"A1": vote("agree", severity="Polish")},
-                            "gemini": {"A1": vote("agree", severity="Substantive")}},
+                            "gemini": {"A1": vote("agree", severity="Minor")}},
                            ["claude", "gpt", "gemini"], owner)
-        self.assertEqual(g["severity"], "Substantive")
+        self.assertEqual(g["severity"], "Minor")
         self.assertEqual(g["raised_by"], ["claude", "gpt"])
 
 
@@ -203,6 +320,14 @@ class Calls(unittest.TestCase):
             self.assertEqual(ur.preflight(["claude", "gpt", "gemini"]), ["claude", "gemini"])
         self.assertEqual(ur.FAILURES[0]["model"], "gpt")
 
+    def test_preflight_keeps_panelist_with_api_key(self):
+        def fake(cmd, **kw):
+            return SimpleNamespace(returncode=1, stdout="Not logged in", stderr="")
+        with mock.patch.object(ur.subprocess, "run", fake), \
+                mock.patch.dict(ur.CHILD_ENV, {"CODEX_API_KEY": "k", "CURSOR_API_KEY": "k"}):
+            self.assertEqual(ur.preflight(["gpt", "gemini"]), ["gpt", "gemini"])
+        self.assertEqual(ur.FAILURES, [])
+
 
 class Rendering(unittest.TestCase):
     def setUp(self):
@@ -220,11 +345,53 @@ class Rendering(unittest.TestCase):
             "reviewers_ok": list(reviewers), "voters": list(voters), "verify": False,
             "failures": list(failures), "headings": ur.draft_headings(draft), "groups": groups}))
 
-    def group(self, title, quote, where, pos, contested=False, rejected=False, severity="Substantive"):
+    def group(self, title, quote, where, pos, contested=False, rejected=False, severity="Minor"):
         return {"rep": {"title": title, "quote": quote, "body": "Point."}, "where": where, "pos": pos,
                 "severity": severity, "frac": 1, "score": 2, "n_votes": 2, "raised_by": ["claude"],
                 "votes": {"claude": vote("agree"), "gpt": vote("disagree" if contested else "agree")},
                 "contested": contested, "rejected": rejected}
+
+    def test_question_finding_is_labeled(self):
+        dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
+        q = "Rome was founded in 1066."
+        self.results([{**self.group("Which founding", q, "draft", ur.position(dn, q)), "form": "question"}])
+        self.assertIn("### 1. Which founding (question)", ur.review_markdown(self.tmp))
+
+    def test_summary_is_logic_first_then_theme_titles(self):
+        dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
+        g = lambda title, q, kind: {**self.group(title, q, "draft", ur.position(dn, q)), "kind": kind}
+        self.results([g("Step fails", "First line.", "logic"), g("Vague term", "Rome was founded in 1066.", "clarity"),
+                      g("Odd word", "More text here.", "style")])
+        (self.tmp / "summary.json").write_text(json.dumps({"themes": [
+            {"theme": "Wording", "gist": "Long gist sentence.", "findings": [1, 2, 3]}]}))
+        block = ur.review_markdown(self.tmp).split("## Minor")[0]
+        self.assertIn("## Summary (3 findings)\n\n- **Logical flaws (1 finding):**\n  - Step fails (1)\n- **Wording (2 findings):**\n  - Vague term (2)\n  - Odd word (3)\n", block)
+        self.assertNotIn("Long gist", block)
+
+    def test_summary_says_when_there_are_no_logic_flaws(self):
+        self.results([{**self.group("Odd word", "More text here.", "draft", 0), "kind": "style"}])
+        (self.tmp / "summary.json").write_text(json.dumps({"themes": []}))
+        self.assertIn("- **Logical flaws:** none found.\n", ur.review_markdown(self.tmp))
+
+    def test_logic_flaws_come_first(self):
+        dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
+        g = lambda title, q, kind, sev: {**self.group(title, q, "draft", ur.position(dn, q), severity=sev), "kind": kind}
+        self.results([g("Major fact", "First line.", "evidence", "Major"),
+                      g("Leap", "More text here.", "logic", "Minor"),
+                      g("Broken step", "Rome was founded in 1066.", "logic", "Major")])
+        ur.render(self.tmp)
+        md = (self.tmp / "unified.md").read_text()
+        order = [md.index(x) for x in ("## Logical flaws", "### 1. Broken step (Major)", "### 2. Leap (Minor)",
+                                       "## Major", "### 3. Major fact (evidence)")]
+        self.assertEqual(order, sorted(order))
+
+    def test_votes_sit_beside_the_title(self):
+        self.results([self.group("Date", "Rome was founded in 1066.", "draft", 0, contested=True)],
+                     reviewers=("claude", "gemini"), voters=("claude", "gpt"))
+        ur.render(self.tmp)
+        md = (self.tmp / "unified.md").read_text()
+        self.assertIn("### 1. Date (contested) ✳ ✗֍\n", md)  # Claude flagged it, GPT disagreed
+        self.assertNotIn("Votes:", md)
 
     def test_layout_severity_then_draft_order(self):
         dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
@@ -233,18 +400,96 @@ class Rendering(unittest.TestCase):
                       self.group("Late substantive", "More text here.", "draft", at("More text here.")),
                       self.group("Overall", "", "overview", 0),
                       self.group("Date", "Rome was founded in 1066.", "draft", at("Rome was founded in 1066."),
-                                 contested=True, severity="Critical"),
+                                 contested=True, severity="Major"),
                       self.group("Early substantive", "First line.", "draft", at("First line."))])
         ur.render(self.tmp)
         md = (self.tmp / "unified.md").read_text()
-        order = [md.index(t) for t in ("## Critical", "### 1. Date (contested)", "## Substantive", "### 2. Overall",
-                                       "### 3. Early substantive", "### 4. Late substantive", "## Polish",
-                                       "### 5. Late polish")]
+        order = [md.index(t) for t in ("## Major", "### 1. Date (contested)", "## Minor", "### 2. Overall",
+                                       "### 3. Early substantive", "### 4. Late substantive", "## Nitpicks",
+                                       "- **5.** Late polish")]
         self.assertEqual(order, sorted(order))
-        self.assertIn("*Intro · draft.md, line 4:*", md)  # line 4, not 3: the off-by-one regression
-        self.assertIn("*Body · draft.md, line 8:*", md)
+        self.assertNotIn("draft.md, line", md)  # no section, file, or line for a finding
         self.assertIn("*Whole draft*", md)
         self.assertNotIn("Warning", md)
+
+    def test_changes_place_through_markup_and_reviewer_slips(self):
+        def apply(text, body, quote=""):
+            _, why, edits = ur.placed_diff(text, body, quote)
+            if not edits:
+                return why
+            for a, b, r in sorted(edits, reverse=True):
+                text = text[:a] + r + text[b:]
+            return text
+        # The reviewer quotes the text as it reads; the draft has bold, underline, and an escape.
+        self.assertEqual(apply("staining depicted in **c**. FLAG", "Change c to f.\n\nstaining depicted in ~~c~~ **🟢 f**."),
+                         "staining depicted in **f**. FLAG")
+        self.assertEqual(apply("the use of a moderate<u>-low</u> affinity scFv",
+                               "Reword.\n\nthe use of a ~~moderate-low affinity~~ **🟢 moderately low-affinity** scFv"),
+                         "the use of a moderately low-affinity scFv")  # the cut underline goes, no tag left open
+        self.assertEqual(apply("<u>He was **very** happy</u> today.", "Reword.\n\nHe was ~~very~~ **🟢 quite** happy today."),
+                         "<u>He was **quite** happy</u> today.")
+        self.assertEqual(apply("from DSMZ (ACC \\#777) RPMI", "Fix.\n\nfrom DSMZ (ACC ~~#777~~ **🟢 #778**) RPMI"),
+                         "from DSMZ (ACC \\#778) RPMI")  # only the changed digit: the escape stays
+        # 🟢 without bold: the addition ends where the draft's own text resumes, and is never added twice.
+        t = "at a reduced efficiently, given a high enough affinity<sup>64</sup>. This suggested"
+        self.assertEqual(apply(t, "Fix.\n\nat a reduced ~~efficiently~~🟢 efficiency, given a high enough affinity<sup>64</sup>."),
+                         "at a reduced efficiency, given a high enough affinity<sup>64</sup>. This suggested")
+        self.assertEqual(apply("depicted in **c**. FLAG", "Fix.\n\ndepicted in ~~c~~🟢 f."), "depicted in **f**. FLAG")
+        # Striking all a superscript holds and adding after it leaves no empty <sup></sup>.
+        _, _, e = ur.placed_diff("(BB7.2, 162 nM<sup>66</sup>) may", "Cite.\n\n(BB7.2, 162 nM<sup>~~66~~</sup>**🟢 {{citation: Author, year}}**",
+                                 "", slots=True)
+        a, b, r = e[0]
+        self.assertEqual("(BB7.2, 162 nM<sup>66</sup>) may"[:a] + r + "(BB7.2, 162 nM<sup>66</sup>) may"[b:],
+                         "(BB7.2, 162 nM{{citation: Author, year}}) may")
+        self.assertEqual(apply("see ref<sup>12</sup> here", "Drop it.\n\nsee ref~~12~~ here"), "see ref here")
+        # An addition that would repeat what follows with a word changed is refused, not guessed.
+        self.assertEqual(apply("as the starting point and add potency as required. Next",
+                               "Fix.\n\nas the starting point 🟢 to add potency as required."), ur.MALFORMED)
+
+    def test_diff_in_the_first_paragraph_still_applies(self):
+        text = "Intro.\n\nThe method is only one possible solution enhancing potency. Done.\n"
+        body = "Add the missing word. The method is only one possible solution **🟢 for** enhancing potency."
+        old, new, edits = ur.placed_diff(text, body, "only one possible solution enhancing")
+        self.assertEqual((old, new), ("The method is only one possible solution enhancing potency.",
+                                      "The method is only one possible solution for enhancing potency."))
+        self.assertTrue(edits)
+        self.assertIsNone(ur.placed_diff(text, "Which source says so?", "The method")[0])  # a question has no diff
+
+    def test_nitpicks_typos_and_checks_are_one_list(self):
+        dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
+        q = "Rome was founded in 1066."
+        nit = self.group("Missing word", q, "draft", ur.position(dn, q), severity="Nitpick")
+        typo = self.group("Misspelling", q, "draft", ur.position(dn, q), severity="Nitpick")
+        typo["rep"]["body"] = "Fix the spelling.\n\nRome was ~~fonded~~ **🟢 founded** in 1066."
+        self.results([nit, typo])
+        rj = json.loads((self.tmp / "results.json").read_text())
+        rj["checks"] = [{"id": "M1", "line": 3, "pos": 0, "what": '"anti-tumor" (4×) and "antitumor" (2×) are both used.'}]
+        (self.tmp / "results.json").write_text(json.dumps(rj))
+        ur.render(self.tmp)
+        md = (self.tmp / "unified.md").read_text()
+        self.assertNotIn("## Typos", md)
+        self.assertNotIn("## Checks", md)
+        nits = md[md.index("## Nitpicks"):]
+        self.assertIn("Misspelling", nits)
+        self.assertIn("(typo)", nits)
+        self.assertIn('- **M1.** "anti-tumor" (4×) and "antitumor" (2×) are both used. (*line 3*), found by the script', nits)
+
+    def test_nitpick_shows_where_and_the_change_without_votes(self):
+        dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
+        q = "Rome was founded in 1066."
+        nit = self.group("Missing word", q, "draft", ur.position(dn, q), severity="Nitpick")
+        nit["rep"]["body"] = "Add the year's era. Rome was founded in ~~1066~~ **🟢 753 BC**."  # the diff in the first paragraph
+        ask = self.group("Why this date", q, "draft", ur.position(dn, q), severity="Nitpick")
+        ask["rep"]["body"] = "Which source gives this date?"
+        self.results([nit, ask])
+        ur.render(self.tmp)
+        md = (self.tmp / "unified.md").read_text()
+        self.assertIn("- **1.** Missing word (*", md)
+        self.assertIn("): Add the year's era. Rome was founded in ~~1066~~ **🟢 753 BC**.\n", md)
+        self.assertIn("- **2.** Why this date (*", md)
+        self.assertIn("): Which source gives this date?", md)
+        nits = md[md.index("## Nitpicks"):]
+        self.assertFalse(re.search("[✓✗✳֍✦]", nits))  # no votes on a nitpick
 
     def test_locate_pdf_quote_across_table_columns(self):
         pdf = self.tmp / "report.pdf"
@@ -371,7 +616,7 @@ class Decisions(unittest.TestCase):
         self.run = self.tmp / "run"
         self.run.mkdir()
         g = {"rep": {"title": "Date is wrong", "quote": "Rome was founded in 1066.", "body": "Wrong date.\n\n~~1066~~"},
-             "where": "draft", "pos": 0, "severity": "Critical", "frac": 1, "rejected": False, "members": ["A1"]}
+             "where": "draft", "pos": 0, "severity": "Major", "frac": 1, "rejected": False, "members": ["A1"]}
         (self.run / "results.json").write_text(json.dumps({"files": [str(self.doc)], "headings": [], "groups": [g],
                                                            "versions": [{"path": str(self.doc), "number": 2}]}))
         self.patch = mock.patch.object(ur, "RUNS_DIR", self.tmp)
@@ -514,10 +759,10 @@ class Pipeline(unittest.TestCase):
             if stage == "review" and reply is not None:
                 return reply
             if stage == "review":
-                return (f"=== FINDING\nseverity: Substantive\ntitle: Sky color by {m}\n"
+                return (f"=== FINDING\nseverity: Minor\ntitle: Sky color by {m}\n"
                         "quote: The sky is green today.\n---\nThe sky is blue.")
             ids = re.findall(r"^\[([A-H]\d+)\]", prompt, re.M)
-            return "\n".join(f"{i} | agree | Substantive | same:none | fine" for i in ids)
+            return "\n".join(f"{i} | agree | Minor | same:none | fine" for i in ids)
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
             f = d / "memo.md"
@@ -531,6 +776,15 @@ class Pipeline(unittest.TestCase):
                  mock.patch.object(ur, "open_file", lambda p: None), mock.patch.object(ur, "log", lambda *a: None):
                 ur.foreground([f], draft, panel, "", "rules", out, d, False, [])
             return prompts, json.loads((out / "results.json").read_text()), (out / "unified.md").read_text()
+
+    def test_voters_do_not_vote_on_their_own_findings(self):
+        prompts, _, _ = self.run_review(["claude", "gpt", "gemini"])
+        r = None
+        for m, p in prompts["vote"].items():
+            mine = [l for l in p.split("<your_own_findings>")[1].splitlines() if l.startswith("[")]
+            voted = [l for l in p.split("<your_own_findings>")[0].split("<draft>")[0].splitlines() if l.startswith("[")]
+            self.assertEqual(len(mine), 1, m)
+            self.assertNotIn(mine[0].split("]")[0], " ".join(voted), m)
 
     def test_voters_see_the_draft(self):
         prompts, _, _ = self.run_review(["claude", "gpt", "gemini"])
@@ -598,7 +852,7 @@ class Typos(unittest.TestCase):
         typo = typo_group("recieve", "receive")
         polish["pos"], typo["pos"] = 50, 10
         r = {"groups": [typo, polish], "headings": []}
-        self.assertEqual([sev for _, sev, _, _ in ur.ordered_findings(r)], ["Polish", "Typo"])
+        self.assertEqual([sev for _, sev, _, _ in ur.ordered_findings(r)], ["Nitpick", "Typo"])
 
 
 class MechanicalChecks(unittest.TestCase):
@@ -666,13 +920,13 @@ class CarryOver(unittest.TestCase):
         self.assertEqual(new["seen"], 1)
         self.assertTrue(new["key"].startswith("K"))
         # The baseline sentence is gone from the draft, so its finding counts as resolved.
-        self.assertEqual(since, {"resolved": ["Missing baseline"], "dropped": []})
+        self.assertEqual(since, {"resolved": [{"n": None, "title": "Missing baseline"}], "dropped": []})
 
     def test_unchanged_passage_not_raised_again_is_dropped(self):
         prev = [{"key": "Kaaaaaa", "title": "Vague term", "quote": "many things happen here", "seen": 1}]
         rejected = self.group("Vague term", "many things happen here", rejected=True)
         since = ur.carry_over([rejected], prev, ur.norm("many things happen here."))
-        self.assertEqual(since, {"resolved": [], "dropped": ["Vague term"]})
+        self.assertEqual(since, {"resolved": [], "dropped": [{"n": None, "title": "Vague term"}]})
 
     def test_open_block(self):
         self.assertEqual(ur.open_block([]), "")
@@ -758,6 +1012,132 @@ class Decks(unittest.TestCase):
         self.assertEqual(out, [])
 
 
+class Placement(unittest.TestCase):
+    TEXT = ("| A | Does not learn; task examples follow. |\n| B | Measures robustness; texture is not friction. |\n\n"
+            "Each method will have the same budget and safety limits.\n")
+
+    def test_same_fix_in_separate_cells(self):
+        body = ("Semicolons.\n\nDoes not learn~~;~~🟢 **.** ~~task~~ 🟢 **Task** examples follow.\n\n"
+                "Measures robustness~~;~~🟢 **.** ~~texture~~ 🟢 **Texture** is not friction.")
+        old, new, edits = ur.placed_diff(self.TEXT, body, "")
+        self.assertEqual(len(edits), 2)
+        self.assertIn("Does not learn. Task examples follow.", new)
+
+    def test_addition_bolded_without_marker(self):
+        body = "Budget.\n\nEach method will have the same budget~~ and~~🟢 **,** safety limits**, and compute.**"
+        self.assertIsNone(ur.locate_edits(self.TEXT, *ur.diff_parts(body)))
+        old, new, edits = ur.placed_diff(self.TEXT, body, "")
+        self.assertEqual(new, "Each method will have the same budget, safety limits, and compute.")
+        self.assertTrue(edits)
+
+    def test_addition_with_no_anchor(self):
+        reason = ur.unplaced_reason(self.TEXT, self.TEXT, "(no row)", "| C | new |", "")
+        self.assertTrue(reason.startswith("the change adds text without quoting where it goes"))
+
+
+class Summary(unittest.TestCase):
+    def test_written_once_in_background_then_kept(self):
+        run = Path(tempfile.mkdtemp())
+        (run / "unified.md").write_text("## Major\n\n### 1. F1 is never defined\n")
+        calls = []
+        def call(name, prompt, out, workdir, stage=""):
+            calls.append(prompt)
+            return 'Here: {"themes": [{"theme": "Definitions", "gist": "F1 is undefined.", "findings": [1, "x"]}]}'
+        with mock.patch.object(ur, "call", call), mock.patch.object(ur, "load_rules", lambda p: ("rules", "")):
+            self.assertEqual(ur.summary_state(run), {"status": "pending"})
+            for _ in range(100):
+                if (run / "summary.json").exists():
+                    break
+                time.sleep(0.01)
+            self.assertEqual(ur.summary_state(run), {"status": "done", "themes": [
+                {"theme": "Definitions", "gist": "F1 is undefined.", "findings": [1]}]})
+        self.assertEqual(len(calls), 1)
+        self.assertIn("F1 is never defined", calls[0])
+        shutil.rmtree(run)
+
+    def test_key_claim_is_one_sentence_from_the_draft(self):
+        run = Path(tempfile.mkdtemp())
+        draft = run / "memo.md"
+        draft.write_text("Sparse coding predicts V1 receptive fields.\n")
+        (run / "results.json").write_text(json.dumps({"files": [str(draft)]}))
+        (run / "unified.md").write_text("## Major\n\n### 1. F1 is never defined\n")
+        calls = []
+        def call(name, prompt, out, workdir, stage=""):
+            calls.append(prompt)
+            return ('{"claim": "Sparse coding predicts V1 receptive fields. It also predicts V2.", '
+                    '"themes": [{"theme": "Definitions", "gist": "F1 is undefined.", "findings": [1]}]}')
+        with mock.patch.object(ur, "call", call), mock.patch.object(ur, "load_rules", lambda p: ("rules", "")):
+            ur.summary_state(run)
+            for _ in range(100):
+                if (run / "summary.json").exists():
+                    break
+                time.sleep(0.01)
+            st = ur.summary_state(run)
+        self.assertEqual(st["claim"], "Sparse coding predicts V1 receptive fields.")
+        self.assertIn("<draft>\nSparse coding predicts V1 receptive fields.", calls[0])
+        shutil.rmtree(run)
+
+    def test_one_sentence(self):
+        self.assertEqual(ur.one_sentence("A holds. B holds."), "A holds.")
+        self.assertEqual(ur.one_sentence("  A  holds  "), "A holds")
+        self.assertEqual(ur.one_sentence(None), "")
+
+
+class NotAssessed(unittest.TestCase):
+    def test_lists_what_the_panel_could_not_check(self):
+        with tempfile.TemporaryDirectory() as d:
+            prose, nums, fig = Path(d) / "a.md", Path(d) / "b.md", Path(d) / "c.md"
+            prose.write_text("We propose a four-day week for the team.\n")
+            nums.write_text("Accuracy rose to 78.4% (n = 5 seeds).\n")
+            fig.write_text("See ![fit](fig1.png).\n")
+            # Prose with no numbers, code, or data: nothing to reproduce.
+            self.assertEqual(ur.not_assessed({"files": [str(prose)], "verify": False}),
+                             "Not assessed by the panel: whether cited sources say what the draft says they do "
+                             "(`--verify` checks them).")
+            self.assertEqual(ur.not_assessed({"files": [str(prose)], "verify": True}), "")
+            self.assertEqual(ur.not_assessed({"files": [str(nums)], "verify": True}),
+                             "Not assessed by the panel: whether reported numbers reproduce from the data or code.")
+            self.assertEqual(ur.not_assessed({"files": [str(fig)], "verify": True}),
+                             "Not assessed by the panel: the images the draft links to.")
+            self.assertIn(", whether reported numbers reproduce from the data or code, and the images",
+                          ur.not_assessed({"files": [str(nums), str(fig)], "verify": False}))
+
+
+class ClaimRules(unittest.TestCase):
+    def test_claim_map_and_finding_rule_reach_the_panel(self):
+        rules = ur.reviewer_rules()
+        self.assertIn("identify up to three central claims", rules)
+        self.assertIn("smallest adequate remedy", rules)
+        self.assertIn("Keep Nitpicks terse", rules)
+        # The prompt carries the rule itself, so custom --rules cannot drop it.
+        prompt = ur.review_prompt("draft", "", "custom rules only")
+        self.assertIn("up to three central claims", prompt)
+        self.assertIn("smallest adequate remedy", prompt)
+        self.assertIn("state the decision the\ndefect could mislead", prompt)
+
+
+class SinceLast(unittest.TestCase):
+    def results(self, since):
+        g = lambda t, seen, pos: {"rep": {"title": t, "quote": "", "body": "Point."}, "severity": "Major",
+                                  "rejected": False, "where": "draft", "pos": pos, "seen": seen}
+        return {"groups": [g("Old point", 2, 0), g("New point", 1, 5)], "headings": [], "since_last": since}
+
+    def test_counts_and_numbers(self):
+        r = self.results({"resolved": [{"n": 4, "title": "Fixed thing"}],
+                          "dropped": [{"n": 6, "title": "Quiet thing"}]})
+        block = ur.since_block(r)
+        self.assertIn("**Resolved (1)**: 4 (numbers from the last review)", block)
+        self.assertIn("**Persisting (1)**: 1", block)
+        self.assertIn("**New (1)**: 2", block)
+        self.assertIn("Quiet thing", block)
+
+    def test_first_review_has_no_block(self):
+        self.assertEqual(ur.since_block(self.results(None)), "")
+
+    def test_older_runs_kept_titles_only(self):
+        self.assertIn("**Resolved (1)**\n", ur.since_block(self.results({"resolved": ["Fixed thing"], "dropped": []})))
+
+
 class Churn(unittest.TestCase):
     def test_times_changed(self):
         history = ["Alpha one.\n\nBeta one.", "Alpha two.\n\nBeta one.", "Alpha three.\n\nBeta one."]
@@ -778,7 +1158,7 @@ class Churn(unittest.TestCase):
         history = ["Alpha three words here.\n\nBeta stays the same."]
         g = typo_group("Alpha four words", "Alpha five words")
         self.assertIn("changed since the last review", ur.churn(g, text, history))
-        g["severity"] = "Substantive"
+        g["severity"] = "Minor"
         self.assertIsNone(ur.churn(g, text, history))
         steady = typo_group("Beta stays", "Beta remains")
         self.assertIsNone(ur.churn(steady, text, history))
@@ -787,9 +1167,9 @@ class Churn(unittest.TestCase):
         text = "Alpha four words here."
         history = ["Alpha two words here.", "Alpha three words here."]
         g = typo_group("Alpha four words", "Alpha five words")
-        g["severity"] = "Substantive"
+        g["severity"] = "Minor"
         self.assertIn("2 of the last 2", ur.churn(g, text, history))
-        g["severity"] = "Critical"
+        g["severity"] = "Major"
         self.assertIsNone(ur.churn(g, text, history))
 
     def test_typos_are_never_held(self):
@@ -845,8 +1225,27 @@ class ReviewPage(unittest.TestCase):
         self.assertEqual(ur.diff_parts(body), ("Old sentence here.", "New sentence here."))
         body = "Point.\n\n```\n| Pillar | A |\n| Pillar or wedge | A |\n```"
         self.assertEqual(ur.diff_parts(body), ("| Pillar | A |", "| Pillar or wedge | A |"))
+        body = "Point.\n\nA separate source, ~~much ~~like glasses."
+        self.assertEqual(ur.diff_parts(body), ("A separate source, much like glasses.", "A separate source, like glasses."))
+        body = "Point.\n\nKeep this ~~extra~~\nnext line."
+        self.assertEqual(ur.diff_parts(body), ("Keep this extra\nnext line.", "Keep this\nnext line."))
+        body = "Point.\n\n```markdown\nThe sky ~~is green~~ 🟢 **is blue** today.\n```"
+        self.assertEqual(ur.diff_parts(body), ("The sky is green today.", "The sky is blue today."))
+        self.assertIsNone(ur.diff_parts("Point.\n\n```markdown\nOur plan:~~ ~~\n```")[0])
         self.assertIsNone(ur.diff_parts("Point only.")[0])
         self.assertIsNone(ur.diff_parts("Point.\n\nx ~~a~~ 🟢 **[name the barrier]**")[0])
+        self.assertIsNone(ur.diff_parts("Point.\n\nRECAP 🟢 **{{citation: Author, year}}** works.")[0])
+
+    def test_transcribe_needs_a_key(self):
+        with mock.patch.dict(ur.os.environ, {}, clear=True):
+            with self.assertRaisesRegex(ValueError, "ELEVENLABS_API_KEY"):
+                ur.transcribe(b"audio", "webm")
+
+    def test_slot_diff_is_placed_but_not_applicable(self):
+        body = "Point.\n\nWe test F1 🟢 **, defined as {{one-line definition}},** on data."
+        self.assertEqual(ur.diff_parts(body)[1], ur.SLOT)
+        old, new = ur.diff_parts(body, slots=True)
+        self.assertEqual((old, new), ("We test F1 on data.", "We test F1, defined as {{one-line definition}}, on data."))
 
     def test_find_span_and_fuzzy(self):
         text = "Records stay local.  The person\u2019s data stays home."
@@ -866,18 +1265,29 @@ class ReviewPage(unittest.TestCase):
             doc.write_text("# Memo\n\nThe sky is green today. Grass grows.\n\nWater is dry.\n")
             run = Path(d) / "runs" / "r1"
             run.mkdir(parents=True)
-            g = lambda t, q, body: {"rep": {"title": t, "quote": q, "body": body}, "severity": "Substantive",
+            g = lambda t, q, body: {"rep": {"title": t, "quote": q, "body": body}, "severity": "Minor",
                                     "where": "draft", "pos": 0, "rejected": False, "votes": {"claude": {"vote": "agree"}},
                                     "raised_by": ["claude"], "frac": 1.0}
             (run / "results.json").write_text(json.dumps({
                 "files": [str(doc)], "labels": {"claude": "Claude Sonnet"}, "reviewers_ok": ["claude"],
+                "voters": ["claude"], "verify": False, "failures": [],
                 "headings": [], "groups": [
                     g("Sky", "The sky is green today.", "Wrong.\n\nThe sky ~~is green~~ 🟢 **is blue** today."),
                     g("Water", "Water is dry.", "Wrong.\n\nWater is ~~dry~~ 🟢 **wet**.")]}))
+            (run / "summary.json").write_text('{"themes": []}')
             page = ur.PageServer(doc)
             code, _, out = page.handle("GET", "/api/state", {})
             st = json.loads(out)
             self.assertEqual([f["applicable"] for f in st["findings"]], [True, True])
+            code, mime, md, headers = page.handle("GET", "/api/export/review.md", b"")
+            self.assertEqual((code, headers["Content-Disposition"]), (200, 'attachment; filename="memo-review.md"'))
+            self.assertIn("### 1. Sky", md)
+            if shutil.which("pandoc"):
+                code, mime, data, _ = page.handle("GET", "/api/export/review.docx", b"")
+                self.assertEqual((code, mime, data[:2]), (200, ur.DOCX_MIME, b"PK"))
+                back = subprocess.run(["pandoc", "-f", "docx", "-t", "plain"], input=data, capture_output=True).stdout.decode()
+                self.assertIn("Sky", back)
+            self.assertEqual(page.handle("GET", "/api/export/review.pdf", b"")[0], 400)
             self.assertEqual(page.handle("POST", "/api/accept", {"n": 1})[0], 200)
             self.assertIn("The sky is blue today.", doc.read_text())
             doc.write_text(doc.read_text().replace("Water is dry.", "Water is arid."))
@@ -887,6 +1297,42 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual(page.handle("POST", "/api/decline", {"n": 2, "note": "fine"})[0], 200)
             st = json.loads(page.handle("GET", "/api/state", {})[2])
             self.assertEqual([f["status"] for f in st["findings"]], ["accepted", "declined"])
+
+    def test_rereview_options_start_over_and_fact_check(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+            doc = Path(d).resolve() / "memo.md"
+            doc.write_text("# Memo\n\nThe sky is green today.\n")
+            run = Path(d) / "runs" / "r1"
+            run.mkdir(parents=True)
+            (run / "results.json").write_text(json.dumps({
+                "files": [str(doc)], "labels": {}, "reviewers_ok": [], "voters": [], "verify": False,
+                "failures": [], "headings": [], "groups": []}))
+            # The page asking to start over is the file's own server: it must not stop itself.
+            (Path(d) / "runs" / "pages.json").write_text(json.dumps({str(doc): {"port": 1, "pid": os.getpid()}}))
+            started = []
+            class Job:
+                def __init__(self, cmd, **kw): started.append(cmd)
+                def poll(self): return None
+            page = ur.PageServer(doc)
+            kills = []
+            with mock.patch.object(ur.subprocess, "Popen", Job), mock.patch.object(ur, "log", lambda *a: None), \
+                    mock.patch.object(ur.os, "kill", lambda pid, sig: kills.append(pid)):
+                code, _, out = page.handle("POST", "/api/update", {"fresh": True, "verify": True})
+            self.assertEqual(kills, [])
+            self.assertEqual(code, 200)
+            self.assertIn("--verify", started[0])
+            self.assertEqual(ur.runs_for(doc), [])  # set aside, not deleted
+            self.assertTrue(list((Path(d) / "runs" / "forgotten").glob("*/runs/r1/results.json")))
+            st = json.loads(page.handle("GET", "/api/state", {})[2])
+            self.assertEqual((st["starting_over"], st["job"]["running"]), (True, True))
+            # A plain Re-review keeps the history and adds no fact-check.
+            page.job = None
+            run.parent.joinpath("r2").mkdir()
+            (run.parent / "r2" / "results.json").write_text((Path(d) / "runs" / "forgotten").glob("*/runs/r1/results.json").__next__().read_text())
+            with mock.patch.object(ur.subprocess, "Popen", Job):
+                page.handle("POST", "/api/update", {})
+            self.assertNotIn("--verify", started[1])
+            self.assertEqual(len(ur.runs_for(doc)), 1)
 
     def test_parse_answer(self):
         cur = "Intro. We test the links first, which leave one link open. End."
@@ -902,6 +1348,11 @@ class ReviewPage(unittest.TestCase):
         self.assertEqual(fs[0]["kind"], "logic")
         v = ur.parse_votes("A1 | agree | Polish | style | same:none | ok\nA2 | partial | Critical | same:none | old format")
         self.assertEqual((v["A1"]["kind"], v["A2"]["kind"]), ("style", ""))
+        # Older names map to the current ones in rank order.
+        self.assertEqual(fs[0]["severity"], "Major")
+        self.assertEqual((v["A1"]["severity"], v["A2"]["severity"]), ("Nitpick", "Major"))
+        self.assertEqual([ur.canon_sev(s) for s in ("Critical", "Substantive", "Polish", "Minor")],
+                         ["Major", "Minor", "Nitpick", "Minor"])
         self.assertEqual(ur.majority_kind(["logic", "clarity", "clarity"], "logic"), "clarity")
         self.assertEqual(ur.majority_kind(["logic", "clarity"], ""), "logic")  # ties go to logic
         self.assertEqual(ur.majority_kind([], "evidence"), "evidence")
@@ -1007,6 +1458,76 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual(state(earlier), [done_earlier, done_earlier])
             self.assertEqual(state([]), [(None, ""), ("accepted", "Done: the change is already in the file")])
 
+    def test_a_filled_slot_becomes_the_proposed_text(self):
+        quote = "These systems interact."
+        g = {"rep": {"title": "Cite it", "quote": quote, "body": f"Point.\n\n~~{quote}~~ 🟢 **These systems interact {{{{citation: Author, year}}}}.**"},
+             "votes": {}, "raised_by": [], "where": "", "kind": "evidence"}
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "2026-10-09-1000-x-v1"
+            (run / "reviewed").mkdir(parents=True)
+            (run / "results.json").write_text('{"labels": {}, "reviewers_ok": []}')
+            draft = Path(d) / "m.md"
+            draft.write_text(quote + "\n")
+
+            def state():
+                with mock.patch.object(ur, "ordered_findings", lambda r: [(1, "Minor", "", g)]), \
+                     mock.patch.object(ur, "load_decisions", lambda: {}), \
+                     mock.patch.object(ur, "load_questions", lambda run: {}), \
+                     mock.patch.object(ur, "page_panel", lambda p: []):
+                    f = ur.page_state(draft, run)["findings"][0]
+                    return f["applicable"], f["slot"], f["reason"], f["new"]
+            self.assertEqual(state()[:3], (True, True, ur.SLOT))  # Accept writes the blank, Fill fills it
+            ur.save_fill(run, 1, {"status": "done", "text": "These systems interact [@Squire04].", "sources": []})
+            self.assertEqual(state(), (True, False, None, "These systems interact [@Squire04]."))
+
+    def test_a_comment_about_a_selected_passage_sends_it(self):
+        prompts = []
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "run"
+            run.mkdir()
+            draft = Path(d) / "m.md"
+            draft.write_text("The sky is green.\n")
+            with mock.patch.object(ur, "call", lambda m, prompt, *a, **k: prompts.append(prompt) or "Fine.\nCHANGES: none"), \
+                 mock.patch.object(ur, "page_panel", lambda p: ["claude"]), \
+                 mock.patch.object(ur, "load_rules", lambda p: ("rules", "")):
+                ur.comment_panel(draft, run, "Is this right?", False, "The sky is green.")
+                for _ in range(200):
+                    if ur.load_comments(run)[0]["answers"]["claude"]["status"] != "pending":
+                        break
+                    time.sleep(0.01)
+            self.assertIn("<passage>\nThe sky is green.\n</passage>", prompts[0])
+            self.assertEqual(ur.load_comments(run)[0]["passage"], "The sky is green.")
+
+    def test_a_review_of_an_edit_appends_its_findings_after_the_rest(self):
+        review = ("=== FINDING\nseverity: Minor\nkind: logic\ntitle: Claim lacks support\n"
+                  "quote: The sky is green.\n---\nThe claim needs a source.\n\n"
+                  "~~The sky is green.~~ 🟢 **The sky is blue.**\n=== END FINDING\n")
+        old = {"rep": {"title": "Old", "quote": "Grass grows.", "body": "Point."}, "votes": {}, "raised_by": [],
+               "where": "draft", "pos": 30, "severity": "Polish", "kind": "style", "rejected": False}
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "run"
+            run.mkdir()
+            draft = Path(d) / "m.md"
+            draft.write_text("The sky is green.\n\nGrass grows.\n")
+            (run / "results.json").write_text(json.dumps({"labels": {}, "groups": [old], "headings": []}))
+
+            def call(m, prompt, *a, **k):
+                return review if "Review the draft" in prompt else "A1 | agree | Minor | logic | same:none | Fair."
+            with mock.patch.object(ur, "call", call), mock.patch.object(ur, "page_panel", lambda p: ["claude", "gpt"]), \
+                 mock.patch.object(ur, "load_rules", lambda p: ("rules", "")), mock.patch.object(ur, "load_decisions", lambda: {}):
+                ur.review_passage(draft, run, "The sky is green.")
+                for _ in range(300):
+                    if json.loads((run / "edit-review.json").read_text())["status"] != "pending":
+                        break
+                    time.sleep(0.01)
+            st = json.loads((run / "edit-review.json").read_text())
+            self.assertEqual(st["status"], "done", st)
+            fs = ur.ordered_findings(json.loads((run / "results.json").read_text()))
+            # The earlier Polish finding keeps number 1, and the new Minor ones follow it.
+            self.assertEqual(fs[0][3]["rep"]["title"], "Old")
+            self.assertTrue(all(g.get("added") == st["first"] for _, _, _, g in fs[1:]))
+            self.assertIn("Claim lacks support", [g["rep"]["title"] for _, _, _, g in fs[1:]])
+
     def test_end_marker_dropped(self):
         fs = ur.parse_findings("=== FINDING\nseverity: Polish\ntitle: T\nquote: a b\n---\nPoint.\n\na ~~b~~ 🟢 **c**.\n=== END FINDING\n")
         self.assertNotIn("END FINDING", fs[0]["body"])
@@ -1035,7 +1556,7 @@ class ReviewPage(unittest.TestCase):
     def test_upload_reviews_a_copy_and_returns_unified(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d)):
             page = ur.UploadServer()
-            code, _, _ = page.handle("POST", "/api/upload/notes.docx", b"x")
+            code, _, _ = page.handle("POST", "/api/upload/notes.pptx", b"x")
             self.assertEqual(code, 400)
             with mock.patch.object(ur.subprocess, "Popen") as popen:
                 popen.return_value.poll.return_value = None
@@ -1050,13 +1571,269 @@ class ReviewPage(unittest.TestCase):
                 self.assertIn("did not finish", st["error"])
             unified = Path(d) / "run" / "unified.md"
             unified.parent.mkdir()
-            unified.write_text("# my paper.pdf\n\n### 1. A finding\n")
+            unified.write_text("# my paper.pdf\n\n<script>window.xss = true</script>\n")
             (folder / "stdout.log").write_text(f"{unified}\n")
             st = json.loads(page.handle("GET", "/api/job/" + uid, b"")[2])
             self.assertEqual(st["markdown"], unified.read_text())
+            self.assertIsNone(st["html"])
             self.assertEqual(st["name"], "my paper.pdf")
             self.assertEqual(page.handle("GET", "/api/job/nope", b"")[0], 404)
 
+    def test_repeated_uploads_get_distinct_job_ids(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d)), \
+                mock.patch.object(ur.subprocess, "Popen"):
+            first = ur.start_upload("memo.md", b"# Memo\n")
+            second = ur.start_upload("memo.md", b"# Memo\n")
+            self.assertNotEqual(first, second)
+            self.assertTrue((Path(d) / "uploads" / first / "upload" / "memo.md").exists())
+            self.assertTrue((Path(d) / "uploads" / second / "upload" / "memo.md").exists())
+
+    def test_repeated_opens_get_distinct_job_ids(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
+                mock.patch.object(ur.subprocess, "Popen"):
+            doc = Path(d) / "memo.md"
+            doc.write_text("# Memo\n")
+            first, second = ur.start_review(doc), ur.start_review(doc)
+            self.assertNotEqual(first, second)
+            self.assertEqual((Path(d) / "runs" / "opens" / second / "file.txt").read_text(), str(doc))
+
+    @unittest.skipUnless(shutil.which("pandoc"), "needs pandoc")
+    def test_upload_of_a_reviewed_word_file_offers_open_again_or_fresh(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+            src = Path(d) / "memo.md"
+            src.write_text("# Memo\n\nSome text.\n")
+            docx = Path(d) / "memo.docx"
+            subprocess.run(["pandoc", str(src), "-o", str(docx)], check=True)
+            body, page = docx.read_bytes(), ur.UploadServer()
+            check = lambda: json.loads(page.handle("POST", "/api/upload/check/memo.docx", body)[2])
+            self.assertEqual(check(), {"seen": False, "reviews": 0, "last": None})
+            with contextlib.redirect_stderr(io.StringIO()):
+                md = ur.to_markdown(docx)
+            run = ur.RUNS_DIR / "2026-10-09-1200-memo-v1"
+            run.mkdir()
+            md = md.resolve()  # as a review records it
+            (run / "results.json").write_text(json.dumps({"files": [str(md)]}))
+            self.assertEqual(check(), {"seen": True, "reviews": 1, "last": "2026-10-09"})
+            self.assertEqual(json.loads(page.handle("POST", "/api/upload/check/notes.md", b"# x")[2])["seen"], False)
+            with mock.patch.object(ur, "page_url", lambda p: "http://127.0.0.1:1/" if p == md else None):
+                self.assertEqual(json.loads(page.handle("POST", "/api/upload/open/memo.docx", body)[2])["page"],
+                                 "http://127.0.0.1:1/")
+            with mock.patch.object(ur, "start_upload", lambda name, body: "job1"):
+                self.assertEqual(json.loads(page.handle("POST", "/api/upload/memo.docx", body)[2]), {"id": "job1"})
+                self.assertEqual(check()["seen"], True)  # review again keeps the history
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(json.loads(page.handle("POST", "/api/upload/fresh/memo.docx", body)[2]), {"id": "job1"})
+            self.assertEqual(check()["seen"], False)  # start over forgot it
+            self.assertTrue(md.exists())  # the edited copy stays
+
+    def test_open_reviews_the_chosen_file_in_place(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
+                mock.patch.object(ur.sys, "platform", "darwin"):
+            draft, other = Path(d) / "draft.md", Path(d) / "other.md"
+            draft.write_text("# Draft\n")
+            other.write_text("# Other\n")
+            page = ur.PageServer(draft)
+            self.assertIn("<html", page.handle("GET", "/open", b"")[2])
+            with mock.patch.object(ur, "choose_file", lambda start: (None, None)):
+                self.assertEqual(json.loads(page.handle("POST", "/api/open", {})[2]), {"cancelled": True})
+            with mock.patch.object(ur, "choose_file", lambda start: (str(Path(d) / "notes.pptx"), None)):
+                self.assertEqual(page.handle("POST", "/api/open", {})[0], 400)
+            with mock.patch.object(ur, "choose_file", lambda start: (str(other), None)), \
+                    mock.patch.object(ur.subprocess, "Popen") as popen:
+                popen.return_value.poll.return_value = None
+                st = json.loads(page.handle("POST", "/api/open", {})[2])
+            self.assertEqual(popen.call_args[0][0][-1], str(other.resolve()))  # the original, not a copy
+            self.assertEqual(popen.call_args[1]["cwd"], str(other.resolve().parent))
+            job = json.loads(page.handle("GET", "/api/job/" + st["id"], b"")[2])
+            self.assertTrue(job["running"])
+            self.assertEqual(job["name"], "other.md")
+
+    def test_review_prompt_proposes_text_and_keeps_slots_for_citations(self):
+        prompt = ur.review_prompt("draft", "", "rules")
+        self.assertIn("propose that content as the 🟢 text", prompt)
+        self.assertIn("{{citation: Author, year}}", prompt)
+
+    def test_dropped_file_is_found_by_name_and_bytes(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
+                mock.patch.object(ur.sys, "platform", "darwin"):
+            a, b, c = Path(d) / "a" / "memo.md", Path(d) / "b" / "memo.md", Path(d) / "c" / "memo.md"
+            for f, text in ((a, "# Memo\n"), (b, "# Other memo\n"), (c, "# Memo\n")):
+                f.parent.mkdir()
+                f.write_text(text)
+            hits = [str(a), str(b)]
+            spotlight = lambda cmd, **k: SimpleNamespace(stdout="\n".join(hits) + "\n", returncode=0)
+            with mock.patch.object(ur.subprocess, "run", spotlight):
+                self.assertEqual(ur.find_original("memo.md", b"# Memo\n"), [a.resolve()])  # b differs
+                page = ur.PageServer(Path(d) / "draft.md")
+                with mock.patch.object(ur.subprocess, "Popen") as popen:
+                    st = json.loads(page.handle("POST", "/api/locate/memo.md", b"# Memo\n")[2])
+                self.assertEqual(popen.call_args[0][0][-1], str(a.resolve()))  # the original
+                self.assertEqual(st["name"], "memo.md")
+                self.assertEqual(page.handle("POST", "/api/locate/memo.md", b"# Nowhere\n")[0], 404)
+                hits.append(str(c))  # two identical copies: refuse rather than guess
+                code, _, data = page.handle("POST", "/api/locate/memo.md", b"# Memo\n")
+                self.assertEqual(code, 404)
+                self.assertIn("2 identical copies", json.loads(data)["error"])
+
+    @unittest.skipUnless(shutil.which("pandoc"), "needs pandoc")
+    def test_word_file_is_edited_as_markdown_and_downloads_with_tracked_changes(self):
+        def as_md(f, changes="accept"):
+            return subprocess.run(["pandoc", str(f), "-t", ur.DOCX_MD, "--wrap=none", f"--track-changes={changes}"],
+                                  capture_output=True, text=True, check=True).stdout
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+            src = Path(d) / "memo.md"
+            src.write_text(
+                "# Memo\n\nThe cortex learns **slowly and steadily** from [work](https://x.org).[^1]\n\n"
+                "The energy is $E = mc^2$ in this regime, which [Ann's note.]{.comment-start id=\"0\" author=\"Ann\" "
+                "date=\"2026-01-01T00:00:00Z\"}matters[]{.comment-end id=\"0\"} here.\n\nThis one goes.\n\n"
+                "| A | B |\n|---|---|\n| 1 | 2 |\n\n- first\n- second\n\nCited here^4^ and done.\n\nLast paragraph stays CITE.\n\n[^1]: A footnote.\n")
+            docx = Path(d) / "memo.docx"
+            subprocess.run(["pandoc", str(src), "-o", str(docx)], check=True)
+            # Make it look like Word wrote it: a run split mid-word, and a citation field.
+            with zipfile.ZipFile(docx) as z:
+                parts = {i: z.read(i.filename) for i in z.infolist()}
+            for i in parts:
+                if i.filename == "word/document.xml":
+                    parts[i] = parts[i].decode().replace(
+                        '<w:t xml:space="preserve">Last paragraph stays CITE.</w:t></w:r>',
+                        '<w:t xml:space="preserve">Last para</w:t></w:r><w:proofErr w:type="spellStart"/>'
+                        '<w:r><w:t xml:space="preserve">graph stays </w:t></w:r>'
+                        '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> ADDIN ZOTERO_ITEM </w:instrText></w:r>'
+                        '<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>(Smith 2020)</w:t></w:r>'
+                        '<w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t>.</w:t></w:r>').encode()
+            with zipfile.ZipFile(docx, "w") as z:
+                for i, data in parts.items():
+                    z.writestr(i, data)
+            md = ur.to_markdown(docx)
+            self.assertIn(ur.RUNS_DIR / "converted", md.parents)
+            self.assertFalse(ur.read_only(md))
+            self.assertEqual(ur.original_of(md), md.with_suffix(".docx"))
+            before = md.read_text()
+            self.assertIn("$E = mc^{2}$", before)
+            self.assertIn("Last paragraph stays (Smith 2020).", before)
+            after = (before.replace("**slowly and steadily**", "**slowly**")
+                     .replace("in this regime", "at low speed").replace("This one goes.\n\n", "")
+                     .replace("| 2 ", "| 3 ").replace("- second", "- second, revised")
+                     .replace("Cited here<sup>4</sup> and done.", "Cited here<sup>4</sup> with care and done.")
+                     .replace("Last paragraph stays (Smith 2020).", "Last paragraph now stays (Smith 2021).\n\nA new one.")
+                     .replace("[^1]: A footnote.", "[^1]: A changed footnote."))
+            md.write_text(after)
+            self.assertEqual(ur.to_markdown(docx), md)  # the same file again keeps the edits
+            self.assertEqual(md.read_text(), after)
+            page = ur.PageServer(md)
+            code, mime, data, headers = page.handle("GET", "/api/export/draft.docx", b"")
+            self.assertEqual((code, mime), (200, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+            self.assertEqual(headers["Content-Disposition"], 'attachment; filename="memo-edited.docx"')
+            missed = json.loads(urllib.parse.unquote(headers["X-Not-Placed"]))
+            self.assertEqual([(m["why"], m["old"], m["new"]) for m in missed],
+                             [("it changes an equation, citation or other field, footnote mark, or image",
+                               "Last paragraph stays (Smith 202[0]).", "Last paragraph stays (Smith 202[1]).")])  # just the change, in brackets
+            out = Path(d) / "out.docx"
+            out.write_bytes(data)
+            plain = lambda m: subprocess.run(["pandoc", "-f", ur.DOCX_MD, "-t", "plain", "--wrap=none"], input=m,
+                                             capture_output=True, text=True).stdout
+            # Accepting every change gives the edited draft, less the edit not placed. Rejecting gives the original.
+            # "now" is placed; only the change inside the citation field is not.
+            self.assertEqual(plain(as_md(out)), plain(after.replace("(Smith 2021)", "(Smith 2020)")))
+            self.assertEqual(plain(as_md(out, "reject")), plain(before))
+            self.assertRegex(as_md(out, "all"), r'"deletion"[^>]*>in this regime<.*"insertion"[^>]*>at low speed<')  # one change, not word by word
+            with zipfile.ZipFile(out) as b:
+                self.assertIn(b"ZOTERO_ITEM", b.read("word/document.xml"))
+            # Words added after a superscript are not superscript; a changed superscript stays one.
+            with zipfile.ZipFile(out) as z:
+                x = z.read("word/document.xml").decode()
+            self.assertNotRegex(x, r'<w:ins [^>]*><w:r><w:rPr>(?:(?!</w:rPr>).)*vertAlign')
+            # Ann's comment stays, and the edit that could not be placed is a comment on its paragraph.
+            comments = as_md(out, "all")
+            self.assertIn('author="Ann"', comments)
+            self.assertRegex(comments, r'author="Unified review"[^>]*>This edit is in the reviewed draft but could not be placed[^<]*'
+                                       r'Was: Last paragraph stays \(Smith 202\\?\[0\\?\]\)\.')  # pandoc escapes brackets
+            self.assertRegex(comments, r'comment-end[^>]*></span>Last paragraph|Last paragraph[^\n]*comment-end')
+            # A blank left in the draft is a comment too.
+            md.write_text(after.replace("A new one.", "A new one {{citation: Author, year}}."))
+            _, _, data, _ = ur.export_draft(md, "docx")
+            out.write_bytes(data)
+            self.assertRegex(as_md(out, "all"), r'author="Unified review"[^>]*>Fill this in: \{\{citation: Author, year\}\}')
+
+    def test_forget_sets_aside_reviews_decisions_and_versions(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+            doc, other = Path(d).resolve() / "memo.md", Path(d).resolve() / "other.md"
+            doc.write_text("# Memo\n")
+            for name, f in (("r1", doc), ("r2", doc), ("r3", other)):
+                (ur.RUNS_DIR / name).mkdir(parents=True)
+                (ur.RUNS_DIR / name / "results.json").write_text(json.dumps({"files": [str(f)]}))
+            (ur.RUNS_DIR / "decisions.json").write_text(json.dumps({str(doc): [{"id": "D1"}], str(other): [{"id": "D1"}]}))
+            (ur.RUNS_DIR / "versions.json").write_text(json.dumps({str(doc): ["a", "b"], str(other): ["c"]}))
+            with contextlib.redirect_stdout(io.StringIO()):
+                out = ur.forget(doc)
+            self.assertEqual(ur.runs_for(doc), [])
+            self.assertEqual([r.name for r in ur.runs_for(other)], ["r3"])
+            self.assertEqual(sorted(x.name for x in (out / "runs").iterdir()), ["r1", "r2"])
+            self.assertNotIn(str(doc), json.loads((ur.RUNS_DIR / "decisions.json").read_text()))
+            self.assertIn(str(other), json.loads((ur.RUNS_DIR / "decisions.json").read_text()))
+            self.assertEqual(ur.version_number(doc, "b"), 1)  # the edited text is version 1
+            kept = json.loads((out / "forgotten.json").read_text())
+            self.assertEqual((kept["decisions"], kept["versions"]), ([{"id": "D1"}], ["a", "b"]))
+            self.assertTrue(doc.exists())
+
+    def test_servers_starting_together_keep_each_others_entries(self):
+        with tempfile.TemporaryDirectory() as d:
+            runs = Path(d) / "runs"
+            files = [Path(d) / f"f{k}.md" for k in range(4)]
+            for f in files:
+                f.write_text("# x\n")
+            env = {**os.environ, "UNIFIED_REVIEW_RUNS": str(runs)}
+            procs = [subprocess.Popen([sys.executable, str(REPO / "bin" / "unified-review"), "--serve", str(f)], env=env,
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for f in files]
+            try:
+                for _ in range(50):
+                    pages = json.loads((runs / "pages.json").read_text()) if (runs / "pages.json").exists() else {}
+                    if len(pages) == len(files):
+                        break
+                    time.sleep(0.1)
+                self.assertEqual(sorted(pages), sorted(str(f.resolve()) for f in files))
+                self.assertEqual(sorted(v["pid"] for v in pages.values()), sorted(p.pid for p in procs))
+            finally:
+                for p in procs:
+                    p.terminate()
+                    p.wait()
+
+    def test_draft_downloads_in_the_format_it_came_in(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+            draft = Path(d) / "draft.md"
+            draft.write_text("# Draft\n")
+            self.assertEqual(ur.export_draft(draft), ("draft-edited.md", ur.MD_MIME, b"# Draft\n", []))
+            if shutil.which("pandoc"):  # a Markdown draft as Word, through pandoc
+                name, mime, data, _ = ur.export_draft(draft, "docx")
+                self.assertEqual((name, mime, data[:2]), ("draft-edited.docx", ur.DOCX_MIME, b"PK"))
+            with self.assertRaises(ValueError):
+                ur.export_draft(draft, "pdf")  # only a draft that came as a PDF
+            md = ur.RUNS_DIR / "converted" / "paper-abc" / "paper.md"
+            md.parent.mkdir(parents=True)
+            md.write_text("# Paper\n")
+            md.with_suffix(".pdf").write_bytes(b"%PDF")
+            def make_pdf(cmd, **k):
+                Path(cmd[cmd.index("-o") + 1]).write_bytes(b"%PDF-edited")
+                return SimpleNamespace(returncode=0, stderr="")
+            with mock.patch.object(ur.subprocess, "run", make_pdf) as run:
+                self.assertEqual(ur.export_draft(md), ("paper-edited.pdf", "application/pdf", b"%PDF-edited", []))
+
+    def test_job_progress_reads_each_model_from_the_log(self):
+        lines = ["memo.pdf: converting to Markdown", "memo.pdf: Markdown copy at /x/memo.md",
+                 "1/3 review (no web): claude, gpt, gemini", "  gpt: review done, 12 findings (31 s)",
+                 "  gemini: review attempt 1 failed (timeout), retrying"]
+        with mock.patch.object(ur, "SEEN", {}):
+            st = ur.job_progress("j", lines, True)
+            self.assertEqual([(s["label"], s["state"]) for s in st], [("Convert to Markdown", "done"), ("Review", "running")])
+            self.assertEqual([(m["name"], m["state"], m["note"]) for m in st[1]["models"]],
+                             [("claude", "running", ""), ("gpt", "done", "12 findings (31 s)"), ("gemini", "running", "retrying")])
+            lines += ["  gemini: review failed (no reply)", "  claude: review done, 20 findings (200 s)",
+                      "2/3 vote on 32 findings: claude, gpt", "3/3 render: 32 findings in 30 groups, 0 rejected by vote"]
+            st = ur.job_progress("j", lines, False)
+            self.assertEqual([s["state"] for s in st], ["done", "done", "done", "done"])
+            self.assertEqual([m["state"] for m in st[1]["models"]], ["done", "done", "failed"])
+            self.assertEqual([m["state"] for m in st[2]["models"]], ["done", "done"])  # finished, though not logged
+            self.assertEqual(st[1]["secs"], 200)  # the slowest model's time
 
 if __name__ == "__main__":
     unittest.main()

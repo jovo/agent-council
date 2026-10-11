@@ -19,6 +19,17 @@
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "NewCM Body",Georgia,serif}
 h1,h2,h3,.title{font-family:"NewCM Title","Helvetica Neue",Arial,sans-serif;font-weight:700}
 button,textarea,input{font:inherit;color:inherit}
+.menubar{display:inline-flex;gap:2px;align-items:center}
+.mb{position:relative;font-size:14px}
+.mb .mbname{padding:3px 9px;border-radius:5px;cursor:pointer;user-select:none;color:var(--ink)}
+.mb .mbname b{font-weight:700}.mbarrow{color:var(--faint);font-size:11px}
+.mb:hover .mbname,.mb.open .mbname{background:var(--line)}
+.mbmenu{position:absolute;top:26px;left:0;z-index:6;min-width:170px;background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:4px 0;box-shadow:0 6px 20px rgba(0,0,0,.2)}
+.mbitem{padding:3px 14px 3px 8px;cursor:pointer;white-space:nowrap;display:flex;gap:6px}
+.mbitem:hover{background:var(--focus);color:var(--bg)}
+.mbcheck{width:14px;display:inline-block;text-align:center}
+#dl>.mbmenu{left:auto;right:0}.mbitem.sub{position:relative;justify-content:space-between}
+.mbitem.sub>.mbmenu{display:none;top:-5px;left:auto;right:100%;color:var(--ink)}.mbitem.sub:hover>.mbmenu{display:block}
 select{-webkit-appearance:none;appearance:none;background-color:var(--panel);border:1px solid var(--line);border-radius:6px;padding:3px 30px 3px 9px;font:inherit;font-size:14px;color:inherit;margin-right:10px;cursor:pointer;
 background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
 background-position:calc(100% - 15px) 55%,calc(100% - 10px) 55%;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
@@ -33,8 +44,10 @@ header{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px so
 main{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);gap:24px;padding:16px 24px 80px;max-width:1400px;margin:0 auto}
 #draft{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:24px 32px}
 #draft p{margin:0 0 .9em;white-space:pre-wrap}
+#draft.pdf p{white-space:normal}  /* a PDF's text breaks at its old line ends; let it flow */
 #draft h1{font-size:26px;margin:.2em 0 .6em}#draft h2{font-size:21px;margin:1.2em 0 .5em}#draft h3,#draft h4{font-size:17px;margin:1em 0 .4em}
 #draft a{color:var(--xref);text-decoration:none}#draft a:hover{text-decoration:underline}#draft a.cite{color:var(--cite)}#draft a.xref{cursor:help}
+#draft p.fnote{font-size:14px;color:var(--muted)}#draft a.fnback{color:var(--cite)}
 #draft ul{list-style-type:disc;padding-left:1.6em;margin:0 0 .9em}#draft ul ul{list-style-type:circle;margin:0}#draft ul ul ul{list-style-type:square}#draft ul ul ul ul{list-style-type:"·  "}
 #draft ol{padding-left:1.8em;margin:0 0 .9em}#draft ol ol{list-style-type:lower-alpha;margin:0}#draft ol ol ol{list-style-type:lower-roman}#draft li{margin:0 0 .3em;white-space:pre-wrap}#draft .block>p{margin:0 0 .5em}
 #draft ol.refs{font-size:15px;padding-left:1.8em;list-style-type:decimal}#draft ol.refs li{margin:0 0 .4em;white-space:normal}
@@ -44,16 +57,19 @@ main{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,1fr);gap:2
 
 #draft .fm{color:var(--faint);font-size:13px;white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;margin-bottom:1em}
 .hl{border-radius:3px;cursor:pointer;padding:1px 0}
-.hl.Critical{background:var(--crit)}.hl.Substantive{background:var(--subs)}.hl.Polish{background:var(--pol)}
+.hl.Major{background:var(--crit)}.hl.Minor{background:var(--subs)}.hl.Nitpick{background:var(--pol)}
 .hl.declined{background:transparent;border-bottom:1px dotted var(--faint)}
 .hl.sel{outline:2px solid var(--focus);outline-offset:1px}
 #side{position:sticky;top:110px;align-self:start;display:flex;flex-direction:column;gap:12px;max-height:calc(100vh - 126px);overflow-y:auto;padding-bottom:12px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
-.sev{font-size:13px}.sev.Critical{color:var(--crit-ink)}.sev.Substantive{color:var(--subs-ink)}.sev.Polish{color:var(--pol-ink)}
+.sev{font-size:13px}.sev.Major{color:var(--crit-ink)}.sev.Minor{color:var(--subs-ink)}.sev.Nitpick{color:var(--pol-ink)}
 .card .title{font-size:18px;margin:4px 0 8px;line-height:1.3}
 .point{color:var(--muted);margin:0 0 12px}
 .diff{background:var(--bg);border-radius:8px;padding:10px 12px;margin:0 0 12px;white-space:pre-wrap}
-del{color:var(--del);text-decoration:line-through}ins{color:var(--ins);text-decoration:none}
+.mic.rec{color:var(--del)}
+#asksel{position:absolute;z-index:20;font-size:13px;font-weight:bold;width:22px;height:22px;padding:0;border-radius:50%;line-height:20px;background:var(--ink);color:var(--bg);border-color:var(--ink);box-shadow:0 1px 4px rgba(0,0,0,.25)}
+.passage{border-left:3px solid var(--faint);padding-left:8px;margin:0 0 6px;font-style:italic}
+del{color:var(--del);text-decoration:line-through}ins{color:var(--ins);text-decoration:none}.slot{background:var(--subs);color:var(--subs-ink);border-radius:3px;padding:0 3px}
 .votes{font-size:14px;color:var(--muted);margin-bottom:12px}.votes b{color:var(--ink);font-weight:700}
 .status{font-size:14px;margin-top:10px}.status.accepted{color:var(--ok-ink)}.status.declined{color:var(--muted)}
 .reason{font-size:14px;color:var(--subs-ink);margin:0 0 10px}
@@ -68,10 +84,18 @@ input.note{width:100%;border:1px solid var(--line);border-radius:6px;padding:4px
 .menu .sep{border-top:1px solid var(--line);margin:5px 0}
 .menu .sub>.menu{display:none;position:absolute;top:-7px;right:100%;max-height:70vh;overflow-y:auto}
 .menu .sub:hover>.menu{display:block}
+#updmenu label{display:flex;gap:8px;align-items:flex-start;padding:6px 12px;cursor:pointer}#updmenu label .meta{display:block;font-size:13px}
+#updmenu hr{border:0;border-top:1px solid var(--line);margin:4px 0}#updmenu .row{padding:6px 12px}
 .hl.flash{animation:flash 1.2s ease-out}
 @keyframes flash{0%{box-shadow:0 0 0 4px var(--focus)}100%{box-shadow:0 0 0 0 transparent}}
 #card{cursor:pointer}
+.ico{display:inline-block;width:15px;height:15px;vertical-align:-2px;background-color:currentColor;-webkit-mask-size:contain;mask-size:contain;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-position:center;mask-position:center}
+.flagged .ico{width:13px;height:13px;opacity:.75}.flagged .vm{white-space:nowrap;font-size:13px;color:var(--muted)}
+.ico.badge{background:none;border:1px solid currentColor;border-radius:4px;font:700 10px/13px "NewCM Title",Arial,sans-serif;text-align:center;width:15px;height:15px}
 .menu .arrow{margin-left:auto;color:var(--faint)}
+body.dropping{outline:3px dashed var(--muted);outline-offset:-8px}
+#sumpanel{flex-shrink:0}#sumpanel>.card{max-height:75vh;overflow-y:auto;overscroll-behavior:contain}
+.themes{margin:6px 0 0;padding-left:0;list-style:none}.themes li{margin:0 0 8px}.themes summary{cursor:pointer}.themes .outline{padding-left:16px}.outline{font-size:14px;margin-top:3px}.outline .sev{text-decoration:none}
 .overview a{cursor:pointer;text-decoration:underline;text-decoration-color:var(--faint)}
 .list{font-size:14px}
 .list .listhead{cursor:default;color:var(--ink);padding:0 0 6px;margin-bottom:4px;border-bottom:1px solid var(--line)}
@@ -84,44 +108,54 @@ input.note{width:100%;border:1px solid var(--line);border-radius:6px;padding:4px
 kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var(--line);border-radius:4px;padding:0 4px}
 @media (max-width:900px){main{grid-template-columns:1fr}#side{position:static}}
 </style>
+<!-- Equations. Without the network they show as their TeX source. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" onload="if (S) renderDraft()"></script>
 </head>
 <body>
 <header>
   <div class="row">
     <h1 id="name" style="font-size:20px;margin:0">Unified review</h1>
     <span class="meta" id="meta" style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
-    <span style="position:relative"><button id="panelbtn" title="Models used for Update and Ask"></button><div id="panelmenu" class="menu" hidden></div></span>
+    <span style="position:relative"><button id="panelbtn" title="Models used for Re-review and Ask"></button><div id="panelmenu" class="menu" hidden></div></span>
     <span class="meta" id="tally"></span>
-    <button id="update" title="Run a new review of the current text">Update</button>
+    <span class="mb" id="dl" title="Download the review, or the edited draft"></span>
+    <button id="openbtn" title="Choose another file in Finder and review it in a new tab">Open…</button>
+    <span style="position:relative"><button id="update" title="Run a new review of the current text">Re-review</button><button id="updmore" title="Review options: start over, fact-check">▾</button><div id="updmenu" class="menu" hidden></div></span>
   </div>
   <div class="row meta" id="fail" style="margin-top:4px"></div>
   <div class="row" style="margin-top:8px">
-    <label class="meta">Type <select id="f-kind"></select></label>
-    <label class="meta">Severity <select id="f-sev"></select></label>
-    <label class="meta">Agreement <select id="f-tag"></select></label>
-    <label class="meta">Status <select id="f-status"></select></label>
+    <span class="menubar"><span class="mb" id="f-kind"></span><span class="mb" id="f-form"></span><span class="mb" id="f-sev"></span><span class="mb" id="f-tag"></span><span class="mb" id="f-status"></span></span>
     <span class="spacer"></span>
+    <button id="sumbtn" class="on" title="Show or hide the summary of the main findings">Summary</button>
     <button id="askbtn" title="Ask the panel about the whole draft">Ask</button>
     <button id="acceptall">Accept all shown</button>
   </div>
 </header>
 <main>
   <div><div id="overview"></div><article id="draft"></article></div>
-  <aside id="side"><div id="askpanel"></div><div class="card" id="card"></div><div class="card" id="checks" hidden></div><div class="card" id="typos" hidden></div><div class="card list" id="list"></div>
-    <div class="meta" style="font-size:13px"><kbd>j</kbd> <kbd>k</kbd> next and previous · <kbd>a</kbd> accept · <kbd>e</kbd> edit · <kbd>d</kbd> decline · <kbd>q</kbd> ask · double-click a paragraph to edit it, <kbd>⌘</kbd><kbd>Enter</kbd> saves</div></aside>
+  <aside id="side"><div id="sumpanel"></div><div id="askpanel"></div><div class="card" id="card"></div><div class="card" id="nits" hidden></div><div class="card list" id="list"></div>
+    <div class="meta" style="font-size:13px"><kbd>j</kbd> <kbd>k</kbd> next and previous · <kbd>a</kbd> accept · <kbd>e</kbd> edit · <kbd>d</kbd> decline · <kbd>q</kbd> ask · double-click a paragraph to edit it, <kbd>⌘</kbd><kbd>Enter</kbd> saves · drop a draft from Finder to review it in a new tab</div></aside>
 </main>
+<div id="droptoast" class="card" hidden style="position:fixed;right:24px;bottom:24px;z-index:5;font-size:15px;max-width:480px"></div>
 <script>
-const SEV = ["Critical", "Substantive", "Polish"];
+const SEV = ["Major", "Minor", "Nitpick"];
 const TAGS = ["Unanimous", "Majority", "Contested"];
 const KINDS = ["Logic", "Evidence", "Clarity", "Style"];
-let S = null, cur = null, filt = {kind: "All", sev: "All", tag: "All", status: "Open"}, mode = null, lastRun = null;
-let commentOpen = false;
+let S = null, cur = null, filt = {kind: "All", form: "All", sev: "All", tag: "All", status: "Open"}, mode = null, lastRun = null;
+let commentOpen = false, passage = "";  // passage: text selected in the draft that the next Ask is about
 let logicAuto = null;  // the logic-first view, set when a review loads and lifted when no logic finding is open
 
+// A lab's icon, drawn in the text color, with the full model name on hover.
+// Labs without an icon in page/icons get a letter badge.
+const icon = (ic, title) => /^[a-z]/.test(ic || "")
+  ? `<span class="ico" title="${esc(title || "")}" style="-webkit-mask-image:url(/icons/${ic}.svg);mask-image:url(/icons/${ic}.svg)"></span>`
+  : `<span class="ico badge" title="${esc(title || "")}">${esc(ic || "?")}</span>`;
 const esc = t => (t || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const marks = h => h
   .replace(/\*\*~~([\s\S]+?)~~\*\*|~~([\s\S]+?)~~/g, (m, a, b) => "<del>" + (a || b) + "</del>")
-  .replace(/\*\*🟢\s*([\s\S]+?)\*\*|🟢\s*\*\*([\s\S]+?)\*\*/g, (m, a, b) => "<ins>" + (a || b) + "</ins>");
+  .replace(/\*\*🟢\s*([\s\S]+?)\*\*|🟢\s*\*\*([\s\S]+?)\*\*/g, (m, a, b) => "<ins>" + (a || b) + "</ins>")
+  .replace(/\{\{([\s\S]+?)\}\}/g, '<span class="slot" title="Fill this in before you apply the change">{{$1}}</span>');
 const inline = t => marks(esc(t)).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
 // A finding's body is its point, a blank line, then its diff. When a reviewer
 // runs the diff into the point's paragraph, split it where that sentence starts.
@@ -133,11 +167,14 @@ function splitBody(body) {
 }
 const pointOf = f => splitBody(f.body)[0] || "";
 function diffHtml(body) {
-  const paras = splitBody(body).slice(1).filter(p => p.includes("~~") || p.includes("🟢"));
+  const has = p => p.includes("~~") || p.includes("🟢");
+  let paras = splitBody(body).slice(1).filter(has);
+  if (!paras.length) paras = splitBody(body).slice(0, 1).filter(has);  // a diff written in the first paragraph
   return marks(esc(paras.join("\n\n")));
 }
 const kindOf = f => f.kind ? f.kind[0].toUpperCase() + f.kind.slice(1) : "";
-const shown = f => f.severity !== "Typo" && (filt.kind === "All" || kindOf(f) === filt.kind) && (filt.sev === "All" || f.severity === filt.sev) && (filt.tag === "All" || f.tag === filt.tag)
+const formOf = f => f.form === "question" ? "Question" : "Edit";  // runs before questions existed are all edits
+const shown = f => f.severity !== "Typo" && (filt.kind === "All" || kindOf(f) === filt.kind) && (filt.form === "All" || formOf(f) === filt.form) && (filt.sev === "All" || f.severity === filt.sev) && (filt.tag === "All" || f.tag === filt.tag)
   && (filt.status === "All" || (filt.status === "Open" ? !f.status : !!f.status));
 
 async function api(route, body) {
@@ -147,12 +184,75 @@ async function api(route, body) {
   return j;
 }
 
-function chips(id, key, opts, allLabel) {
-  const el = document.getElementById(id);
-  el.innerHTML = [[allLabel, "All"], ...opts.map(o => [o, o])]
-    .map(([label, v]) => `<option value="${v}"${filt[key] === v ? " selected" : ""}>${label}</option>`).join("");
-  el.onchange = () => { filt[key] = el.value; if (key === "kind") logicAuto = false; render(); };
+// Mic: record speech, transcribe it on the server (ElevenLabs Scribe v2), and insert it at the cursor.
+let rec = null, micBusy = false;
+const MIC_BOXES = "#edtext, #qtext, #commentbox textarea, textarea.blockedit";
+function micLabel(b) {
+  b.textContent = micBusy ? "Transcribing…" : rec ? "■ Stop" : "🎙 Speak";
+  b.classList.toggle("rec", !!rec); b.disabled = micBusy;
 }
+function addMics() {
+  document.querySelectorAll(MIC_BOXES).forEach(ta => {
+    const row = ta.nextElementSibling;
+    if (!row || row.querySelector(".mic")) return;
+    const b = document.createElement("button");
+    b.className = "mic"; b.title = "Speak instead of typing. Click again to stop.";
+    const bs = row.querySelectorAll("button");
+    bs.length ? bs[0].after(b) : row.prepend(b);
+    micLabel(b);
+    b.onclick = () => toggleMic(ta);
+  });
+}
+new MutationObserver(addMics).observe(document.body, {childList: true, subtree: true});
+async function toggleMic(ta) {
+  if (rec) { rec.stop(); return; }
+  // Find the box again when the text comes back, since a re-render may have replaced it.
+  const key = ta.id ? "#" + ta.id : ta.closest("#commentbox") ? "#commentbox textarea" : "textarea.blockedit";
+  const box = () => document.querySelector(key) || ta;
+  const fail = msg => { const t = box(), e = (t.nextElementSibling && t.nextElementSibling.querySelector(".err")) || document.getElementById("err"); if (e) e.textContent = msg; };
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({audio: true}); }
+  catch (e) { fail("The microphone is blocked: " + e.message); return; }
+  const chunks = [];
+  rec = new MediaRecorder(stream);
+  rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  rec.onstop = async () => {
+    stream.getTracks().forEach(t => t.stop());
+    rec = null; micBusy = true; document.querySelectorAll(".mic").forEach(micLabel);
+    try {
+      const type = (chunks[0] && chunks[0].type) || "audio/webm";
+      const ext = type.includes("mp4") ? "mp4" : type.includes("ogg") ? "ogg" : "webm";
+      const r = await fetch("/api/transcribe/" + ext, {method: "POST", body: new Blob(chunks, {type})});
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.statusText);
+      const t = box(), at = t.selectionStart ?? t.value.length, pre = t.value.slice(0, at);
+      const text = (pre && !/\s$/.test(pre) ? " " : "") + j.text;
+      t.value = pre + text + t.value.slice(t.selectionEnd ?? at);
+      t.focus(); t.selectionStart = t.selectionEnd = at + text.length;
+    } catch (e) { fail(e.message); }
+    micBusy = false; document.querySelectorAll(".mic").forEach(micLabel);
+  };
+  rec.start();
+  document.querySelectorAll(".mic").forEach(micLabel);
+}
+
+// A menu-bar filter, like a macOS menu: its name, and the current choice when
+// it is not the default; a click drops the options, with a check by the choice.
+const MENU_NAME = {kind: "Type", form: "Form", sev: "Severity", tag: "Agreement", status: "Status"};
+let openMenu = null;
+function chips(id, key, opts, allLabel, dflt = "All") {
+  const el = document.getElementById(id), values = [[allLabel, "All"], ...opts.map(o => [o, o])];
+  const cur = values.find(([, v]) => v === filt[key]);
+  // Closed, a menu shows its choice, or its name when the choice is the default.
+  el.innerHTML = `<span class="mbname" title="${MENU_NAME[key]}">${filt[key] !== dflt && cur ? `<b>${esc(cur[0])}</b>` : MENU_NAME[key]} <span class="mbarrow">▾</span></span>`
+    + (openMenu === key ? `<div class="mbmenu">${values.map(([label, v]) =>
+        `<div class="mbitem" data-v="${esc(v)}"><span class="mbcheck">${filt[key] === v ? "✓" : ""}</span>${esc(label)}</div>`).join("")}</div>` : "");
+  el.classList.toggle("open", openMenu === key);
+  el.querySelector(".mbname").onclick = e => { e.stopPropagation(); openMenu = openMenu === key ? null : key; render(); };
+  el.querySelectorAll(".mbitem").forEach(it => it.onclick = e => { e.stopPropagation();
+    filt[key] = it.dataset.v; openMenu = null; if (key === "kind") logicAuto = false; render(); });
+}
+document.addEventListener("click", () => { if (openMenu) { openMenu = null; render(); } });
 
 // Pandoc's identifier for a heading, so [text](#section-name) links resolve.
 const slug = t => t.toLowerCase().replace(/<[^>]+>|\[@[^\]]*\]|[*_`]/g, "").replace(/[^\p{L}\p{N}_\-.\s]/gu, "")
@@ -270,11 +370,32 @@ function renderDraft() {
   // edits keep working on the raw text. Markup characters are hidden, and a few
   // spans (citations, anchors) are drawn as a token in place of their source.
   const hide = new Array(N).fill(false), tok = new Array(N).fill(""), bold = new Array(N).fill(false),
-    ital = new Array(N).fill(false), link = new Array(N).fill(null);
+    ital = new Array(N).fill(false), link = new Array(N).fill(null), script = new Array(N).fill(""), under = new Array(N).fill(false);
   const taken = (a, b) => { for (let k = a; k < b; k++) if (hide[k]) return true; return false; };
   const hideRange = (a, b) => { for (let k = a; k < b; k++) hide[k] = true; };
   const refNum = Object.fromEntries((S.refs || []).map((r, k) => [r.key, k + 1]));
   const citeLink = n => `<a class="cite" href="#ref-${n}">${n}</a>`;
+  if (window.katex) {  // $$display$$ and $inline$ math, by pandoc's rules: no space inside the dollars, no digit after
+    for (const m of text.matchAll(/\$\$([\s\S]+?)\$\$|(?<![\\$])\$(?![\s$])((?:\\.|[^$\n\\])+?)(?<!\s)\$(?!\d)/g)) {
+      try { tok[m.index] = katex.renderToString(m[1] || m[2], {displayMode: !!m[1], throwOnError: true}); }
+      catch (e) { continue; }  // TeX that KaTeX cannot read stays as source
+      hideRange(m.index, m.index + m[0].length);
+    }
+  }
+  // Footnotes: a mark [^id] draws as a superscript number, in order of first use, linked
+  // to its note. A note [^id]: text starts its own paragraph, as pandoc writes it.
+  const fnNum = {}, fnSeen = new Set(), fnId = id => "fn-" + id.replace(/[^\w-]/g, "_");
+  for (const m of text.matchAll(/\[\^([^\]\s]+)\](?!:)/g)) fnNum[m[1]] ??= Object.keys(fnNum).length + 1;
+  for (const m of text.matchAll(/\[\^([^\]\s]+)\](:[ \t]*)?/g)) {
+    if (taken(m.index, m.index + m[0].length)) continue;
+    const id = fnId(m[1]), n = fnNum[m[1]] || "?";
+    const note = m[2] && (m.index === 0 || text[m.index - 1] === "\n");
+    if (m[2] && !note) continue;
+    tok[m.index] = note ? `<a class="fnback" id="${id}" href="#${id}-ref">${n}.</a> `
+                        : `<sup><a class="cite"${fnSeen.has(id) ? "" : ` id="${id}-ref"`} href="#${id}">${n}</a></sup>`;  // the note links back to the first mark
+    if (!note) fnSeen.add(id);
+    hideRange(m.index, m.index + m[0].length);
+  }
   for (const m of text.matchAll(/\[([^\[\]]*@[^\[\]]*)\]/g)) {  // [@Key] and [@A; @B]
     const nums = [...new Set([...m[1].matchAll(/(?<![\w@])-?@([A-Za-z0-9_][\w:.#$%&+?<>~/-]*\w)/g)].map(k => refNum[k[1]]).filter(Boolean))].sort((a, b) => a - b);
     if (!nums.length) continue;
@@ -291,6 +412,19 @@ function renderDraft() {
   for (const m of text.matchAll(/<a\s+(?:id|name)="([^"]+)"\s*>\s*<\/a>/g)) {  // anchors for cross-references
     tok[m.index] = `<span id="${esc(m[1])}"></span>`;
     hideRange(m.index, m.index + m[0].length);
+  }
+  for (const m of text.matchAll(/\\([!-\/:-@\[-`{-~])/g)) {  // an escaped character, as in \* or \[
+    if (!hide[m.index]) hide[m.index] = true;
+  }
+  for (const m of text.matchAll(/<u>([^\n]*?)<\/u>/g)) {  // underlines, as Word files bring; they may hold superscripts
+    const a = m.index, b = a + m[0].length;
+    hideRange(a, a + 3); hideRange(b - 4, b);
+    for (let k = a + 3; k < b - 4; k++) under[k] = true;
+  }
+  for (const m of text.matchAll(/<(sup|sub)>([^<\n]*)<\/\1>/g)) {  // superscripts and subscripts, as Word files bring
+    const a = m.index, open = m[1].length + 2, b = a + m[0].length;
+    hideRange(a, a + open); hideRange(b - open - 1, b);
+    for (let k = a + open; k < b - open - 1; k++) script[k] = m[1];
   }
   for (const m of text.matchAll(/<br\s*\/?>/gi)) {  // a line break, as in a table cell
     tok[m.index] = "<br>";
@@ -318,10 +452,12 @@ function renderDraft() {
   const segs = (i, b) => {
     let out = "";
     while (i < b) {
-      const f = marks[i], bo = bold[i], it = ital[i], ln = link[i]; let j = i;
-      while (j < b && marks[j] === f && bold[j] === bo && ital[j] === it && link[j] === ln) j++;
+      const f = marks[i], bo = bold[i], it = ital[i], ln = link[i], sc = script[i], un = under[i]; let j = i;
+      while (j < b && marks[j] === f && bold[j] === bo && ital[j] === it && link[j] === ln && script[j] === sc && under[j] === un) j++;
       let seg = "";
       for (let k = i; k < j; k++) seg += tok[k] + (hide[k] ? "" : esc(text[k]));
+      if (sc && seg) seg = `<${sc}>${seg}</${sc}>`;
+      if (un && seg) seg = `<u>${seg}</u>`;
       if (it && seg) seg = `<i>${seg}</i>`;
       if (bo && seg) seg = `<b>${seg}</b>`;
       if (ln && seg) {
@@ -410,7 +546,8 @@ function renderDraft() {
     }
     if (para) out += `<p>${segs(para[0], para[1])}</p>`;
     if (items.length) out += listHtml(items);
-    html += items.length ? `<div class="block"${at(a, b)}>${out}</div>` : `<p${at(a, b)}>${segs(a, b)}</p>`;
+    html += items.length ? `<div class="block"${at(a, b)}>${out}</div>`
+      : `<p${/^\[\^[^\]\s]+\]:/.test(raw) ? ' class="fnote"' : ""}${at(a, b)}>${segs(a, b)}</p>`;
   }
   if (S.refs && S.refs.length) {  // the book's format: PLOS style from pandoc, DOI linked
     html += `<h2 id="references">References</h2><ol class="refs">` + S.refs.map((r, k) => `<li id="ref-${k + 1}">` +
@@ -422,22 +559,32 @@ function renderDraft() {
   wireToggle(d);
   d.querySelectorAll("ol.refs a[href^='http']").forEach(e => { e.target = "_blank"; e.rel = "noopener"; });
   d.querySelectorAll(".hl").forEach(e => e.onclick = () => select(+e.dataset.n, false));
-  d.querySelectorAll("[data-a]").forEach(e => e.ondblclick = () => editBlock(e));
+  if (!S.readonly) d.querySelectorAll("[data-a]").forEach(e => e.ondblclick = () => editBlock(e));
+  d.classList.toggle("pdf", !!S.pdf);
 }
+
+// Whether saving a paragraph also reviews it, and how much: remembered in this browser.
+let editPref = {on: true, what: "passage"};
+try { editPref = {...editPref, ...JSON.parse(localStorage.getItem("editReview") || "{}")}; } catch (e) { /* storage may be blocked */ }
 
 function editBlock(el) {
   const a = +el.dataset.a, b = +el.dataset.b, old = S.text.slice(a, b);
   const box = document.createElement("div");
   box.innerHTML = `<textarea class="blockedit">${esc(old)}</textarea>
-    <div class="row" style="margin:6px 0 14px"><button class="bsave">Save</button><button class="bcancel">Cancel</button>
-    <span class="meta">Edits the Markdown of this paragraph · Esc cancels</span><span class="err berr"></span></div>`;
+    <div class="row" style="margin:6px 0 4px"><button class="bsave">Save</button><button class="bcancel">Cancel</button>
+    <span class="meta">Edits the Markdown of this paragraph · Esc cancels</span><span class="err berr"></span></div>
+    <div class="row meta" style="margin:0 0 14px"><label><input type="checkbox" class="brev"${editPref.on ? " checked" : ""}> Review after saving:</label>
+    <select class="brevwhat"><option value="passage"${editPref.what === "passage" ? " selected" : ""}>this passage</option><option value="draft"${editPref.what === "draft" ? " selected" : ""}>the whole draft</option></select></div>`;
   el.replaceWith(box);
   const ta = box.querySelector("textarea");
   ta.style.height = Math.max(80, ta.scrollHeight + 4) + "px";
   ta.focus();
   const cancel = () => renderDraft();
   const save = async () => {
-    try { await api("/api/edit", {old, new: ta.value, start: a}); await load(); }
+    const on = box.querySelector(".brev").checked, what = box.querySelector(".brevwhat").value;
+    editPref = {on, what};
+    try { localStorage.setItem("editReview", JSON.stringify(editPref)); } catch (e) { /* storage may be blocked */ }
+    try { await api("/api/edit", {old, new: ta.value, start: a, review: on ? what : null}); await load(); }
     catch (e) { box.querySelector(".berr").textContent = e.message; }
   };
   box.querySelector(".bsave").onclick = save;
@@ -447,20 +594,38 @@ function editBlock(el) {
 
 function renderCard() {
   const el = document.getElementById("card"), f = S.findings.find(x => x.n === cur);
-  if (!f) { el.innerHTML = '<div class="meta">No findings match these filters.</div>'; return; }
-  const votes = f.votes.map(v => (v.raised ? `<b>${v.model}</b>` : v.model) + " " + ({agree: "✓", partial: "~", disagree: "✗"}[v.vote] || "?")).join(" · ");
+  if (!f) {
+    const done = S.findings.filter(x => x.status).length;
+    el.innerHTML = S.findings.length && done === S.findings.length && filt.status === "Open"
+      ? `<div class="meta">All ${done} findings are done (${S.findings.filter(x => x.status === "accepted").length} accepted, ${S.findings.filter(x => x.status === "declined").length} declined). <a id="showdone" style="cursor:pointer">Show them</a> or click Re-review for a new review.</div>`
+      : '<div class="meta">No findings match these filters.</div>';
+    const sd = document.getElementById("showdone"); if (sd) sd.onclick = () => { filt.status = "All"; render(); };
+    return;
+  }
+  const others = f.votes.filter(v => !v.raised), raisers = f.votes.filter(v => v.raised).length;
+  // Beside the title: the labs that flagged it, then each other model's vote before its icon.
+  const sym = {agree: "✓", partial: "~", disagree: "✗"};
+  const flagged = f.votes.filter(v => v.raised).map(v => icon(v.icon, v.label + " flagged this")).join(" ")
+    + others.map(v => ` <span class="vm" title="${esc(v.label)}: ${v.vote}">${sym[v.vote] || "?"}${icon(v.icon, v.label + ": " + v.vote)}</span>`).join("");
   let actions = "";
   if (!f.status) {
     if (mode === "edit") actions = `<textarea id="edtext">${esc(f.new || "")}</textarea><div class="row" style="margin-top:8px"><button id="save">Apply edited text</button><button id="cancel">Cancel</button></div>`;
+    else if (mode === "answer") actions = `<textarea id="qtext" placeholder="Your answer. The panel proposes the edit that follows from it." style="min-height:70px"></textarea><div class="row" style="margin-top:8px"><button id="send">Send to all panelists</button><button id="cancel">Cancel</button><span class="meta">⌘Enter sends</span></div>`;
     else if (mode === "ask") actions = `<textarea id="qtext" placeholder="Why this change? Would this alternative work?" style="min-height:70px"></textarea><div class="row" style="margin-top:8px"><button id="send">Ask all panelists</button><button id="cancel">Cancel</button><span class="meta">⌘Enter sends</span></div>`;
-    else if (mode === "decline") actions = `<input class="note" id="note" placeholder="Reason, optional"><div class="row"><button id="savedecl">Decline</button><button id="cancel">Cancel</button></div>`;
-    else actions = (f.applicable ? `<button id="acc">Accept</button> <button id="edt">Edit</button> ` : "") + `<button id="dec">Decline</button> <button id="ask">Ask</button>` + (f.applicable ? "" : ` <button id="copy">Copy for agent</button>`);
+    else if (S.readonly) actions = `<button id="dec">Decline</button> <button id="ask">Ask</button>`;
+    else actions = (f.applicable ? `<button id="acc">Accept</button> ` : "")
+      + (f.slot ? `<button id="fill"${f.fill && f.fill.status === "pending" ? " disabled" : ""} title="Search the web for what goes in the blanks">${f.fill && f.fill.status === "pending" ? "Filling…" : "Fill"}</button> ` : "")
+      + (f.form === "question" ? `<button id="answer">Answer</button> ` : "")
+      + (f.editable ? `<button id="edt">Edit</button> ` : "") + `<button id="dec">Decline</button> <button id="ask">Ask</button>` + (f.editable ? "" : ` <button id="copy" title="Copy a one-line request to paste into Claude Code or Codex, which can make this change">Copy for agent</button>`);
   }
-  el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity}${f.kind ? " · " + kindOf(f) : ""} · ${esc(f.section)} · ${f.tag}</div>
-    <div class="title">${esc(f.title)}</div><p class="point">${inline(pointOf(f))}</p>
+  el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity}${f.kind ? " · " + kindOf(f) : ""}${f.form === "question" ? " · Question" : ""} · ${f.tag}${f.added ? " · from your edit" : ""}</div>
+    <div class="title">${esc(f.title)} <span class="flagged">${flagged}</span></div>${f.severity === "Nitpick" ? "" : `<p class="point">${inline(pointOf(f))}</p>`}
     ${f.body.includes("~~") || f.body.includes("🟢") ? `<div class="diff">${f.old != null && f.new != null ? revHtml(f) : diffHtml(f.body)}</div>` : ""}
-    <div class="votes">${votes}</div>
-    ${!f.status && !f.applicable ? `<p class="reason">Cannot apply here: ${esc(f.reason || "it is about the whole draft")}.</p>` : ""}
+
+    ${S.readonly && !f.status ? `<p class="reason">Read-only: make this change in the source document.</p>` : ""}
+    ${!S.readonly && !f.status && !f.applicable && !f.editable && f.form !== "question" ? `<p class="reason">Cannot apply here: ${esc(f.reason || "it is about the whole draft")}.</p>` : ""}
+    ${!f.status && f.fill && f.fill.status === "failed" ? `<p class="reason">Fill found nothing: ${esc(f.fill.reason)}</p>` : ""}
+    ${!f.status && f.fill && f.fill.status === "done" && f.fill.sources && f.fill.sources.length ? `<p class="meta">Filled from ${f.fill.sources.map(u => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u.replace(/^https?:\/\/(www\.)?/, "").slice(0, 50))}</a>`).join(" · ")}</p>` : ""}
     ${!f.status && f.changed ? `<div class="row" style="margin-bottom:6px"><button id="done">Mark done</button></div>` : ""}
     <div class="row">${actions}</div>
     ${f.status ? `<div class="status ${f.status}">${f.note.startsWith("Done: ") ? esc(f.note) : f.status === "accepted" ? (f.note === "fixed by hand" ? "Done: fixed by hand" : "Accepted and written to the file") : "Declined" + (f.note ? ": " + esc(f.note) : "")}</div>` : ""}
@@ -468,16 +633,18 @@ function renderCard() {
     <div class="err" id="err"></div>`;
   const on = (id, fn) => { const b = document.getElementById(id); if (b) b.onclick = fn; };
   on("acc", () => act("/api/accept", {n: f.n}));
+  on("fill", async () => { try { await api("/api/fill", {n: f.n}); await load(); } catch (e) { document.getElementById("err").textContent = e.message; } });
   on("done", () => act("/api/done", {n: f.n}));
   on("edt", () => { mode = "edit"; renderCard(); document.getElementById("edtext").focus(); });
-  on("dec", () => { mode = "decline"; renderCard(); document.getElementById("note").focus(); });
+  on("dec", () => act("/api/decline", {n: f.n, note: ""}));
   on("save", () => act("/api/accept", {n: f.n, text: document.getElementById("edtext").value}));
-  on("savedecl", () => act("/api/decline", {n: f.n, note: document.getElementById("note").value}));
   on("cancel", () => { mode = null; renderCard(); });
   on("ask", () => { mode = "ask"; renderCard(); document.getElementById("qtext").focus(); });
+  on("answer", () => { mode = "answer"; renderCard(); document.getElementById("qtext").focus(); });
   const sendQ = async () => {
-    const q = document.getElementById("qtext").value.trim();
-    if (!q) { document.getElementById("err").textContent = "Type a question first."; return; }
+    const t = document.getElementById("qtext").value.trim();
+    if (!t) { document.getElementById("err").textContent = mode === "answer" ? "Type an answer first." : "Type a question first."; return; }
+    const q = mode === "answer" ? ANSWER + t + "\n\nPropose the edit to the draft that follows from this answer." : t;
     try { await api("/api/ask", {n: f.n, question: q}); mode = null; await load(); }
     catch (e) { document.getElementById("err").textContent = e.message; }
   };
@@ -500,58 +667,138 @@ function revHtml(a) {
     + (n.length - i - j > 0 ? "<ins>" + esc(n.slice(i, n.length - j).join("")) + "</ins>" : "") + esc(o.slice(o.length - j).join(""));
 }
 
+const ANSWER = "My answer: ";  // the author's answer to a question finding, sent to the panel as a question
+
 function thread(f) {
   if (!f.questions || !f.questions.length) return "";
-  return f.questions.map((q, k) => `<div class="qa"><div class="q">You asked: ${esc(q.question)}</div>` +
-    Object.entries(q.answers).map(([m, a]) => `<div class="ans"><div class="who">${esc(a.model)}${a.raised ? " (raised it)" : ""}${a.seconds ? ` · ${a.seconds} s` : ""}</div>` +
+  return f.questions.map((q, k) => `<div class="qa"><div class="q">${q.question.startsWith(ANSWER) ? "You answered: " + esc(q.question.slice(ANSWER.length).split("\n\nPropose the edit")[0]) : "You asked: " + esc(q.question)}</div>` +
+    Object.entries(q.answers).map(([m, a]) => `<div class="ans"><div class="who">${icon(a.icon, a.label || a.model)}${a.seconds ? ` ${a.seconds} s` : ""}</div>` +
       (a.status === "pending" ? `<div class="meta">Thinking…</div>` : a.status === "failed" ? `<div class="err">No answer: ${esc(a.reason || "the model call failed")}</div>` :
         `<div>${inline(a.text)}</div>` + (a.old ? `<div class="diff" style="margin-top:6px">${revHtml(a)}</div>` +
-          (a.applied ? `<div class="status accepted">Applied</div>` : f.status ? "" : a.applicable ? `<button class="accrev" data-q="${k}" data-m="${m}">Accept this version</button>` : `<div class="reason">This version edits text that is not in the draft now (often the panel's proposal rather than your text), so it cannot be applied.</div>`) : "")) +
+          (a.applied ? `<div class="status accepted">Applied</div>` : f.status ? "" : a.applicable ? (S.readonly ? "" : `<button class="accrev" data-q="${k}" data-m="${m}">Accept this version</button>`) : `<div class="reason">This version edits text that is not in the draft now (often the panel's proposal rather than your text), so it cannot be applied.</div>`) : "")) +
       `</div>`).join("") + `</div>`).join("");
 }
+
+// Select text in the draft, then Ask about this: the Ask box opens with the passage quoted.
+const askSel = document.createElement("button");
+askSel.id = "asksel"; askSel.textContent = "?"; askSel.title = "Ask the panel about the selected text"; askSel.hidden = true;
+document.body.appendChild(askSel);
+document.addEventListener("mouseup", e => {
+  if (e.target === askSel) return;
+  setTimeout(() => {
+    const sel = window.getSelection(), text = sel.toString().trim();
+    const draft = document.getElementById("draft");
+    if (!text || !sel.rangeCount || !draft.contains(sel.anchorNode) || !draft.contains(sel.focusNode)) { askSel.hidden = true; return; }
+    // Sit just after the selection's last character, on its line.
+    const rs = sel.getRangeAt(0).getClientRects(), r = rs[rs.length - 1];
+    askSel.hidden = false;
+    const left = Math.min(r.right + 4, document.documentElement.clientWidth - askSel.offsetWidth - 4);
+    askSel.style.left = (left + window.scrollX) + "px";
+    askSel.style.top = (r.top + window.scrollY + (r.height - askSel.offsetHeight) / 2) + "px";
+  });
+});
+askSel.onmousedown = e => e.preventDefault();  // keep the selection while clicking
+askSel.onclick = () => {
+  passage = window.getSelection().toString().trim().replace(/\s+/g, " ");
+  askSel.hidden = true; window.getSelection().removeAllRanges();
+  commentOpen = true; renderSide();
+  document.getElementById("side").scrollTop = 0;
+  document.querySelector("#commentbox textarea").focus();
+};
 
 function commentThreads() {
-  return (S.comments || []).map((c, k) => `<div class="qa"><div class="q">You: ${esc(c.comment)}${c.focus ? " <span class='meta'>(focus for the next Update)</span>" : ""}</div>` +
-    Object.entries(c.answers).map(([m, a]) => `<div class="ans"><div class="who">${esc(a.model || m)}${a.seconds ? ` · ${a.seconds} s` : ""}</div>` +
+  return (S.comments || []).map((c, k) => `<div class="qa">${c.passage ? `<div class="meta passage">About: “${esc(c.passage)}”</div>` : ""}<div class="q">You: ${esc(c.comment)}${c.focus ? " <span class='meta'>(focus for the next Re-review)</span>" : ""}</div>` +
+    Object.entries(c.answers).map(([m, a]) => `<div class="ans"><div class="who">${icon(a.icon, a.label || a.model || m)}${a.seconds ? ` ${a.seconds} s` : ""}</div>` +
       (a.status === "pending" ? `<div class="meta">Thinking…</div>` : a.status === "failed" ? `<div class="err">No answer: ${esc(a.reason || "the model call failed")}</div>` :
         `<div>${inline(a.text)}</div>` + (a.changes || []).map((ch, i) => `<div class="diff" style="margin-top:6px">${revHtml(ch)}</div>` +
-          (ch.applied ? `<div class="status accepted">Applied</div>` : ch.applicable ? `<button class="acccha" data-c="${k}" data-m="${m}" data-i="${i}">Accept this change</button>` : `<div class="reason">This change does not match the current text.</div>`)).join("")) +
+          (ch.applied ? `<div class="status accepted">Applied</div>` : ch.applicable ? (S.readonly ? "" : `<button class="acccha" data-c="${k}" data-m="${m}" data-i="${i}">Accept this change</button>`) : `<div class="reason">This change does not match the current text.</div>`)).join("")) +
       `</div>`).join("") + `</div>`).join("");
 }
 
-function renderTypos() {
-  // Typos are listed together, all checked, and accepted in one step instead of one by one in the draft.
-  const el = document.getElementById("typos"), ty = S.findings.filter(f => f.severity === "Typo" && !f.status && f.applicable);
-  el.hidden = !ty.length;
-  if (!ty.length) return;
-  el.innerHTML = `<div class="listhead"><span class="title">Typos</span> <span class="meta">${ty.length} one-word fixes no other voter disputed · uncheck any to keep</span></div>` +
-    ty.map(f => `<label style="display:flex;gap:8px;align-items:baseline;margin:4px 0;font-size:14px"><input type="checkbox" checked data-n="${f.n}"><span>${f.n}. ${diffHtml(f.body)} <span class="meta">${esc(f.section)}</span></span></label>`).join("") +
-    `<div class="row" style="margin-top:6px"><button id="acctypos">Accept checked</button><span class="err" id="typoerr"></span></div>`;
-  document.getElementById("acctypos").onclick = async () => {
-    const ns = [...el.querySelectorAll("input:checked")].map(x => +x.dataset.n);
-    for (const n of ns) { try { await api("/api/accept", {n}); } catch (e) { document.getElementById("typoerr").textContent = e.message; } }
-    load();
-  };
-}
-
-function renderChecks() {
-  // Problems the script finds without a model, recomputed from the current text on every load.
-  const el = document.getElementById("checks"), cs = S.checks || [];
-  el.hidden = !cs.length;
-  if (!cs.length) return;
-  el.innerHTML = `<div class="listhead"><span class="title">Checks</span> <span class="meta">${cs.length} found by the script, not the panel · click one to jump to it</span></div>` +
-    cs.map(c => `<div class="chk" data-pos="${c.pos}" style="cursor:pointer;font-size:14px;margin:3px 0">${c.id}. <span class="meta">line ${c.line}</span> ${esc(c.what)}${c.fix ? ` <button class="fixc" data-fix="${c.fix}">Fix</button>` : ""}</div>`).join("");
+function renderNits() {
+  // One list for everything small, in draft order: the panel's nitpicks, typos no voter disputed, and
+  // checks the script finds without a model (recomputed from the current text on every load). Typos
+  // start checked and nitpicks that can be applied start unchecked; "Accept checked" applies them together.
+  const el = document.getElementById("nits");
+  const fs = S.findings.filter(f => (f.severity === "Nitpick" || f.severity === "Typo") && !f.status);
+  const rows = [...fs.map(f => ({pos: f.span ? f.span[0] : Infinity, f})), ...(S.checks || []).map(c => ({pos: c.pos, c}))]
+    .sort((a, b) => a.pos - b.pos);
+  el.hidden = !rows.length;
+  if (!rows.length) return;
+  const nTypo = fs.filter(f => f.severity === "Typo").length, nCheck = (S.checks || []).length;
+  const parts = [`${fs.length - nTypo} from the panel`, nTypo && `${nTypo} typo${nTypo > 1 ? "s" : ""}`, nCheck && `${nCheck} found by the script`].filter(Boolean);
+  const box = f => f.applicable && !f.slot && !S.readonly ? `<input type="checkbox" data-n="${f.n}"${f.severity === "Typo" ? " checked" : ""}>` : `<span style="width:13px"></span>`;
+  const row = r => r.f
+    ? `<label class="nit" style="display:flex;gap:8px;align-items:baseline;margin:4px 0;font-size:14px">${box(r.f)}<span>${r.f.n}. ` +
+      (r.f.severity === "Typo" ? `${diffHtml(r.f.body)} <span class="meta">· typo</span>` : `<a data-n="${r.f.n}" style="cursor:pointer">${esc(r.f.title)}</a>`) + `</span></label>`
+    : `<div class="nit chk" data-pos="${r.c.pos}" style="display:flex;gap:8px;align-items:baseline;margin:4px 0;font-size:14px;cursor:pointer"><span style="width:13px"></span>` +
+      `<span>${r.c.id}. <span class="meta">line ${r.c.line}</span> ${esc(r.c.what)} <span class="meta">· found by the script</span>` +
+      `${r.c.fix ? ` <button class="fixc" data-fix="${r.c.fix}">Fix</button>` : ""}</span></div>`;
+  el.innerHTML = `<div class="listhead"><span class="title">Nitpicks</span> <span class="meta">${rows.length} open: ${parts.join(", ")} · click one to jump to it</span></div>` +
+    rows.map(row).join("") +
+    (fs.some(f => f.applicable && !f.slot) && !S.readonly ? `<div class="row" style="margin-top:6px"><button id="accnits">Accept checked</button><span class="err" id="niterr"></span></div>` : "");
+  el.querySelectorAll("a[data-n]").forEach(a => a.onclick = e => { e.preventDefault(); select(+a.dataset.n, true); });
   el.querySelectorAll(".fixc").forEach(x => x.onclick = async e => { e.stopPropagation(); await api("/api/fix", {fix: x.dataset.fix}); load(); });
   el.querySelectorAll(".chk").forEach(x => x.onclick = () => {
     const pos = +x.dataset.pos;
     const b = [...document.querySelectorAll("#draft [data-a]")].find(e => +e.dataset.a <= pos && pos < +e.dataset.b);
     if (b) { centerOn(b); b.classList.remove("flash"); void b.offsetWidth; b.classList.add("flash"); }
   });
+  const acc = document.getElementById("accnits");
+  if (acc) acc.onclick = async () => {
+    const ns = [...el.querySelectorAll("input:checked")].map(x => +x.dataset.n);
+    for (const n of ns) { try { await api("/api/accept", {n}); } catch (e) { document.getElementById("niterr").textContent = e.message; } }
+    load();
+  };
+}
+
+let summaryOpen = true;
+const openThemes = new Set();  // themes the reader opened, kept across re-renders (closed by default)
+function renderSummary() {
+  const el = document.getElementById("sumpanel");
+  document.getElementById("sumbtn").classList.toggle("on", summaryOpen);
+  if (!summaryOpen) { el.innerHTML = ""; return; }
+  const sevs = SEV.map(v => [v, S.findings.filter(f => f.severity === v).length])
+    .filter(([, n]) => n).map(([v, n]) => `<span class="sev ${v}">${n} ${v}</span>`).join(" · ");
+  const order = {Major: 0, Minor: 1, Nitpick: 2};
+  const item = f => `<div><a data-n="${f.n}" class="sev ${f.severity}">${f.severity.slice(0, 3)}</a> <a data-n="${f.n}">${esc(f.title)}</a>${f.status ? ` <span class="meta">· ${f.status}</span>` : ""}</div>`;
+  const outline = fs => `<div class="outline">${fs.sort((a, b) => order[a.severity] - order[b.severity] || a.n - b.n).map(item).join("")}</div>`;
+  const sm = S.summary || {};
+  // Logical flaws are the first theme, built from the findings' types; the
+  // model's themes follow for everything else. All are listed the same way.
+  const logic = S.findings.filter(f => f.kind === "logic");
+  const typed = S.findings.some(f => f.kind);
+  const theme = t => `<li><details data-theme="${esc(t.theme)}"${openThemes.has(t.theme) ? " open" : ""}><summary><b>${esc(t.theme)}</b> <span class="meta">(${t.fs.length})</span></summary>${outline(t.fs)}</details></li>`;
+  const noLogic = !typed ? `<li><b>Logical flaws:</b> this review has no type labels. Re-review to sort them out.</li>`
+    : !logic.length ? `<li><b>Logical flaws:</b> none found.</li>` : "";
+  const used = new Set(logic.map(f => f.n)), themes = logic.length ? [{theme: "Logical flaws", fs: logic}] : [];
+  if (sm.status === "done") {
+    const byN = Object.fromEntries(S.findings.map(f => [f.n, f]));
+    for (const t of sm.themes) themes.push({theme: t.theme, fs: t.findings.filter(n => byN[n] && !used.has(n) && used.add(n)).map(n => byN[n])});
+  }
+  const rest = S.findings.filter(f => !used.has(f.n));
+  if (rest.length) themes.push({theme: sm.status === "done" ? "Other" : "Other findings", fs: rest});
+  const body = (sm.status === "pending" ? `<div class="meta" style="margin:8px 0">Grouping the reviews by theme…</div>`
+      : sm.status === "failed" ? `<div class="err" style="margin:8px 0">No summary: ${esc(sm.reason || "the model call failed")}</div>` : "")
+    + (sm.claim ? `<p style="margin:8px 0"><b>Key claim:</b> ${esc(sm.claim)}</p>` : "")
+    + (S.not_assessed ? `<p class="meta" style="margin:8px 0">${esc(S.not_assessed).replace(/`([^`]+)`/g, "<code>$1</code>")}</p>` : "")
+    + (S.findings.length ? `<ul class="themes">${noLogic}${themes.filter(t => t.fs.length).map(theme).join("")}</ul>`
+       : `<p style="margin:8px 0">No findings in this review.</p>`);
+  // Say whether this summary describes the text as it is now.
+  const er = S.edit_review;
+  const fresh = er && er.status === "pending" ? `<div class="overview banner" style="margin:8px 0;font-size:14px">Reviewing your edit to “${esc(er.passage.slice(0, 80))}${er.passage.length > 80 ? "…" : ""}”. New findings appear at the end of the list, usually within a minute.</div>`
+    : er && er.status === "failed" && !(S.job && S.job.running) ? `<div class="err" style="margin:8px 0">The review of your edit failed: ${esc(er.reason || "unknown error")}</div>`
+    : S.job && S.job.running ? `<div class="overview banner" style="margin:8px 0;font-size:14px">Reviewing the current text now. The new review replaces this one when the panel finishes, usually in a minute or two.</div>`
+    : S.edited && !(er && er.status === "done") ? `<div class="overview banner" style="margin:8px 0;font-size:14px">The draft changed since this review. Click Re-review to review the current text.</div>` : "";
+  el.innerHTML = `<div class="card overview" style="margin-bottom:12px"><div class="row"><span class="title" style="font-size:15px">Summary</span><span class="meta" style="font-size:13px;margin-left:8px">${sevs}</span><span class="spacer"></span><a id="closesum" class="meta" style="cursor:pointer">Hide</a></div>${fresh}${body}</div>`;
+  el.querySelectorAll("a[data-n]").forEach(a => a.onclick = () => select(+a.dataset.n, true));
+  el.querySelectorAll("details[data-theme]").forEach(d => d.ontoggle = () => openThemes[d.open ? "add" : "delete"](d.dataset.theme));
+  document.getElementById("closesum").onclick = () => { summaryOpen = false; renderSide(); };
 }
 
 function renderSide() {
-  renderChecks();
-  renderTypos();
+  renderSummary();
+  renderNits();
   const el = document.getElementById("list"), fs = S.findings.filter(shown);
   el.innerHTML = `<div class="listhead"><span class="title">Findings</span> <span class="meta">${fs.length} shown by the filters above · click one to jump to it</span></div>` +
     fs.map(f => `<div data-n="${f.n}" class="${f.n === cur ? "cur" : ""}">${f.n}. <span class="sev ${f.severity}">${f.severity}</span>${f.kind ? " · " + kindOf(f) : ""} · ${esc(f.title)}${f.seen > 1 ? ` <span class="meta">· in ${f.seen} reviews</span>` : ""}${f.status ? " · " + f.status : ""}</div>`).join("");
@@ -559,22 +806,25 @@ function renderSide() {
   const ov = S.findings.filter(f => shown(f) && !f.span);
   const openLogic = S.findings.filter(f => f.kind === "logic" && !f.status).length;
   const untyped = S.findings.length && S.findings.every(f => !f.kind);
-  const banner = untyped ? `<div class="overview banner" style="margin-bottom:12px">This review has no type labels, so it cannot show logic findings first. Click Update for a new review that has them.</div>`
+  const banner = untyped ? `<div class="overview banner" style="margin-bottom:12px">This review has no type labels, so it cannot show logic findings first. Click Re-review for a new review that has them.</div>`
     : logicAuto ? `<div class="overview banner" style="margin-bottom:12px">Logic first: ${openLogic} logic finding${openLogic === 1 ? "" : "s"} open. Other findings are hidden until these are done, since a passage whose argument fails may be rewritten anyway. <a id="showall">Show everything now</a></div>` : "";
   const box = document.getElementById("commentbox");
   const keep = box ? {text: box.querySelector("textarea").value, focus: box.querySelector("input").checked, active: document.activeElement === box.querySelector("textarea")} : null;
   document.getElementById("overview").innerHTML = banner +
     (ov.length ? `<div class="overview" style="margin-bottom:12px">Whole draft: ${ov.map(f => `<a data-n="${f.n}">${f.n}. ${esc(f.title)}</a>`).join(" · ")}</div>` : "");
   document.getElementById("askpanel").innerHTML = (!commentOpen ? "" :
-    `<div class="card" id="commentbox"><div class="row" style="margin-bottom:6px"><span class="title" style="font-size:15px">Ask about the whole draft</span><span class="spacer"></span><a id="closecomment" class="meta" style="cursor:pointer">Close</a></div><div class="meta" style="font-size:13px;margin-bottom:6px">Goes to ${S.chosen.map(c => c.label).join(", ")}</div>
-      <textarea placeholder="A question, a comment, or a request: Is the hypothesis falsifiable as written? Tighten the wedge section." style="min-height:60px"></textarea>
+    `<div class="card" id="commentbox"><div class="row" style="margin-bottom:6px"><span class="title" style="font-size:15px">${passage ? "Ask about this passage" : "Ask about the whole draft"}</span><span class="spacer"></span><a id="closecomment" class="meta" style="cursor:pointer">Close</a></div><div class="meta" style="font-size:13px;margin-bottom:6px">Goes to ${S.chosen.map(c => icon(c.icon, c.label)).join(" ")}</div>
+      ${passage ? `<div class="meta passage">“${esc(passage)}” <a id="clearpassage" style="cursor:pointer">✕ ask about the whole draft</a></div>` : ""}
+      <textarea placeholder="${passage ? "Is this claim supported? Tighten this. Why is this here?" : "A question, a comment, or a request: Is the hypothesis falsifiable as written? Tighten the wedge section."}" style="min-height:60px"></textarea>
       <div class="row" style="margin-top:6px"><button id="sendc">Ask all panelists</button>
-      <label class="meta"><input type="checkbox"> Use as focus for the next Update</label><span class="err" id="cerr"></span></div>
+      <label class="meta"><input type="checkbox"> Use as focus for the next Re-review</label><span class="err" id="cerr"></span></div>
       ${commentThreads()}</div>`);
   const oc = document.getElementById("opencomment");
   if (oc) oc.onclick = () => { commentOpen = true; renderSide(); document.querySelector("#commentbox textarea").focus(); };
   const cc = document.getElementById("closecomment");
-  if (cc) cc.onclick = () => { commentOpen = false; renderSide(); };
+  if (cc) cc.onclick = () => { commentOpen = false; passage = ""; renderSide(); };
+  const cp = document.getElementById("clearpassage");
+  if (cp) cp.onclick = () => { passage = ""; renderSide(); };
   const nb = document.getElementById("commentbox");
   document.querySelectorAll("#overview a[data-n]").forEach(e => e.onclick = () => select(+e.dataset.n, false));
   const sa0 = document.getElementById("showall"); if (sa0) sa0.onclick = () => { logicAuto = false; filt.kind = "All"; render(); };
@@ -585,7 +835,7 @@ function renderSide() {
   const sendC = async () => {
     const t = nb.querySelector("textarea").value.trim();
     if (!t) { document.getElementById("cerr").textContent = "Type a comment first."; return; }
-    try { await api("/api/comment", {text: t, focus: nb.querySelector("input").checked}); nb.querySelector("textarea").value = ""; await load(); }
+    try { await api("/api/comment", {text: t, focus: nb.querySelector("input").checked, passage}); nb.querySelector("textarea").value = ""; passage = ""; await load(); }
     catch (e) { document.getElementById("cerr").textContent = e.message; }
   };
   document.getElementById("sendc").onclick = sendC;
@@ -598,43 +848,85 @@ function renderSide() {
 }
 
 function render() {
+  document.getElementById("acceptall").hidden = !!(S && S.readonly);
   document.getElementById("name").textContent = S.name;
   document.getElementById("meta").textContent = `Reviewed ${S.started}${S.edited ? ", edited since" : ""}`;
-  document.getElementById("panelbtn").textContent = "Panel ▾";
+  document.getElementById("panelbtn").innerHTML = "Panel " + S.chosen.map(c => icon(c.icon, c.label)).join(" ") + " ▾";
   document.getElementById("fail").textContent = S.failures.length ? "Failed: " + S.failures.map(x => `${x.model} ${x.stage} (${x.reason})`).join("; ") : "";
   const acc = S.findings.filter(f => f.status === "accepted").length, dec = S.findings.filter(f => f.status === "declined").length;
   document.getElementById("tally").textContent = `${acc} accepted · ${dec} declined · ${S.findings.length - acc - dec} open`;
   const job = S.job && S.job.running;
-  const up = document.getElementById("update"); up.textContent = job ? "Reviewing…" : "Update"; up.disabled = !!job;
+  const up = document.getElementById("update"); up.textContent = job ? "Reviewing…" : "Re-review"; up.disabled = !!job;
+  document.getElementById("updmore").disabled = !!job;
   const openLogic = S.findings.filter(f => f.kind === "logic" && !f.status).length;
   if (logicAuto === null) { logicAuto = openLogic > 0; if (logicAuto) filt.kind = "Logic"; }
   if (logicAuto && !openLogic) { logicAuto = false; filt.kind = "All"; }
-  chips("f-kind", "kind", KINDS, "All"); chips("f-sev", "sev", SEV, "All");
+  chips("f-kind", "kind", KINDS, "All"); chips("f-form", "form", ["Edit", "Question"], "All"); chips("f-sev", "sev", SEV, "All");
   chips("f-tag", "tag", TAGS, "Any");
-  const st = document.getElementById("f-status");
-  st.innerHTML = ["Open", "Done", "All"].map(o => `<option${filt.status === o ? " selected" : ""}>${o}</option>`).join("");
-  st.onchange = () => { filt.status = st.value; render(); };
+  chips("f-status", "status", ["Open", "Done"], "All", "Open");
   const vis = S.findings.filter(shown);
   if (!vis.some(f => f.n === cur)) cur = vis.length ? vis[0].n : null;
   renderDraft(); renderCard(); renderSide();
 }
 
 function select(n, scroll) {
+  const f = S.findings.find(x => x.n === n);
+  if (f && f.severity !== "Typo" && !shown(f)) {  // picked from the summary but hidden: lift only the filters that hide it
+    if (filt.kind !== "All" && kindOf(f) !== filt.kind) { filt.kind = "All"; logicAuto = false; }
+    if (filt.form !== "All" && formOf(f) !== filt.form) filt.form = "All";
+    if (filt.sev !== "All" && f.severity !== filt.sev) filt.sev = "All";
+    if (filt.tag !== "All" && f.tag !== filt.tag) filt.tag = "All";
+    if (!shown(f)) filt.status = "All";
+  }
   cur = n; mode = null; render();
   if (scroll) scrollToHl(n, false);
 }
 
-let polling = false;
+let polling = false, editSeen;  // editSeen: the last review of an edit already shown
 async function load() {
   S = await api("/api/state");
+  // Start over set the earlier reviews aside: say so until the new review lands.
+  document.getElementById("side").style.display = S.starting_over ? "none" : "";  // CSS display beats the hidden attribute
+  if (S.starting_over) {
+    const failed = S.job && !S.job.running && !S.job.ok;
+    document.getElementById("overview").innerHTML = "";
+    document.getElementById("draft").innerHTML = failed
+      ? `<div class="err">The new review of ${esc(S.name)} failed. Earlier reviews are in runs/forgotten. Click Re-review to try again.</div>`
+      : `<div class="overview banner" style="font-size:14px">Starting over: the panel is reviewing ${esc(S.name)} as its first version. The new review appears here when it finishes, usually in a minute or two.</div>`;
+    document.getElementById("update").disabled = document.getElementById("updmore").disabled = !failed;
+    document.getElementById("update").textContent = failed ? "Re-review" : "Reviewing…";
+    document.getElementById("tally").textContent = "";
+    if (!failed) setTimeout(load, 3000);
+    return;
+  }
   if (lastRun && S.run !== lastRun) { cur = null; logicAuto = null; filt.kind = "All"; }
   lastRun = S.run;
+  // When a review of an edit lands, go to its first new finding (not on the page's first load).
+  const er = S.edit_review, first = er && er.status === "done" && er.first;
+  const jump = first && editSeen !== undefined && first !== editSeen;
+  editSeen = first || null;
+  if (jump) { const f = S.findings.find(x => x.added === first && !x.status); if (f) { cur = f.n; filt.status = "Open"; filt.kind = "All"; logicAuto = false; mode = null; } }
   if (mode) { renderSide(); } else render();
+  if (jump && cur) select(cur, true);
   const pending = S.findings.some(f => (f.questions || []).some(q => Object.values(q.answers).some(a => a.status === "pending")))
-    || (S.comments || []).some(c => Object.values(c.answers).some(a => a.status === "pending"));
+    || (S.comments || []).some(c => Object.values(c.answers).some(a => a.status === "pending"))
+    || (S.summary && S.summary.status === "pending") || S.findings.some(f => f.fill && f.fill.status === "pending")
+    || (S.edit_review && S.edit_review.status === "pending");
   if ((S.comments || []).some(c => Object.values(c.answers).some(a => a.status === "pending"))) commentOpen = true;
   if ((S.job && S.job.running) || pending) { if (!polling) { polling = true; setTimeout(() => { polling = false; load(); }, pending ? 2000 : 3000); } }
 }
+
+// The server says when the file changes on disk (an edit in another app) or a new review
+// lands, and the page reloads. It waits while a paragraph, a finding's text, or a dictation
+// is in progress. EventSource reconnects by itself after a server restart.
+let stamp = null, stale = false;
+const busy = () => mode === "edit" || mode === "ask" || !!document.querySelector("textarea.blockedit") || !!rec || micBusy;
+new EventSource("/api/events").onmessage = e => {
+  if (stamp !== null && e.data !== stamp) stale = true;
+  stamp = e.data;
+  if (stale && S && !busy()) { stale = false; load(); }
+};
+setInterval(() => { if (stale && S && !busy()) { stale = false; load(); } }, 1000);  // a local check, no request
 
 async function act(route, body) {
   try {
@@ -659,8 +951,8 @@ function drawPanelMenu() {
         }).join(""));
       }).join(""));
     }).join("");
-  el.innerHTML = `<div class="mi meta" style="cursor:default">Used for Update and Ask</div>` +
-    S.chosen.map(c => `<div class="mi">${esc(c.label)}<span class="arrow rm" data-spec="${esc(c.spec)}" title="Remove">✕</span></div>`).join("") +
+  el.innerHTML = `<div class="mi meta" style="cursor:default">Used for Re-review and Ask</div>` +
+    S.chosen.map(c => `<div class="mi">${icon(c.icon, c.label)} ${esc(c.label)}<span class="arrow rm" data-spec="${esc(c.spec)}" title="Remove">✕</span></div>`).join("") +
     `<div class="sep"></div>${add}<div class="mi" id="resetpanel">Reset to default</div>`;
   el.querySelectorAll(".tog").forEach(x => x.onclick = e => { e.stopPropagation(); const k = x.dataset.k;
     openKeys.has(k) ? openKeys.delete(k) : openKeys.add(k); drawPanelMenu(); });
@@ -688,13 +980,113 @@ document.getElementById("card").addEventListener("click", e => {
   if (e.target.closest("button, textarea, input, a, select")) return;
   if (cur != null) goTo(cur);
 });
+// Drop a draft from Finder anywhere on the page. The server finds the original
+// with Spotlight (same name, same bytes), and a new tab reviews it in place.
+const DROP_TYPES = [".pdf", ".docx", ".md", ".txt", ".tex"];
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes("Files");
+document.addEventListener("dragover", e => { if (hasFiles(e)) { e.preventDefault(); document.body.classList.add("dropping"); } });
+document.addEventListener("dragleave", e => { if (!e.relatedTarget) document.body.classList.remove("dropping"); });
+document.addEventListener("drop", async e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();  // never let the browser open the file over this page
+  document.body.classList.remove("dropping");
+  const file = e.dataTransfer.files[0];
+  const toast = document.getElementById("droptoast");
+  const say = html => { toast.innerHTML = html + ` <a class="meta" id="closetoast" style="cursor:pointer;margin-left:8px">Close</a>`; toast.hidden = false;
+    toast.querySelectorAll("a").forEach(a => a.addEventListener("click", () => { toast.hidden = true; })); };
+  if (!file) return;
+  if (!DROP_TYPES.some(t => file.name.toLowerCase().endsWith(t))) { say(`<span class="err">Drop a ${DROP_TYPES.join(", ")} file.</span>`); return; }
+  say(`Looking for ${esc(file.name)} on this Mac…`);
+  try {
+    const r = await fetch("/api/locate/" + encodeURIComponent(file.name), {method: "POST", body: await file.arrayBuffer()});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    const url = j.page || `${location.origin}/open?id=${encodeURIComponent(j.id)}&name=${encodeURIComponent(j.name)}`;
+    // A drop may not count as a click, so the browser can block a new tab: then offer a link.
+    if (window.open(url, "_blank")) toast.hidden = true;
+    else say(`Found ${esc(file.name)}. <a href="${url}" target="_blank">Open its review in a new tab</a>`);
+  } catch (err) { say(`<span class="err">${esc(err.message)}</span>`); }
+});
+
+function save(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+// Download: the review or the edited draft, each as Markdown or Word (a draft that came as a PDF also as PDF).
+let dlOpen = false;
+const FORMAT = {md: "Markdown (.md)", docx: "Word (.docx)", pdf: "PDF (.pdf)"};
+function drawDl() {
+  const el = document.getElementById("dl");
+  const sub = (what, label, fmts, title) => `<div class="mbitem sub" title="${title}"><span>${label}</span><span class="mbarrow">▸</span><div class="mbmenu">` +
+    fmts.map(f => `<div class="mbitem" data-what="${what}" data-fmt="${f}">${FORMAT[f]}</div>`).join("") + `</div></div>`;
+  el.innerHTML = `<span class="mbname">Download <span class="mbarrow">▾</span></span>` + (dlOpen ? `<div class="mbmenu">` +
+    sub("review", "Review", ["md", "docx"], "Every finding with its proposed change") +
+    sub("draft", "Edited draft", (S && S.draft_formats) || ["md", "docx"], "The draft as it is now. A Word draft gets your edits as tracked changes.") +
+    `</div>` : "");
+  el.classList.toggle("open", dlOpen);
+  el.querySelector(".mbname").onclick = e => { e.stopPropagation(); dlOpen = !dlOpen; drawDl(); };
+  el.querySelectorAll(".mbitem[data-fmt]").forEach(it => it.onclick = e => { e.stopPropagation(); dlOpen = false; drawDl(); download(it.dataset.what, it.dataset.fmt); });
+}
+document.addEventListener("click", () => { if (dlOpen) { dlOpen = false; drawDl(); } });
+drawDl();
+async function download(what, fmt) {
+  const name = document.querySelector("#dl .mbname");
+  name.innerHTML = `Making the file… <span class="mbarrow">▾</span>`;
+  try {
+    const r = await fetch(`/api/export/${what}.${fmt}`);
+    if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+    const file = (r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/);
+    save(await r.blob(), file ? file[1] : `${what}.${fmt}`);
+    // A Word draft gets the edits as tracked changes. Ones it could not take are comments in the file.
+    const missed = JSON.parse(decodeURIComponent(r.headers.get("X-Not-Placed") || "%5B%5D"));
+    if (missed.length) alert(`${missed.length} edit${missed.length > 1 ? "s" : ""} could not be placed as tracked changes. Each is a comment on its passage in the Word file, to make by hand.`);
+  } catch (e) { alert(`Could not get the ${what === "review" ? "review" : "draft"}: ${e.message}`); }
+  drawDl();
+}
+document.getElementById("openbtn").onclick = () => window.open(location.origin + "/open", "_blank");
+document.getElementById("sumbtn").onclick = () => { summaryOpen = !summaryOpen; renderSide(); if (summaryOpen) document.getElementById("side").scrollTop = 0; };
 document.getElementById("askbtn").onclick = () => { commentOpen = !commentOpen; renderSide(); const t = document.querySelector("#commentbox textarea"); if (t) { document.getElementById("side").scrollTop = 0; t.focus(); } };
 document.getElementById("update").onclick = async () => { await api("/api/update", {}); load(); };
+// The ▾ beside Re-review: the upload page's choices for a file reviewed before, plus the fact-check.
+document.getElementById("updmore").onclick = e => {
+  e.stopPropagation();
+  const m = document.getElementById("updmenu");
+  if (!m.hidden) { m.hidden = true; return; }
+  m.innerHTML = `<label><input type="radio" name="updmode" value="again" checked><span>Review again<span class="meta">Earlier reviews still apply: open findings carry over, points you declined stay hidden, and recently changed passages are held back.</span></span></label>
+    <label><input type="radio" name="updmode" value="fresh"><span>Start over<span class="meta">Set aside this file's earlier reviews, decisions, and versions (not deleted), and review the current text as version 1.</span></span></label>
+    <hr><label><input type="checkbox" id="updverify"><span>Also fact-check claims<span class="meta">Web search, about 2 more minutes. Writes factcheck.md.</span></span></label>
+    <div class="row"><button id="updrun">Run</button></div>`;
+  m.hidden = false;
+  m.onclick = ev => ev.stopPropagation();
+  document.getElementById("updrun").onclick = async () => {
+    m.hidden = true;
+    const fresh = m.querySelector("input[name=updmode]:checked").value === "fresh";
+    try { await api("/api/update", {fresh, verify: document.getElementById("updverify").checked}); }
+    catch (err) { alert(`Could not start the review: ${err.message}`); }
+    load();
+  };
+};
+document.addEventListener("click", () => { document.getElementById("updmenu").hidden = true; });
 document.getElementById("acceptall").onclick = async () => {
-  const todo = S.findings.filter(f => shown(f) && !f.status && f.applicable);
-  if (!todo.length) return;
-  if (!confirm(`Apply ${todo.length} change${todo.length > 1 ? "s" : ""} to ${S.name}?`)) return;
-  for (const f of todo) { try { await api("/api/accept", {n: f.n}); } catch (e) {} }
+  // Typos live in the Nitpicks list, so they count as shown when nitpicks would be.
+  const open = S.findings.filter(f => !f.status && (shown(f) || (f.severity === "Typo" && shown({...f, severity: "Nitpick"}))));
+  // A change with a blank to fill is left out: it needs Fill or your own data, so it is accepted one by one.
+  const todo = open.filter(f => f.applicable && !f.slot);
+  // What cannot be applied (questions, malformed or misquoted changes) goes to the Word download as comments.
+  if (!todo.length) { alert("Nothing shown can be applied. Questions and changes to make by hand are comments in Download ▸ Edited draft ▸ Word."); return; }
+  // Say why the count is below the "N shown" in the findings list.
+  const vis = S.findings.filter(shown);
+  const left = [[vis.filter(f => f.status).length, "already accepted or declined"],
+                [open.filter(f => !f.applicable).length, "to make by hand"],
+                [open.filter(f => f.applicable && f.slot).length, "with a blank to fill"]]
+    .filter(([k]) => k).map(([k, why]) => `${k} ${why}`);
+  if (!confirm(`Apply ${todo.length} change${todo.length > 1 ? "s" : ""} to ${S.name}?` + (left.length ? `\n\nOf the ${vis.length} shown, left out: ${left.join(", ")}.` : ""))) return;
+  const failed = [];
+  for (const f of todo) { try { await api("/api/accept", {n: f.n}); } catch (e) { failed.push(`${f.n}. ${f.title}: ${e.message}`); } }
+  if (failed.length) alert(`${failed.length} could not be applied, often because an earlier change rewrote the same passage:\n\n${failed.join("\n")}`);
   load();
 };
 document.addEventListener("keydown", e => {
@@ -704,8 +1096,8 @@ document.addEventListener("keydown", e => {
   if (e.key === "j" && i < vis.length - 1) select(vis[i + 1].n, true);
   else if (e.key === "k" && i > 0) select(vis[i - 1].n, true);
   else if (e.key === "a" && f && !f.status && f.applicable) act("/api/accept", {n: f.n});
-  else if (e.key === "e" && f && !f.status && f.applicable) { mode = "edit"; renderCard(); }
-  else if (e.key === "d" && f && !f.status) { mode = "decline"; renderCard(); }
+  else if (e.key === "e" && f && !f.status && f.editable) { mode = "edit"; renderCard(); }
+  else if (e.key === "d" && f && !f.status) act("/api/decline", {n: f.n, note: ""});
   else if (e.key === "q" && f && !f.status) { e.preventDefault(); mode = "ask"; renderCard(); document.getElementById("qtext").focus(); }
 });
 load().catch(e => { document.getElementById("draft").textContent = "Could not load the review: " + e.message; });

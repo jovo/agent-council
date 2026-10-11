@@ -32,15 +32,16 @@ if (!chrome) { console.error('No Chrome found. Set CHROME_PATH.'); process.exit(
 // relative asset and font paths resolve exactly as in deck.html.
 const out = join(deckDir, `.check-${process.pid}.html`);
 const marp = join(repo, 'node_modules', '.bin', 'marp');
-execFileSync(existsSync(marp) ? marp : 'npx', [
-  ...(existsSync(marp) ? [] : ['@marp-team/marp-cli']),
-  '--template', 'bare', '--html', '--allow-local-files',
-  '--theme-set', join(repo, 'theme', 'base.css'),
-  '-o', out, md,
-], { stdio: ['ignore', 'ignore', 'inherit'] });
-
-const browser = await puppeteer.launch({ executablePath: chrome, args: ['--allow-file-access-from-files', ...(process.getuid?.() === 0 ? ['--no-sandbox'] : [])] });
+let browser;
 try {
+  execFileSync(existsSync(marp) ? marp : 'npx', [
+    ...(existsSync(marp) ? [] : ['@marp-team/marp-cli']),
+    '--template', 'bare', '--html', '--allow-local-files',
+    '--theme-set', join(repo, 'theme', 'base.css'),
+    '-o', out, md,
+  ], { stdio: ['ignore', 'ignore', 'inherit'] });
+
+  browser = await puppeteer.launch({ executablePath: chrome, args: ['--allow-file-access-from-files', ...(process.getuid?.() === 0 ? ['--no-sandbox'] : [])] });
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 720 });
   await page.goto(pathToFileURL(out).href, { waitUntil: 'networkidle0' });
@@ -103,6 +104,6 @@ try {
   console.log(`${report.count} slides checked, ${bad} with errors, ${report.slides.length - bad} with warnings only.`);
   process.exitCode = bad ? 1 : 0;
 } finally {
-  await browser.close();
+  if (browser) await browser.close();
   try { (await import('node:fs')).rmSync(out); } catch {}
 }

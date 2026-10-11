@@ -1,0 +1,36 @@
+// A codespace that opens the upload page with no terminal: GitHub asks for the three
+// API keys on the create page, install.sh (with $CODESPACES set) installs the CLIs,
+// and the page opens in the browser once its port is forwarded.
+{
+  "name": "unified-review",
+  "image": "mcr.microsoft.com/devcontainers/python:3",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {}
+  },
+  "containerEnv": {
+    "UNIFIED_REVIEW_PORT": "8737"
+  },
+  "remoteEnv": {
+    "PATH": "/home/vscode/.local/bin:${containerEnv:PATH}"
+  },
+  "secrets": {
+    "ANTHROPIC_API_KEY": {
+      "description": "Claude reviewer. Create a key in the Claude Console.",
+      "documentationUrl": "https://console.anthropic.com/settings/keys"
+    },
+    "CODEX_API_KEY": {
+      "description": "GPT reviewer. An OpenAI API key.",
+      "documentationUrl": "https://platform.openai.com/api-keys"
+    },
+    "CURSOR_API_KEY": {
+      "description": "Gemini reviewer, through Cursor. A user API key from the Cursor dashboard.",
+      "documentationUrl": "https://cursor.com/dashboard"
+    }
+  },
+  "postCreateCommand": "./install.sh",
+  "postAttachCommand": "bin/unified-review --upload",
+  "forwardPorts": [8737],
+  "portsAttributes": {
+    "8737": {"label": "unified-review", "onAutoForward": "openBrowser"}
+  }
+}

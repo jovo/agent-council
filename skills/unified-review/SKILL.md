@@ -35,6 +35,15 @@ The Markdown is a copy: edits there do not reach the PDF's source document.
 figures, tables, or equations is opened by each panelist directly. Findings
 then cite pages, and accepted changes go in the source document.
 
+The file can also be a Word file (.docx). pandoc converts it to Markdown in the
+same folder, with tracked changes accepted, and the review page edits that
+copy. Download on the page gives the review as Markdown, or the edited draft in
+the format it came in. A Word file comes back as the original with each edit
+written in as a tracked change, so its comments, citation fields, styles, and
+layout are untouched. Edits it cannot place (inside an equation, citation, or
+footnote mark, new formatting, new table cells) are listed for the user to make
+by hand. A PDF comes back through make-pdf.
+
 The default panel is `claude,gpt,gemini` (Claude Sonnet, GPT-5.6 Luna at low
 effort, Gemini 3.8 Flash Low via cursor-agent). If one fails, Grok 4.7 Low Fast stands in automatically, so three models
 still vote. Pass
@@ -42,11 +51,17 @@ still vote. Pass
 fact-check or claim verification.
 
 How it works: each panelist reviews without web search, then every panelist
-votes on every finding with reviewers anonymized. The script groups
-duplicates, sets aside findings most voters reject, and writes `unified.md`:
-findings grouped by severity (Critical, Substantive, Polish), each group in
-draft order with its section, file, and line, then a short list of rejected
-findings. There is no cap on findings.
+votes on the other models' findings, never its own, with reviewers anonymized.
+The script groups duplicates, reports a finding only when two models stand
+behind it (a second model raised it, or another voted agree or partial), and
+writes `unified.md`:
+findings grouped by severity (Major, Minor, Nitpick), each group in
+draft order with its section, file, and line, then a short list of findings not
+reported. There is no cap on findings. When the file was reviewed before,
+`unified.md` opens with a "Since the last review" section: three counts and
+their finding numbers, resolved (an earlier finding whose passage changed and
+that no panelist raised again, numbered as in the last review), persisting,
+and new. Report these counts to the user before the findings.
 
 - The review takes about 40 seconds to 2 minutes, then `unified.md` opens in the
   default app for .md files (set UNIFIED_REVIEW_OPEN_APP to change). With `--verify`, a web fact-check (stronger Claude and
@@ -82,7 +97,13 @@ logic findings first, and lets the user ask the panel about a finding or the
 whole draft. Each finding carries a kind (logic, evidence, clarity, style);
 when acting on findings outside the page, take open logic findings first.
 Give the user that
-link and say how many findings there are by severity. Do not paste
+link and say how many findings there are by severity. The page's summary
+opens with the draft's key claim: exactly one claim, in one sentence, that
+makes clear its kind of inference (association, causal effect, benchmark
+result, theorem, or a proposal's aim). It closes with what the panel could not
+assess, such as whether cited sources say what the draft says they do, or,
+for a draft with numbers, code, or data, whether its results reproduce. Pass that
+line on when you report the review. Do not paste
 `unified.md` unless asked. Run `unified-review --page FILE` to reopen the page.
 Decisions made on the page are in the same log as `--applied` and `--ignore`,
 so `--item` and later reviews see them.
@@ -141,6 +162,11 @@ right?".
      `unified-review --ignore 5,7 --note "<their reason, if given>"`.
    - When the user wants a declined point back: `unified-review --unignore D2`
      (D ids are listed under "Previously declined" in `unified.md`).
+   - When the user wants a file's history forgotten (start over, nothing held
+     back to stop churn): `unified-review --forget FILE`. It sets aside the
+     file's earlier reviews, decisions, and versions under `runs/forgotten/`.
+     A Word or PDF file's edited Markdown copy stays, so the next review sees
+     the edited text as version 1.
    Every agent (Claude, Codex, Cursor) records to the same log, so decisions
    made in one are visible in the others. `unified-review --decisions` lists
    them for the current project, and `--item` shows whether an item was
@@ -166,10 +192,11 @@ stopping to ask between rounds.
 3. Apply a finding only if it is in the review's main list (not rejected) and
    either:
    - every voter agreed (every vote is ✓), or
-   - it is Critical or Substantive and a majority of voters agreed (more ✓
+   - it is Major or Minor and a majority of voters agreed (more ✓
      than half the votes; ~ counts as not agreeing).
    Skip everything else, and always skip contested findings, whole-draft
-   findings, and findings whose quoted text is no longer in the file. Do not
+   findings, question findings, and findings whose quoted text is no longer
+   in the file. Do not
    ask about skipped findings during the loop.
 4. Apply edits as in "Addressing items" (minimal, at the current line, fixed
    to the user's writing rules). Then record every decision:
@@ -187,18 +214,29 @@ stopping to ask between rounds.
    it (or prints `OPEN IN APP:`, which you handle as for `unified.md`).
 8. Then give one summary: for each round, the version reviewed, the
    finding numbers applied (with a few words each), and how many were skipped.
-   Then list the skipped findings worth the user's attention: Critical or
-   Substantive findings that were contested or whole-draft, with the run folder
+   Then list the skipped findings worth the user's attention: Major or
+   Minor findings that were contested or whole-draft, with the run folder
    so the user can address them by number (`--run DIR`).
 
 ## Reviewer rules
 
 Reviewer instructions for feedback on drafts. This covers verification and how findings get reported.
 
+### Review method
+
+- Before writing findings, identify up to three central claims or decision-critical commitments. For each, identify the text, analysis, evidence, citation, or stated premise that supports it. Judge whether that support establishes the claim, supports a narrower claim, or leaves the claim unsupported. Do not report the map unless it produces a finding.
+- Apply that map when the draft makes an argument or asks its reader to make a decision. Do not force it onto a simple message, reference list, or other document with no such claim or commitment.
+
 ### What to flag
 
 - Logical gaps, overstated claims, unaddressed counterarguments, internal redundancy.
 - House-style violations: citation key format, equation tagging, cross-reference syntax, table size.
+- Places where the intended reader has to guess: a term or acronym used before it is defined, two words that may name the same thing, a sentence with two readings, steps that may be one test or several, what the draft asks its reader to decide or provide, who decides, and what has to happen first (approval, purchases). Say what you guessed. When a later passage resolves the guess, flag that the information arrives after the first place it was needed.
+- Categories the draft names but does not apply. When it sets up a split, check that each method or condition it mentions falls in exactly one category and that each category is defined well enough to place them. Ask where each one falls when the draft does not say.
+- Mechanisms that cannot produce the stated effect given how the system was built or trained, such as a policy expected to adapt to an input it was never trained on.
+- For each experiment the draft proposes, check that a reader could set it up from the text: the hardware, the task as given to the system (its instruction or goal), what varies and what stays fixed, and for a simulation, what is modeled and what is idealized. Ask about each missing piece.
+- A new term or method introduced without saying why an existing one does not serve.
+- What an expert in the draft's field expects and does not find: standard benchmarks (including well-known ones missing from a list the draft gives), accepted definitions or standards for key terms. Ask, since the omission may be deliberate.
 
 ### What not to touch
 
@@ -207,7 +245,9 @@ Reviewer instructions for feedback on drafts. This covers verification and how f
 
 ### Output format
 
-- Group findings by severity: **Critical** (breaks the argument or is factually wrong), then **Substantive** (weakens the argument or is unclear), then **Polish** (style, phrasing). Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Critical first, so a finding can be cited by number alone. For each finding, state the point, then immediately show its diff, before moving to the next finding. Do not collect all diffs into a separate list at the end.
+- Group findings by severity, judged by one test: do the draft's claims still stand if this goes unfixed? **Major**: no, a claim fails or is unsupported until this is fixed. **Minor**: yes, but the fix makes the draft clearer, more complete, or easier to reproduce. **Nitpick**: style, phrasing, typos, with a few words of point at most and a diff of only the words that change. Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Major first, so a finding can be cited by number alone. For each finding, state the point, then immediately show its diff, before moving to the next finding. Do not collect all diffs into a separate list at the end.
+- For each Major or Minor finding, state the claim or decision affected, the specific evidence, premise, or omission, the consequence for validity or interpretation, and the smallest adequate remedy. For a Major finding about a claim, the remedy is the missing support or the narrower claim the evidence supports. If no claim is affected, state the decision the defect could mislead and why. Keep Nitpicks terse.
+- A question finding has no diff. State the question in one or two sentences, list the readings or options you see, and say which one you assumed. Use it only when the answer is the author's to give. When the draft already implies the answer, propose the edit.
 - Show every diff as an **inline revision of the original text**, not as a `Replace:` / `With:` pair. Strike deletions with `~~tildes~~`. Bold each addition and prefix it with `🟢 `. Tildes mark deletions only, never additions. Leave genuinely unchanged sentences plain, and for a mostly-rewritten paragraph strike the whole old block and follow it with the whole new one rather than a word-level diff.
 
 ### Math and markup inside a diff
