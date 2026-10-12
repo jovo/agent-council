@@ -2924,9 +2924,11 @@ def checks(text, path, deck=False):
         lines = sorted({line(a) for a, _ in spaces})
         found.append((spaces[0][0], f"Two or more spaces where one belongs ({len(spaces)}×, line"
                                     f"{'s' if len(lines) > 1 else ''} {', '.join(map(str, lines[:12]))}"
-                                    f"{', …' if len(lines) > 12 else ''}).", "spaces"))
+                                    f"{', …' if len(lines) > 12 else ''}).", "spaces", spaces))
     found.sort(key=lambda x: x[0])
-    return [{"id": f"M{i}", "line": line(x[0]), "pos": x[0], "what": x[1], "fix": x[2] if len(x) > 2 else None}
+    # spans: the exact characters, where the page marks them (only the spaces check has them).
+    return [{"id": f"M{i}", "line": line(x[0]), "pos": x[0], "what": x[1], "fix": x[2] if len(x) > 2 else None,
+             "spans": [list(sp) for sp in x[3]] if len(x) > 3 else None}
             for i, x in enumerate(found, 1)]
 
 
