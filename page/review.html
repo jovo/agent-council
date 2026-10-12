@@ -357,12 +357,15 @@ function scrollToHl(n, flash) {
 }
 window.addEventListener("resize", () => { const fr = slideFrame(); if (fr) sizeFrame(fr); });
 
+// A Re-review is running: the old review is set aside until the new one lands. Iterate keeps showing each round.
+const rereviewing = () => !!(S && S.job && S.job.running && S.job.kind !== "iterate");
+
 function renderDraft() {
   if (S.deck && deckView === "rendered") { renderSlides(); return; }
   const text = S.text, N = text.length, marks = new Array(N).fill(null);
   const order = f => SEV.indexOf(f.severity) * 1000 + f.n;
   for (const f of S.findings) {
-    if (!f.span || f.status === "accepted" || !shown(f)) continue;
+    if (!f.span || f.status === "accepted" || !shown(f) || rereviewing()) continue;
     const [ms, me] = f.mark || f.span;  // the words the change touches, else the whole passage
     for (let i = ms; i < me; i++) if (!marks[i] || order(f) < order(marks[i])) marks[i] = f;
   }
@@ -789,7 +792,6 @@ function renderSummary() {
   const fresh = er && er.status === "pending" ? `<div class="overview banner" style="margin:8px 0;font-size:14px">Reviewing your edit to “${esc(er.passage.slice(0, 80))}${er.passage.length > 80 ? "…" : ""}”. New findings appear at the end of the list, usually within a minute.</div>`
     : er && er.status === "failed" && !(S.job && S.job.running) ? `<div class="err" style="margin:8px 0">The review of your edit failed: ${esc(er.reason || "unknown error")}</div>`
     : S.job && S.job.running && S.job.kind === "iterate" ? `<div class="overview banner" style="margin:8px 0;font-size:14px">Iterating: ${esc(S.job.progress || "starting")}. Each round reviews the text, applies the findings the panel agrees on, and declines the rest. The page shows the newest review as each round finishes.</div>`
-    : S.job && S.job.running ? `<div class="overview banner" style="margin:8px 0;font-size:14px">Reviewing the current text now. The new review replaces this one when the panel finishes, usually in a minute or two.</div>`
     : S.edited && !(er && er.status === "done") ? `<div class="overview banner" style="margin:8px 0;font-size:14px">The draft changed since this review. Click Re-review to review the current text.</div>` : "";
   el.innerHTML = `<div class="card overview" style="margin-bottom:12px"><div class="row"><span class="title" style="font-size:15px">Summary</span><span class="meta" style="font-size:13px;margin-left:8px">${sevs}</span><span class="spacer"></span><a id="closesum" class="meta" style="cursor:pointer">Hide</a></div>${fresh}${body}</div>`;
   el.querySelectorAll("a[data-n]").forEach(a => a.onclick = () => select(+a.dataset.n, true));
@@ -798,6 +800,12 @@ function renderSummary() {
 }
 
 function renderSide() {
+  const rr = rereviewing();
+  document.getElementById("side").style.display = rr ? "none" : "";  // CSS display beats the hidden attribute
+  if (rr) {
+    document.getElementById("overview").innerHTML = `<div class="overview banner" style="margin-bottom:12px;font-size:14px">Reviewing the current text now. The new review appears here when the panel finishes, usually in a minute or two.</div>`;
+    return;
+  }
   renderSummary();
   renderNits();
   const el = document.getElementById("list"), fs = S.findings.filter(shown);
@@ -1105,7 +1113,7 @@ document.getElementById("acceptall").onclick = async () => {
   load();
 };
 document.addEventListener("keydown", e => {
-  if (["TEXTAREA", "INPUT"].includes(e.target.tagName) || !S) return;
+  if (["TEXTAREA", "INPUT"].includes(e.target.tagName) || !S || rereviewing()) return;
   const vis = S.findings.filter(shown), i = vis.findIndex(f => f.n === cur);
   const f = vis[i];
   if (e.key === "j" && i < vis.length - 1) select(vis[i + 1].n, true);
