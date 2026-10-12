@@ -341,7 +341,7 @@ class Calls(unittest.TestCase):
         def fake(cmd, **kw):
             return SimpleNamespace(returncode=1, stdout="Not logged in", stderr="")
         with mock.patch.object(ur.subprocess, "run", fake), \
-                mock.patch.dict(ur.CHILD_ENV, {"CODEX_API_KEY": "k", "CURSOR_API_KEY": "k"}):
+                mock.patch.dict(ur.runtime.CHILD_ENV, {"CODEX_API_KEY": "k", "CURSOR_API_KEY": "k"}):
             self.assertEqual(ur.preflight(["gpt", "gemini"]), ["gpt", "gemini"])
         self.assertEqual(ur.FAILURES, [])
 
@@ -617,7 +617,7 @@ class Linux(unittest.TestCase):
 class ChildEnv(unittest.TestCase):
     def child_env(self, env):
         with mock.patch.dict(ur.os.environ, env, clear=True):
-            mod = SourceFileLoader("ur_env", str(REPO / "bin" / "unified-review")).load_module()
+            mod = SourceFileLoader("ur_env", str(REPO / "bin" / "unified_review_runtime.py")).load_module()
         return mod.CHILD_ENV
 
     def test_oauth_token_kept_only_outside_claude_code(self):
@@ -790,7 +790,7 @@ class Pipeline(unittest.TestCase):
             ur.FAILURES.clear()
             with mock.patch.object(ur, "call", fake_call), mock.patch.object(ur, "RUNS_DIR", d), \
                  mock.patch.object(ur, "LAST_RUN", d / "last-run"), \
-                 mock.patch.object(ur, "open_file", lambda p: None), mock.patch.object(ur, "log", lambda *a: None):
+                 mock.patch.object(ur, "open_file", lambda p: None), mock.patch.object(ur.runtime, "log", lambda *a: None):
                 ur.foreground([f], draft, panel, "", "rules", out, d, False, [])
             return prompts, json.loads((out / "results.json").read_text()), (out / "unified.md").read_text()
 
@@ -1230,7 +1230,7 @@ class Iterating(unittest.TestCase):
         if not shutil.which("git"):
             self.skipTest("needs git")
         with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
-             mock.patch.object(ur, "log", lambda *a: None):
+             mock.patch.object(ur.runtime, "log", lambda *a: None):
             repo = Path(d) / "repo"
             (repo / "docs").mkdir(parents=True)
             subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -1408,7 +1408,7 @@ class ReviewPage(unittest.TestCase):
                 def poll(self): return None
             page = ur.PageServer(doc)
             kills = []
-            with mock.patch.object(ur.subprocess, "Popen", Job), mock.patch.object(ur, "log", lambda *a: None), \
+            with mock.patch.object(ur.subprocess, "Popen", Job), mock.patch.object(ur.runtime, "log", lambda *a: None), \
                     mock.patch.object(ur.os, "kill", lambda pid, sig: kills.append(pid)):
                 code, _, out = page.handle("POST", "/api/update", {"fresh": True, "verify": True})
             self.assertEqual(kills, [])

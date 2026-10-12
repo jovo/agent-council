@@ -76,6 +76,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
+# Sibling modules live beside the real file, not beside an installed symlink to it.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import unified_review_runtime as runtime  # noqa: E402
+
 SEVERITIES = ["Major", "Minor", "Nitpick"]
 JSON_BODY_LIMIT = 1 * 1024 * 1024
 UPLOAD_BODY_LIMIT = 50 * 1024 * 1024
@@ -118,15 +122,7 @@ def canon_sev(s):
     return OLD_SEVERITIES.get(low) or next((v for v in SEVERITIES if v.lower() == low), s)
 VOTE_SCORE = {"agree": 1.0, "partial": 0.5, "disagree": 0.0}
 VERDICTS = ["contradicted", "unverifiable", "plausible", "confirmed"]  # most cautious first
-TIMEOUT = int(os.environ.get("UNIFIED_REVIEW_TIMEOUT", "900"))
 
-CLAUDE = os.environ.get("CLAUDE_BIN") or shutil.which("claude")
-# The ChatGPT app has shipped its Codex CLI at more than one path. Take the first that exists.
-CODEX = (os.environ.get("CODEX_BIN") or shutil.which("codex")
-         or next((c for c in ["/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
-                              "/Applications/ChatGPT.app/Contents/Resources/codex"]
-                  if os.access(c, os.X_OK)), "codex"))
-CURSOR = os.environ.get("CURSOR_BIN") or shutil.which("cursor-agent")
 
 # Panel name -> (harness, model passed to that harness, display label).
 # Pick one model per lab: same-family judges share biases. Fast settings by
@@ -150,7 +146,6 @@ FACTCHECK_PANELISTS = {
     "gemini": ("cursor", "gemini-3.8-flash-low", "Gemini 3.8 Flash Low"),
     "grok": ("cursor", "grok-4.7-high", "Grok 4.7 High"),
 }
-HARNESS_BIN = {"claude": CLAUDE, "codex": CODEX, "cursor": CURSOR}
 # App that opens unified.md and factcheck.md when they are ready. Empty means:
 # open where the tool was run from (see open_file).
 OPEN_APP = os.environ.get("UNIFIED_REVIEW_OPEN_APP", "")
@@ -167,7 +162,7 @@ def open_file(path):
     """Open a result where the tool was run from: the editor it was run in (Cursor,
     VS Code), the default app from a terminal, or, inside an agent app that cannot
     open files from outside (Claude, Codex), print a line for its agent to act on."""
-    run = lambda cmd: subprocess.run(cmd, stderr=subprocess.DEVNULL, env=CHILD_ENV).returncode == 0
+    run = lambda cmd: subprocess.run(cmd, stderr=subprocess.DEVNULL, env=runtime.CHILD_ENV).returncode == 0
     if sys.platform != "darwin":  # Linux, e.g. a codespace: its editor, else xdg-open, else print
         if os.environ.get("CODESPACES") and shutil.which("code") and run(["code", str(path)]):
             return
@@ -179,7 +174,7 @@ def open_file(path):
     app = os.environ.get("__CFBundleIdentifier", "")
     if app in AGENT_APPS:
         print(f"OPEN IN APP: {path}", flush=True)
-        log(f"open {path} in {AGENT_APPS[app]}")
+        runtime.log(f"open {path} in {AGENT_APPS[app]}")
         return
     cmd = EDITOR_COMMANDS.get(app)
     if cmd and shutil.which(cmd) and run([cmd, str(path)]):
@@ -187,20 +182,6 @@ def open_file(path):
     if app in EDITOR_COMMANDS and run(["open", "-b", app, str(path)]):
         return
     run(["open", str(path)])
-
-# When launched from inside Claude Code, Codex, or Cursor, the parent agent's
-# session variables leak into the child CLIs and break their auth. Drop them.
-LEAKY = re.compile(r"^(CLAUDECODE|CLAUDE_CODE_|CLAUDE_AGENT_SDK_|CODEX_SANDBOX|CURSOR_AGENT)")
-CHILD_ENV = {k: v for k, v in os.environ.items() if not LEAKY.match(k)}
-# Outside Claude Code, CLAUDE_CODE_OAUTH_TOKEN is the user's own login token (from
-# `claude setup-token`, e.g. a Codespaces secret), so keep it.
-if "CLAUDECODE" not in os.environ and os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
-    CHILD_ENV["CLAUDE_CODE_OAUTH_TOKEN"] = os.environ["CLAUDE_CODE_OAUTH_TOKEN"]
-
-
-def log(msg):
-    print(msg, file=sys.stderr, flush=True)
-
 
 EFFORT = {}  # Codex reasoning effort per panelist; "low" when not given
 CLAUDE_MODELS = {"sonnet": "Sonnet", "opus": "Opus", "fable": "Fable", "haiku": "Haiku"}
@@ -215,7 +196,7 @@ def panelist(spec):
     if spec in PANELISTS:
         return spec
     harness, _, model = spec.partition(":")
-    if harness not in HARNESS_BIN or not model:
+    if harness not in runtime.HARNESS_BIN or not model:
         raise ValueError(f"unknown panelist {spec!r}: use a short name ({', '.join(PANELISTS)}) or harness:model")
     model, _, effort = model.partition("@")
     if harness == "claude":
@@ -238,8 +219,8 @@ def cursor_models():
     if _CURSOR_MODELS is None:
         _CURSOR_MODELS = {}
         try:
-            out = subprocess.run([CURSOR, "models"], capture_output=True, text=True, timeout=30,
-                                 stdin=subprocess.DEVNULL, env=CHILD_ENV).stdout if CURSOR else ""
+            out = subprocess.run([runtime.CURSOR, "models"], capture_output=True, text=True, timeout=30,
+                                 stdin=subprocess.DEVNULL, env=runtime.CHILD_ENV).stdout if runtime.CURSOR else ""
         except (OSError, subprocess.SubprocessError):
             out = ""
         for line in out.splitlines():
@@ -250,7 +231,7 @@ def cursor_models():
 
 
 def available(name):
-    b = HARNESS_BIN[PANELISTS[name][0]]
+    b = runtime.HARNESS_BIN[PANELISTS[name][0]]
     return bool(b) and os.access(b, os.X_OK)
 
 
@@ -264,7 +245,7 @@ AUTH_ERROR = re.compile(r"not logged in|logged out|please (?:log ?in|sign in)|lo
 
 def fail(stage, name, reason):
     FAILURES.append({"stage": stage, "model": name, "reason": reason})
-    log(f"  {name}: {stage} failed ({reason})")
+    runtime.log(f"  {name}: {stage} failed ({reason})")
 
 
 def call(name, prompt, out, workdir, web=False, stage="call"):
@@ -277,7 +258,7 @@ def call(name, prompt, out, workdir, web=False, stage="call"):
         if text is not None:
             return text
         if attempt == 1 and not reason.startswith("not logged in"):
-            log(f"  {name}: {stage} attempt 1 failed ({reason}), retrying")
+            runtime.log(f"  {name}: {stage} attempt 1 failed ({reason}), retrying")
             continue
         fail(stage, name, reason + (" after one retry" if attempt == 2 else ""))
         return None
@@ -391,25 +372,25 @@ def call_once(name, prompt, out, workdir, web):
     out, err = Path(out), Path(out).with_suffix(".err")
     if harness == "claude":
         tools = (["Read"] if READ_FILES else []) + (["WebSearch", "WebFetch"] if web else [])
-        cmd = [CLAUDE, "-p", prompt, "--tools", ",".join(tools)] + (["--model", model] if model else [])
+        cmd = [runtime.CLAUDE, "-p", prompt, "--tools", ",".join(tools)] + (["--model", model] if model else [])
         if tools:
             cmd += ["--allowedTools", " ".join(tools)]
     elif harness == "codex":
-        cmd = [CODEX] + (["--search"] if web else []) + (
+        cmd = [runtime.CODEX] + (["--search"] if web else []) + (
             ["-m", model, "-c", f'model_reasoning_effort="{EFFORT.get(name, "low")}"'] if model else []) + [
             "exec", "-s", "read-only", "--skip-git-repo-check", "--ephemeral",
             "--color", "never", "-C", str(workdir), "-o", str(out), prompt]
     else:
-        cmd = [CURSOR, "-p", "--mode", "ask", "--trust", "--output-format", "text",
+        cmd = [runtime.CURSOR, "-p", "--mode", "ask", "--trust", "--output-format", "text",
                "--workspace", str(workdir)] + (["--model", model] if model else []) + [prompt]
     if out.exists():
         out.unlink()
     try:
         with open(err, "w") as ef:
             r = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                               stderr=ef, text=True, env=CHILD_ENV, timeout=TIMEOUT)
+                               stderr=ef, text=True, env=runtime.CHILD_ENV, timeout=runtime.TIMEOUT)
     except subprocess.TimeoutExpired:
-        return None, f"timed out after {TIMEOUT} s"
+        return None, f"timed out after {runtime.TIMEOUT} s"
     except OSError as e:
         return None, f"could not start: {e}"
     if harness != "codex":
@@ -434,13 +415,13 @@ def preflight(panel):
         # An API key in the environment (e.g. a Codespaces secret) logs in the run itself,
         # though `codex login status` still says "Not logged in".
         key = {"codex": "CODEX_API_KEY", "cursor": "CURSOR_API_KEY"}.get(harness)
-        if key and CHILD_ENV.get(key):
+        if key and runtime.CHILD_ENV.get(key):
             return True, ""
-        cmd = {"claude": [CLAUDE, "auth", "status"], "codex": [CODEX, "login", "status"],
-               "cursor": [CURSOR, "status"]}[harness]
+        cmd = {"claude": [runtime.CLAUDE, "auth", "status"], "codex": [runtime.CODEX, "login", "status"],
+               "cursor": [runtime.CURSOR, "status"]}[harness]
         try:
             r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                               env=CHILD_ENV, timeout=30)
+                               env=runtime.CHILD_ENV, timeout=30)
         except (OSError, subprocess.SubprocessError) as e:
             return None, f"status check did not run ({e})"
         outp = r.stdout + r.stderr
@@ -462,7 +443,7 @@ def preflight(panel):
             fail("preflight", m, f"not logged in. Run: {login}")
         else:
             if ok is None:
-                log(f"  {m}: {why}, trying anyway")
+                runtime.log(f"  {m}: {why}, trying anyway")
             keep.append(m)
     return [m for m in panel if m in keep]
 
@@ -479,11 +460,8 @@ def run_timed(timings, key, fn, *a):
     return r
 
 
-QUOTES = str.maketrans("‘’“”", "''\"\"")  # curly quotes, as in PDFs, match straight ones
-
-
 def norm(s):
-    return re.sub(r"\s+", " ", re.sub(r"[*_`~>#\[\]()]", "", (s or "").translate(QUOTES))).strip().lower()
+    return re.sub(r"\s+", " ", re.sub(r"[*_`~>#\[\]()]", "", (s or "").translate(runtime.QUOTES))).strip().lower()
 
 
 # ---------------------------------------------------------------- prompts
@@ -528,7 +506,7 @@ def load_context(paths):
     if total > MAX_CONTEXT:  # trim each file in proportion, and say so
         keep = MAX_CONTEXT / total
         parts = [(n, t[:int(len(t) * keep)] + "\n[... truncated to fit the prompt ...]") for n, t in parts]
-        log(f"context trimmed from {total} to about {MAX_CONTEXT} characters")
+        runtime.log(f"context trimmed from {total} to about {MAX_CONTEXT} characters")
     block = "".join(f'\n<supporting_material file="{n}">\n{t}\n</supporting_material>\n' for n, t in parts)
     return block, "\n".join(t for _, t in parts), [n for n, _ in parts]
 
@@ -1212,7 +1190,7 @@ def pdf_links(p):
 
 
 def words(text):
-    return collections.Counter(re.findall(r"\w+", text.translate(QUOTES).lower()))
+    return collections.Counter(re.findall(r"\w+", text.translate(runtime.QUOTES).lower()))
 
 
 def conversion_gaps(pdf, md):
@@ -1248,7 +1226,7 @@ def conversion_gaps(pdf, md):
 def converted_path(p, text=None):
     """Where a PDF's or Word file's Markdown copy lives, named by its text."""
     text = doc_text(p) if text is None else text
-    return RUNS_DIR / "converted" / f"{p.stem}-{fingerprint(text)[1:]}" / f"{p.stem}.md"
+    return RUNS_DIR / "converted" / f"{p.stem}-{runtime.fingerprint(text)[1:]}" / f"{p.stem}.md"
 
 
 def to_markdown(p):
@@ -1260,26 +1238,26 @@ def to_markdown(p):
     md = converted_path(p, text)
     if md.exists():
         keep_original(p, md)
-        log(f"{p.name}: reviewing its Markdown copy {md}")
+        runtime.log(f"{p.name}: reviewing its Markdown copy {md}")
         return md
     if is_docx(p):
         return docx_to_markdown(p, md)
-    if not CLAUDE:
-        log(f"{p.name}: claude not found, so the panel reads the PDF itself")
+    if not runtime.CLAUDE:
+        runtime.log(f"{p.name}: claude not found, so the panel reads the PDF itself")
         return None
     links = pdf_links(p)
     links = ("Its links (link text -> URL). Use these URLs exactly:\n"
              + "\n".join(f"{t} -> {u}" for t, u in links)) if links else ""
-    log(f"{p.name}: converting to Markdown")
+    runtime.log(f"{p.name}: converting to Markdown")
     try:
-        r = subprocess.run([CLAUDE, "-p", TO_MD.format(path=p, links=links), "--tools", "Read",
+        r = subprocess.run([runtime.CLAUDE, "-p", TO_MD.format(path=p, links=links), "--tools", "Read",
                             "--allowedTools", "Read", "--model", "sonnet"], stdin=subprocess.DEVNULL,
-                           capture_output=True, text=True, env=CHILD_ENV, timeout=TIMEOUT)
+                           capture_output=True, text=True, env=runtime.CHILD_ENV, timeout=runtime.TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as e:
         r = SimpleNamespace(returncode=1, stdout="", stderr=str(e))
     out = re.sub(r"\A\s*```(?:markdown|md)?\n(.*)\n```\s*\Z", r"\1", r.stdout, flags=re.S).strip()
     if r.returncode != 0 or not out:
-        log(f"{p.name}: conversion failed ({(r.stderr.strip().splitlines() or ['no output'])[0][:120]}), "
+        runtime.log(f"{p.name}: conversion failed ({(r.stderr.strip().splitlines() or ['no output'])[0][:120]}), "
             "so the panel reads the PDF itself")
         return None
     md.parent.mkdir(parents=True, exist_ok=True)
@@ -1289,13 +1267,13 @@ def to_markdown(p):
     report = (f"Words of {p.name} missing from {md.name} ({len(missing)}):\n{' '.join(missing)}\n\n"
               f"Words {md.name} added ({len(added)}):\n{' '.join(added)}\n")
     (md.parent / "conversion-check.txt").write_text(report)
-    log(f"{p.name}: Markdown copy at {md}")
+    runtime.log(f"{p.name}: Markdown copy at {md}")
     if missing or added:
         show = lambda ws: " ".join(ws[:15]) + (" ..." if len(ws) > 15 else "")
-        log(f"  check: {len(missing)} words missing ({show(missing)}), {len(added)} added ({show(added)}). "
+        runtime.log(f"  check: {len(missing)} words missing ({show(missing)}), {len(added)} added ({show(added)}). "
             f"Full list: {md.parent / 'conversion-check.txt'}")
     else:
-        log("  check: every word of the PDF is in the Markdown, and nothing was added")
+        runtime.log("  check: every word of the PDF is in the Markdown, and nothing was added")
     return md
 
 
@@ -1312,7 +1290,7 @@ def docx_to_markdown(p, md):
     if r.returncode != 0:
         sys.exit(f"error: could not convert {p.name} to Markdown: {r.stderr.strip()[:200]}")
     keep_original(p, md)
-    log(f"{p.name}: Markdown copy at {md}")
+    runtime.log(f"{p.name}: Markdown copy at {md}")
     return md
 
 
@@ -1488,7 +1466,7 @@ def para_atoms(p):
 
 
 def wnorm(t):
-    return re.sub(r"\s+", " ", t.translate(QUOTES).replace(" ", " ")).strip()
+    return re.sub(r"\s+", " ", t.translate(runtime.QUOTES).replace(" ", " ")).strip()
 
 
 def tokens(t):
@@ -1636,7 +1614,7 @@ class Tracker:
         # Keep the paragraph's own leading and trailing spaces (a footnote starts with one).
         new = text[:len(text) - len(text.lstrip())] + new.strip() + text[len(text.rstrip()):]
         a_tok, b_tok = tokens(text), tokens(new)
-        key = lambda ts: [" " if t.isspace() else t.translate(QUOTES) for t in ts]
+        key = lambda ts: [" " if t.isspace() else t.translate(runtime.QUOTES) for t in ts]
         offs = [0]
         for t in a_tok:
             offs.append(offs[-1] + len(t))
@@ -1882,7 +1860,7 @@ def add_comments(data, notes):
     for note in notes:
         # The quote as Word shows it: no markup, and only up to an equation or footnote mark.
         quote = re.sub(r"^[^<>]*>", "", note.get("quote") or "")  # a quote cut in the middle of a tag drops its tail
-        q = wnorm(re.split(r"\$|\[\^", plain_view(quote)[0])[0])[:60]
+        q = wnorm(re.split(r"\$|\[\^", runtime.plain_view(quote)[0])[0])[:60]
         para = next((p for p, t in zip(paras, texts) if len(q) >= 12 and q in t), None)
         text = note["text"] if para is not None else "(Its passage was not found.) " + note["text"]
         para = para if para is not None else first
@@ -2031,11 +2009,6 @@ def ordered_findings(r):
     return [(n, sev, label, g) for n, (_, sev, label, g) in enumerate(out, 1)]
 
 
-def fingerprint(text):
-    """Short content hash that names a version of a file."""
-    return "v" + hashlib.sha256(text.encode()).hexdigest()[:7]
-
-
 def version_number(path, fp, register=True):
     """SVN-style version of a file: 1 for the first text reviewed, 2 for the next
     different text, and so on. Unchanged text keeps its number. The registry
@@ -2077,7 +2050,7 @@ def file_version(p, text, outdir, number=None):
             git = {"commit": commit, "dirty": bool(run("status", "--porcelain", "--", p.name))}
     except (OSError, subprocess.SubprocessError):
         pass
-    return {"path": str(p), "number": number, "version": fingerprint(text), "copy": str(snap), "git": git}
+    return {"path": str(p), "number": number, "version": runtime.fingerprint(text), "copy": str(snap), "git": git}
 
 
 def version_text(v):
@@ -2091,7 +2064,7 @@ def changed_since(v):
     p = Path(v["path"])
     if not p.exists():
         return "file no longer exists"
-    now = fingerprint(doc_text(p))
+    now = runtime.fingerprint(doc_text(p))
     if now == v["version"]:
         return "unchanged"
     n = version_number(p, now, register=False)
@@ -2334,18 +2307,18 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     declines, applied = active_decisions(files, norm(draft))
     decided = (DECK_NOTE if DECK else "") + decisions_block(declines, applied)
     if declines or applied:
-        log(f"using {len(declines)} declined and {len(applied)} applied points from past rounds")
+        runtime.log(f"using {len(declines)} declined and {len(applied)} applied points from past rounds")
     ctx_block, ctx_text, ctx_names = context or ("", "", [])
     if ctx_names:
-        log(f"supporting material: {', '.join(ctx_names)}")
+        runtime.log(f"supporting material: {', '.join(ctx_names)}")
     single = len(files) == 1 and not is_pdf(files[0])
     earlier = bool(single and runs_for(Path(files[0]).resolve()))  # this file was reviewed before
     prev = previous_open(files[0]) if single else []
     if prev:
-        log(f"carrying {len(prev)} open findings from the last review")
+        runtime.log(f"carrying {len(prev)} open findings from the last review")
     prompt = review_prompt(shown, focus, rules, decided + open_block(prev), ctx_block)
     (outdir / "prompt.md").write_text(prompt)
-    log(f"1/3 review (no web): {', '.join(panel)}")
+    runtime.log(f"1/3 review (no web): {', '.join(panel)}")
 
     def review(m):
         t = time.time()
@@ -2364,11 +2337,11 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
                 fail("review", m, "reply had no findings in the expected format, after one retry")
         timings[f"review_{m}"] = round(time.time() - t, 1)
         if fs is not None:
-            log(f"  {m}: review done, {len(fs)} finding{'' if len(fs) == 1 else 's'} ({timings[f'review_{m}']:.0f} s)")
+            runtime.log(f"  {m}: review done, {len(fs)} finding{'' if len(fs) == 1 else 's'} ({timings[f'review_{m}']:.0f} s)")
         return fs
     found = {m: fs for m, fs in parallel(review, panel).items() if fs is not None}
     if len(found) < len(panel) and STANDIN not in panel:
-        log(f"  {STANDIN} stands in for {', '.join(m for m in panel if m not in found)}")
+        runtime.log(f"  {STANDIN} stands in for {', '.join(m for m in panel if m not in found)}")
         panel = panel + [STANDIN]
         fs = review(STANDIN)
         if fs is not None:
@@ -2387,7 +2360,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
             flat.append({**f, "id": f"{letters[m]}{i}", "pos": position(dnorm, f["quote"])})
     flat.sort(key=lambda f: (f["pos"], f["id"]))
     fmt = lambda f: f"[{f['id']}] ({f['severity']}{', question' if f.get('form') == 'question' else ''}) {f['title']}\nquote: {f['quote'] or '(none)'}\n{f['body']}"
-    log(f"2/3 vote on {len(flat)} findings: {', '.join(ok)}")
+    runtime.log(f"2/3 vote on {len(flat)} findings: {', '.join(ok)}")
 
     def vote(m):
         """A model votes only on other models' findings. Its own are listed for
@@ -2413,15 +2386,15 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
                 fail("vote", m, "reply had no vote lines in the expected format, after one retry")
         timings[f"vote_{m}"] = round(time.time() - t, 1)
         if v:
-            log(f"  {m}: vote done, {len(v)} vote{'' if len(v) == 1 else 's'} ({timings[f'vote_{m}']:.0f} s)")
+            runtime.log(f"  {m}: vote done, {len(v)} vote{'' if len(v) == 1 else 's'} ({timings[f'vote_{m}']:.0f} s)")
         return v or None
     if not flat:  # every reviewer found nothing to change: nothing to vote on
-        log("  no findings to vote on")
+        runtime.log("  no findings to vote on")
         votes = {m: {} for m in ok}
     else:
         votes = {m: v for m, v in parallel(vote, ok).items() if v}
     if len(votes) < len(ok) and STANDIN not in panel:
-        log(f"  {STANDIN} stands in to vote for {', '.join(m for m in ok if m not in votes)}")
+        runtime.log(f"  {STANDIN} stands in to vote for {', '.join(m for m in ok if m not in votes)}")
         panel = panel + [STANDIN]
         v = vote(STANDIN)
         if v:
@@ -2459,7 +2432,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     n_rej = sum(g["rejected"] for g in groups)
     n_dec = sum(bool(g.get("declined")) for g in groups)
     n_held = sum(bool(g.get("held")) for g in groups)
-    log(f"3/3 render: {len(flat)} findings in {len(groups)} groups, {n_rej} rejected by vote"
+    runtime.log(f"3/3 render: {len(flat)} findings in {len(groups)} groups, {n_rej} rejected by vote"
         + (f", {n_dec} held back as previously declined" if n_dec else "")
         + (f", {n_held} held back to stop churn" if n_held else ""))
 
@@ -2573,7 +2546,7 @@ def background(files, draft, panel, outdir, workdir, shown=None):
         "failures": FAILURES, "claims": rows}, indent=1, ensure_ascii=False) + "\n")
     if sys.platform == "darwin":
         subprocess.run(["osascript", "-e", f'display notification "Fact-check done: {files[0].name}" '
-                        f'with title "unified-review"'], stderr=subprocess.DEVNULL, env=CHILD_ENV)
+                        f'with title "unified-review"'], stderr=subprocess.DEVNULL, env=runtime.CHILD_ENV)
     open_file(outdir / "factcheck.md")
 
 
@@ -2583,7 +2556,7 @@ def snapshot(p):
     """Save a copy of the file beside it, named by its version (memo-v8.md), and
     make sure git ignores those copies. Returns the copy's path."""
     p = Path(p).resolve()
-    n = version_number(p, fingerprint(doc_text(p)))
+    n = version_number(p, runtime.fingerprint(doc_text(p)))
     copy = p.with_name(f"{p.stem}-v{n}{p.suffix}")
     shutil.copyfile(p, copy)
     git = lambda *a: subprocess.run(["git", "-C", str(p.parent), *a], capture_output=True, text=True)
@@ -2594,7 +2567,7 @@ def snapshot(p):
         gi = Path(top) / ".gitignore"
         old = gi.read_text() if gi.exists() else ""
         gi.write_text(old + ("" if not old or old.endswith("\n") else "\n") + line + "\n")
-        log(f"added {line} to {gi}")
+        runtime.log(f"added {line} to {gi}")
     return copy
 
 
@@ -2626,13 +2599,13 @@ def iterate(path, rounds, panel, review=review_once):
     Returns [{round, version, run, applied: [[n, title]], skipped, attention: [[n, title]]}]."""
     p = Path(path).resolve()
     snapshot(p)
-    start = version_number(p, fingerprint(doc_text(p)))
+    start = version_number(p, runtime.fingerprint(doc_text(p)))
     done = []
     for i in range(1, rounds + 1):
-        version = version_number(p, fingerprint(doc_text(p)))
-        log(f"iterate: round {i} of {rounds}, reviewing version {version}")
+        version = version_number(p, runtime.fingerprint(doc_text(p)))
+        runtime.log(f"iterate: round {i} of {rounds}, reviewing version {version}")
         if not review(p, panel):
-            log(f"iterate: the review in round {i} failed, stopping")
+            runtime.log(f"iterate: the review in round {i} failed, stopping")
             break
         run = runs_for(p)[0]
         st = page_state(p, run)
@@ -2649,13 +2622,13 @@ def iterate(path, rounds, panel, review=review_once):
         done.append({"round": i, "version": version, "run": str(run), "applied": [[f["n"], f["title"]] for f in applied], "skipped": len(left),
                      "attention": [[f["n"], f["title"]] for f in left if f["severity"] in ("Major", "Minor")
                                    and (f["tag"] == "Contested" or f["where"] == "overview")]})
-        log(f"iterate: round {i} applied {len(applied)}, skipped {len(left)}")
+        runtime.log(f"iterate: round {i} applied {len(applied)}, skipped {len(left)}")
         if not applied:
             break
         snapshot(p)
     if any(r["applied"] for r in done):
         out = write_changes(p, start)
-        log(f"iterate: changes since version {start} are in {out}")
+        runtime.log(f"iterate: changes since version {start} are in {out}")
     return done
 
 
@@ -2708,7 +2681,7 @@ def write_changes(p, start):
     old = p.with_name(f"{p.stem}-v{start}{p.suffix}")
     if not old.exists():
         sys.exit(f"error: no saved copy of version {start}: {old}")
-    now = version_number(p, fingerprint(doc_text(p)))
+    now = version_number(p, runtime.fingerprint(doc_text(p)))
     body = changes(old.read_text(), p.read_text())
     out = p.with_name(f"{p.stem}-v{start}-to-v{now}{p.suffix}")
     head = [f"# {p.name}: changes from version {start} to version {now}, {time.strftime('%Y-%m-%d %H:%M')}",
@@ -2994,13 +2967,13 @@ def carry_over(groups, prev, dnorm):
 def reviewed_history(path, current):
     """Earlier reviewed texts of a file, oldest first, one per version, not
     counting the current text."""
-    seen, out = {fingerprint(current)}, []
+    seen, out = {runtime.fingerprint(current)}, []
     for run in reversed(runs_for(Path(path).resolve())):
         copy = run / "reviewed" / Path(path).name
         if copy.exists():
             t = copy.read_text()
-            if fingerprint(t) not in seen:
-                seen.add(fingerprint(t))
+            if runtime.fingerprint(t) not in seen:
+                seen.add(runtime.fingerprint(t))
                 out.append(t)
     return out
 
@@ -3175,25 +3148,6 @@ def placed_diff(text, body, quote, slots=False):
     return old, new, edits
 
 
-# Inline markup a reviewer quoting the text as it reads leaves out: bold and italic
-# asterisks, underline and super- and subscript tags (as Word files bring), and the
-# backslash of an escaped character (\# for #).
-MARKUP = re.compile(r"\*\*|(?<!\\)\*|</?(?:u|sup|sub)>|\\(?=[!-/:-@\[-`{-~])")
-
-
-def plain_view(text):
-    """(text without inline markup, idx) where idx[i] is the position in text of
-    the plain text's character i."""
-    plain, idx, at = [], [], 0
-    for m in MARKUP.finditer(text):
-        plain.append(text[at:m.start()])
-        idx.extend(range(at, m.start()))
-        at = m.end()
-    plain.append(text[at:])
-    idx.extend(range(at, len(text)))
-    return "".join(plain), idx
-
-
 def trim_overlap(text, a, b, new):
     """An edit (a, b, new) whose new text ends with the text that already follows
     it in the draft, trimmed so that text is not added twice. Reading 🟢 without
@@ -3203,12 +3157,12 @@ def trim_overlap(text, a, b, new):
     keep = 0
     while keep < min(b - a, len(new)) and text[a + keep] == new[keep]:
         keep += 1
-    after = plain_view(text[b:b + len(new) + 40])[0]
+    after = runtime.plain_view(text[b:b + len(new) + 40])[0]
     for k in range(keep, len(new)):
-        tail = plain_view(new[k:])[0]
+        tail = runtime.plain_view(new[k:])[0]
         if tail and after.startswith(tail):  # the longest overlap, down to a closing period
             return a, b, new[:k]
-    added = plain_view(new[keep:])[0]
+    added = runtime.plain_view(new[keep:])[0]
     if len(added) >= 12 and added[-12:] in after:  # it would repeat what follows, with a word changed: unclear
         return None
     return a, b, new
@@ -3221,13 +3175,13 @@ def find_span(text, needle, near=None):
     if not needle.strip():
         return None
     def search(hay, needle):
-        parts = [re.escape(w.translate(QUOTES)) for w in needle.split()]
+        parts = [re.escape(w.translate(runtime.QUOTES)) for w in needle.split()]
         pat = r"\s+".join(parts).replace("'", "['‘’]").replace('"', '["“”]')
         return [(m.start(), m.end()) for m in re.finditer(pat, hay)]
     hits = search(text, needle)
     if not hits:  # the reviewer quoted the text as it reads, without its markup
-        plain, idx = plain_view(text)
-        bare = plain_view(needle)[0]
+        plain, idx = runtime.plain_view(text)
+        bare = runtime.plain_view(needle)[0]
         if plain != text and bare.strip():
             hits = [(idx[a], idx[b - 1] + 1) for a, b in search(plain, bare)]
     if not hits:
@@ -3248,8 +3202,8 @@ def narrow(text, s, e, new):
     to "depicted in f" changes only the c. A new text with markup of its own
     replaces the whole passage."""
     seg = text[s:e]
-    plain, idx = plain_view(seg)
-    if plain == seg or plain_view(new)[0] != new:
+    plain, idx = runtime.plain_view(seg)
+    if plain == seg or runtime.plain_view(new)[0] != new:
         return s, e, new
     p = 0
     while p < min(len(plain), len(new)) and plain[p] == new[p]:
@@ -3266,7 +3220,7 @@ def narrow(text, s, e, new):
     # affinity") widen it to the whole pair, so no tag is left open. The widened
     # part keeps its text but not its markup.
     pairs, open_ = [], {}
-    for m in MARKUP.finditer(text, s, e):
+    for m in runtime.MARKUP.finditer(text, s, e):
         tok = m[0].replace("/", "")
         if tok.startswith("\\"):
             continue
@@ -3285,7 +3239,7 @@ def narrow(text, s, e, new):
             if oe == a and cs == b:
                 a, b = os_, ce
     if (a, b) != (a0, b0):
-        repl = plain_view(text[a:a0])[0] + repl + plain_view(text[b0:b])[0]
+        repl = runtime.plain_view(text[a:a0])[0] + repl + runtime.plain_view(text[b0:b])[0]
     return a, b, repl
 
 
@@ -3482,7 +3436,7 @@ def page_state(path, run):
         starts = []
     vers = (r.get("versions") or [{}])[0]
     return {"file": str(path), "name": Path(path).name, "run": run.name, "version": vers.get("number"),
-            "edited": bool(vers.get("version")) and fingerprint(text) != vers.get("version"),
+            "edited": bool(vers.get("version")) and runtime.fingerprint(text) != vers.get("version"),
             "readonly": read_only(path), "pdf": is_pdf(path),
             "draft_formats": ["md", "docx"] + (["pdf"] if is_pdf(original_of(path) or "") else []),
             "chosen": [{"spec": m, "label": label(panelist(m)), "icon": lab_icon(m)} for m in page_panel(path)],
@@ -4969,7 +4923,7 @@ def open_page(path):
         opener = shlex.split(os.environ.get("BROWSER", "")) or ([shutil.which("xdg-open")] if shutil.which("xdg-open") else [])
         cmd = opener + [url] if opener else None
     if cmd:
-        subprocess.run(cmd, stderr=subprocess.DEVNULL, env=CHILD_ENV)
+        subprocess.run(cmd, stderr=subprocess.DEVNULL, env=runtime.CHILD_ENV)
     print(f"Review page: {url}", flush=True)
     return True
 
@@ -5124,7 +5078,7 @@ def main():
         wanted = len(panel)
         panel = preflight(panel)
         if len(panel) < wanted and STANDIN not in panel and available(STANDIN) and preflight([STANDIN]):
-            log(f"{STANDIN} stands in for the panelist that is not available")
+            runtime.log(f"{STANDIN} stands in for the panelist that is not available")
             panel.append(STANDIN)
         if not panel:
             sys.exit("error: no panelist is logged in")
@@ -5151,13 +5105,13 @@ def main():
     global READ_FILES
     READ_FILES = bool(direct)
     for p in direct:
-        log(f"{p.name}: has {' and '.join(pdf_extras(p))}, so the panel reads the PDF itself")
+        runtime.log(f"{p.name}: has {' and '.join(pdf_extras(p))}, so the panel reads the PDF itself")
     numbers = [None] * len(files)
     if a.outdir:
         outdir = Path(a.outdir).resolve()
     else:
         # Name runs <date>-<time>-<project>-<file>-v<N>, with -run2, -run3 within the same minute.
-        numbers = [version_number(p, fingerprint(t)) for p, t in zip(files, texts)]
+        numbers = [version_number(p, runtime.fingerprint(t)) for p, t in zip(files, texts)]
         # A date-time prefix sorts runs by when they were made.
         base = RUNS_DIR / f"{time.strftime('%Y-%m-%d-%H%M')}-{project_name(workdir)}-{files[0].stem}-v{numbers[0]}"
         outdir, k = base, 1
@@ -5176,10 +5130,10 @@ def main():
     global DECK
     DECK = a.slides or (len(files) == 1 and is_deck(files[0], texts[0]))
     if DECK:
-        log("reviewing as a slide deck, with the slides skill's rules")
+        runtime.log("reviewing as a slide deck, with the slides skill's rules")
         rules += "\n\n" + re.sub(r"\A---\n.*?\n---\n", "", (Path(__file__).resolve().parent.parent / "skills" / "slides" / "SKILL.md").read_text(), flags=re.S)
-    log(f"review rules: {source}")
-    log(f"output -> {outdir}")
+    runtime.log(f"review rules: {source}")
+    runtime.log(f"output -> {outdir}")
 
     if a.verify:
         # Start the fact-check first, detached, so it outlives this process.
@@ -5187,13 +5141,13 @@ def main():
             subprocess.Popen([sys.executable, os.path.abspath(__file__), "--factcheck-only",
                               "-p", ",".join(panel), "-o", str(outdir)] + [str(p) for p in files],
                              stdin=subprocess.DEVNULL, stdout=fl, stderr=fl, start_new_session=True)
-        log("fact-check started in the background")
+        runtime.log("fact-check started in the background")
 
     t = time.time()
     versions = [file_version(p, t, outdir, n) for p, t, n in zip(files, texts, numbers)]
     context = load_context(a.context) if a.context else None
     unified = foreground(files, draft, panel, a.focus, rules, outdir, workdir, a.verify, versions, context, shown)
-    log(f"review done in {round(time.time() - t)} s." + (
+    runtime.log(f"review done in {round(time.time() - t)} s." + (
         " Fact-check still running; factcheck.md opens when it finishes." if a.verify else ""))
     # One Markdown file opens its review page; a PDF, several files, or an
     # Re-review from the page itself keep to unified.md.
