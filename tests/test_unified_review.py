@@ -1427,6 +1427,32 @@ class ReviewPage(unittest.TestCase):
             self.assertNotIn("--verify", started[1])
             self.assertEqual(len(ur.runs_for(doc)), 1)
 
+    def test_each_page_logs_its_own_rereview_and_reports_its_progress(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+            docs = [Path(d).resolve() / "a.md", Path(d).resolve() / "b.md"]
+            class Job:
+                def __init__(self, cmd, stdout=None, **kw): self.out = stdout
+                def poll(self): return None
+            pages = []
+            for doc in docs:
+                doc.write_text("# Memo\n\nText.\n")
+                page = ur.PageServer(doc)
+                with mock.patch.object(ur.subprocess, "Popen", Job), mock.patch.object(ur, "runs_for", lambda p: []):
+                    page.handle("POST", "/api/update", {})
+                pages.append(page)
+            self.assertNotEqual(pages[0].job_log, pages[1].job_log)  # two pages never share a log
+            pages[0].job.out.write("1/3 review (no web): claude, gpt\n  gpt: review done, 12 findings (31 s)\n")
+            pages[0].job.out.flush()
+            st = pages[0].job_state()
+            self.assertEqual((st["running"], st["kind"]), (True, "review"))
+            self.assertEqual([(s["label"], s["state"]) for s in st["stages"]], [("Review", "running")])
+            self.assertEqual({m["name"]: m["state"] for m in st["stages"][0]["models"]}, {"claude": "running", "gpt": "done"})
+            self.assertIn("  gpt: review done, 12 findings (31 s)", st["log"])
+            self.assertGreaterEqual(st["elapsed"], 0)
+            self.assertEqual(pages[1].job_state()["stages"], [])  # the other page's log is untouched
+            for p in pages:
+                p.job.out.close()
+
     def test_parse_answer(self):
         cur = "Intro. We test the links first, which leave one link open. End."
         ans, old, new, ok = ur.parse_answer("Not Critical.\n\nREVISED: We test the links first~~, which leave one link open~~ 🟢 **and name what would refute them**.", cur)

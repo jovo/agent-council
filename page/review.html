@@ -89,6 +89,11 @@ input.note{width:100%;border:1px solid var(--line);border-radius:6px;padding:4px
 #updmenu hr{border:0;border-top:1px solid var(--line);margin:4px 0}#updmenu .row{padding:6px 12px}
 .hl.flash,#draft [data-a].flash,.dsp.flash{animation:flash 1.2s ease-out}
 .dsp{white-space:pre-wrap;background:var(--pol);border-radius:3px}
+.stages{margin:10px 0 0;font-size:15px}
+.stage{padding:6px 0;border-bottom:1px solid var(--line)}
+.stage.running>b{color:var(--ink)}.stage.done>b,.stage.done .models{color:var(--muted)}.stage .failed{color:var(--crit-ink)}
+.models{display:flex;flex-wrap:wrap;gap:4px 18px;margin:2px 0 0 20px;font-size:14px}
+.joblog pre{white-space:pre-wrap;font:13px/1.45 ui-monospace,Menlo,monospace;color:var(--muted);margin:6px 0 0}
 @keyframes flash{0%{box-shadow:0 0 0 4px var(--focus)}100%{box-shadow:0 0 0 0 transparent}}
 #card{cursor:pointer}
 .ico{display:inline-block;width:15px;height:15px;vertical-align:-2px;background-color:currentColor;-webkit-mask-size:contain;mask-size:contain;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-position:center;mask-position:center}
@@ -359,6 +364,21 @@ function scrollToHl(n, flash) {
   if (flash) { h.el.classList.remove("flash"); void h.el.offsetWidth; h.el.classList.add("flash"); }
 }
 window.addEventListener("resize", () => { const fr = slideFrame(); if (fr) sizeFrame(fr); placeBar(); });
+
+// A running review's progress, as the upload page shows it: each stage, each model's state in it, and the log.
+const clock = s => s < 60 ? `${s} s` : `${Math.floor(s / 60)} m ${String(s % 60).padStart(2, "0")} s`;
+let logOpen = false;  // the Log stays open across the page's refreshes
+document.addEventListener("toggle", e => { if (e.target.classList && e.target.classList.contains("joblog")) logOpen = e.target.open; }, true);
+function progress(j) {
+  if (!j || !j.running) return "";
+  const mark = {done: "✓", failed: "✗", running: "…"};
+  return `<div class="stages">` + (j.stages || []).map(st => `<div class="stage ${st.state}"><b>${mark[st.state]} ${esc(st.label)}</b>` +
+    (st.secs ? ` <span class="meta">${clock(st.secs)}</span>` : "") +
+    (st.models.length ? `<div class="models">` + st.models.map(m => `<span class="${m.state}">${mark[m.state]} ${esc(m.name)}` +
+      ` <span class="meta">${esc(m.note || (m.state === "running" && st.state === "running" ? "working" : ""))}</span></span>`).join("") + `</div>` : "") +
+    `</div>`).join("") + `</div>` +
+    ((j.log || []).length ? `<details class="joblog meta"${logOpen ? " open" : ""}><summary>Log</summary><pre>${esc(j.log.join("\n"))}</pre></details>` : "");
+}
 
 // A Re-review is running: the old review is set aside until the new one lands. Iterate keeps showing each round.
 const rereviewing = () => !!(S && S.job && S.job.running && S.job.kind !== "iterate");
@@ -834,7 +854,7 @@ function renderSide() {
   const rr = rereviewing();
   document.getElementById("side").style.display = rr ? "none" : "";  // CSS display beats the hidden attribute
   if (rr) {
-    document.getElementById("overview").innerHTML = `<div class="overview banner" style="margin-bottom:12px;font-size:14px">Reviewing the current text now. The new review appears here when the panel finishes, usually in a minute or two.</div>`;
+    document.getElementById("overview").innerHTML = `<div class="overview banner" style="margin-bottom:12px;font-size:14px">Reviewing the current text now, for ${clock(S.job.elapsed || 0)}. The new review appears here when the panel finishes, usually in a minute or two.${progress(S.job)}</div>`;
     return;
   }
   renderSummary();
@@ -932,7 +952,7 @@ async function load() {
     document.getElementById("overview").innerHTML = "";
     document.getElementById("draft").innerHTML = failed
       ? `<div class="err">The new review of ${esc(S.name)} failed. Earlier reviews are in runs/forgotten. Click Re-review to try again.</div>`
-      : `<div class="overview banner" style="font-size:14px">Starting over: the panel is reviewing ${esc(S.name)} as its first version. The new review appears here when it finishes, usually in a minute or two.</div>`;
+      : `<div class="overview banner" style="font-size:14px">Starting over: the panel is reviewing ${esc(S.name)} as its first version. The new review appears here when it finishes, usually in a minute or two.${progress(S.job)}</div>`;
     document.getElementById("update").disabled = document.getElementById("updmore").disabled = !failed;
     document.getElementById("update").textContent = failed ? "Re-review" : "Reviewing…";
     document.getElementById("tally").textContent = "";
