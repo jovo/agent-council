@@ -87,7 +87,8 @@ input.note{width:100%;border:1px solid var(--line);border-radius:6px;padding:4px
 .menu .sub:hover>.menu{display:block}
 #updmenu label{display:flex;gap:8px;align-items:flex-start;padding:6px 12px;cursor:pointer}#updmenu label .meta{display:block;font-size:13px}
 #updmenu hr{border:0;border-top:1px solid var(--line);margin:4px 0}#updmenu .row{padding:6px 12px}
-.hl.flash{animation:flash 1.2s ease-out}
+.hl.flash,#draft [data-a].flash,.dsp.flash{animation:flash 1.2s ease-out}
+.dsp{white-space:pre-wrap;background:var(--pol);border-radius:3px}
 .stages{margin:10px 0 0;font-size:15px}
 .stage{padding:6px 0;border-bottom:1px solid var(--line)}
 .stage.running>b{color:var(--ink)}.stage.done>b,.stage.done .models{color:var(--muted)}.stage .failed{color:var(--crit-ink)}
@@ -396,6 +397,9 @@ function renderDraft() {
   // spans (citations, anchors) are drawn as a token in place of their source.
   const hide = new Array(N).fill(false), tok = new Array(N).fill(""), bold = new Array(N).fill(false),
     ital = new Array(N).fill(false), link = new Array(N).fill(null), script = new Array(N).fill(""), under = new Array(N).fill(false);
+  // Spaces a script check found, such as a double space, drawn so they can be seen: chk holds the check's id.
+  const chk = new Array(N).fill("");
+  for (const c of S.checks || []) for (const [a, b] of c.spans || []) for (let k = a; k < b; k++) chk[k] = c.id;
   const taken = (a, b) => { for (let k = a; k < b; k++) if (hide[k]) return true; return false; };
   const hideRange = (a, b) => { for (let k = a; k < b; k++) hide[k] = true; };
   const refNum = Object.fromEntries((S.refs || []).map((r, k) => [r.key, k + 1]));
@@ -477,10 +481,11 @@ function renderDraft() {
   const segs = (i, b) => {
     let out = "";
     while (i < b) {
-      const f = marks[i], bo = bold[i], it = ital[i], ln = link[i], sc = script[i], un = under[i]; let j = i;
-      while (j < b && marks[j] === f && bold[j] === bo && ital[j] === it && link[j] === ln && script[j] === sc && under[j] === un) j++;
+      const f = marks[i], bo = bold[i], it = ital[i], ln = link[i], sc = script[i], un = under[i], ck = chk[i]; let j = i;
+      while (j < b && marks[j] === f && bold[j] === bo && ital[j] === it && link[j] === ln && script[j] === sc && under[j] === un && chk[j] === ck) j++;
       let seg = "";
       for (let k = i; k < j; k++) seg += tok[k] + (hide[k] ? "" : esc(text[k]));
+      if (ck && seg) seg = `<span class="dsp" data-c="${ck}" title="Two or more spaces">${seg}</span>`;
       if (sc && seg) seg = `<${sc}>${seg}</${sc}>`;
       if (un && seg) seg = `<u>${seg}</u>`;
       if (it && seg) seg = `<i>${seg}</i>`;
@@ -779,7 +784,7 @@ function renderNits() {
   const row = r => r.f
     ? `<label class="nit" style="display:flex;gap:8px;align-items:baseline;margin:4px 0;font-size:14px">${box(r.f)}<span>${r.f.n}. ` +
       (r.f.severity === "Typo" ? `${diffHtml(r.f.body)} <span class="meta">· typo</span>` : `<a data-n="${r.f.n}" style="cursor:pointer">${esc(r.f.title)}</a>`) + `</span></label>`
-    : `<div class="nit chk" data-pos="${r.c.pos}" style="display:flex;gap:8px;align-items:baseline;margin:4px 0;font-size:14px;cursor:pointer"><span style="width:13px"></span>` +
+    : `<div class="nit chk" data-pos="${r.c.pos}" data-c="${r.c.id}" style="display:flex;gap:8px;align-items:baseline;margin:4px 0;font-size:14px;cursor:pointer"><span style="width:13px"></span>` +
       `<span>${r.c.id}. <span class="meta">line ${r.c.line}</span> ${esc(r.c.what)} <span class="meta">· found by the script</span>` +
       `${r.c.fix ? ` <button class="fixc" data-fix="${r.c.fix}">Fix</button>` : ""}</span></div>`;
   el.innerHTML = `<div class="listhead"><span class="title">Nitpicks</span> <span class="meta">${rows.length} open: ${parts.join(", ")} · click one to jump to it</span></div>` +
@@ -789,7 +794,8 @@ function renderNits() {
   el.querySelectorAll(".fixc").forEach(x => x.onclick = async e => { e.stopPropagation(); await api("/api/fix", {fix: x.dataset.fix}); load(); });
   el.querySelectorAll(".chk").forEach(x => x.onclick = () => {
     const pos = +x.dataset.pos;
-    const b = [...document.querySelectorAll("#draft [data-a]")].find(e => +e.dataset.a <= pos && pos < +e.dataset.b);
+    const b = document.querySelector(`#draft .dsp[data-c="${x.dataset.c}"]`)  // the marked spot, else its paragraph
+      || [...document.querySelectorAll("#draft [data-a]")].find(e => +e.dataset.a <= pos && pos < +e.dataset.b);
     if (b) { centerOn(b); b.classList.remove("flash"); void b.offsetWidth; b.classList.add("flash"); }
   });
   const acc = document.getElementById("accnits");

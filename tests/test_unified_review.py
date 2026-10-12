@@ -915,6 +915,13 @@ class MechanicalChecks(unittest.TestCase):
         self.assertIn("`x  y` in code. Indented", fixed)
         self.assertIn("at the end  \n", fixed)
 
+    def test_double_spaces_give_each_span_for_the_page_to_mark(self):
+        text = "One sentence.  Two words  apart.\n\nKeep `x  y` in code."
+        with mock.patch.object(ur, "BIB", Path("/nonexistent.bib")):
+            out = ur.checks(text, Path("/tmp/memo.md"))
+        self.assertEqual(out[0]["spans"], [[13, 15], [24, 26]])  # not the spaces inside code
+        self.assertEqual([text[a:b] for a, b in out[0]["spans"]], ["  ", "  "])
+
     def test_clean_draft_has_no_checks(self):
         self.assertEqual(self.run_checks("A plain paragraph with no numbering at all."), [])
 
