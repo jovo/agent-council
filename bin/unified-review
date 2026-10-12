@@ -3645,7 +3645,7 @@ def ask_panel(path, run, f, question):
         thread = qs.setdefault(str(f["n"]), [])
         k = len(thread)
         thread.append({"question": question, "asked": time.strftime("%Y-%m-%d %H:%M"),
-                       "answers": {m: {"status": "pending"} for m in panel}})
+                       "answers": {m: {"status": "pending"} for m in panel}, "overall": {"status": "pending"}})
         write_atomic(run / "questions.json", json.dumps(qs, indent=1, ensure_ascii=False) + "\n")
     earlier = "".join(f"\n<earlier_question>{q['question']}</earlier_question>\n" + "".join(
         f"<answer model=\"{short(m)}\">{a.get('text', '')}</answer>\n" for m, a in q["answers"].items()
@@ -3666,7 +3666,9 @@ def ask_panel(path, run, f, question):
         answer, old, new, ok = parse_answer(text, doc_text(path))
         save_question(run, f["n"], k, m, {"status": "done", "text": answer, "old": old, "new": new,
                                           "applicable": ok, "seconds": round(time.time() - t)})
-    threading.Thread(target=lambda: parallel(one, panel), daemon=True).start()
+    about = f"one finding from a review of it:\n\n<finding>\n{finding}\n</finding>"
+    threading.Thread(target=lambda: (parallel(one, panel), recommend(
+        path, run, "questions.json", [str(f["n"]), k], about, question, f"ask-{f['n']}-{k}")), daemon=True).start()
 
 
 EDIT_FOCUS = """The author just rewrote the passage below. Review only this passage, as it
@@ -4023,7 +4025,7 @@ def comment_panel(path, run, comment, focus, passage=""):
         cs = load_comments(run)
         k = len(cs)
         cs.append({"comment": comment, "passage": passage, "focus": bool(focus), "asked": time.strftime("%Y-%m-%d %H:%M"),
-                   "answers": {m: {"status": "pending"} for m in panel}})
+                   "answers": {m: {"status": "pending"} for m in panel}, "overall": {"status": "pending"}})
         write_atomic(run / "comments.json", json.dumps(cs, indent=1, ensure_ascii=False) + "\n")
     thread = "".join(f"\n<earlier_comment>{c['comment']}</earlier_comment>\n" + "".join(
         f"<answer model=\"{short(m)}\">{a.get('text', '')}</answer>\n" for m, a in c["answers"].items()
@@ -4045,7 +4047,65 @@ def comment_panel(path, run, comment, focus, passage=""):
             cs2 = load_comments(run)
             cs2[k]["answers"][m] = ans
             write_atomic(run / "comments.json", json.dumps(cs2, indent=1, ensure_ascii=False) + "\n")
-    threading.Thread(target=lambda: parallel(one, panel), daemon=True).start()
+    whole = f"this passage of it:\n\n<passage>\n{passage}\n</passage>" if passage else "the whole draft."
+    threading.Thread(target=lambda: (parallel(one, panel), recommend(
+        path, run, "comments.json", [k], whole, comment, f"comment-{k}")), daemon=True).start()
+
+
+OVERALL = """The author of the draft below asked a panel of reviewers a question about
+{about}
+
+The reviewers answered in parallel. Weigh their answers against the draft and
+give the author one overall recommendation: what to do, in at most three
+sentences. Where the reviewers propose different edits, say which one to
+accept, naming its reviewer. Where they disagree on substance, say which way
+you would go and why. Do not restate each answer. Follow the house rules for
+prose. Reply with only the recommendation.
+
+<question>
+{question}
+</question>
+
+<answers>
+{answers}
+</answers>
+
+<draft>
+{draft}
+</draft>
+
+---- HOUSE RULES ----
+{rules}"""
+
+
+def recommend(path, run, store, keys, about, question, stem):
+    """One overall recommendation from the panel's answers to a question or comment,
+    written the way the review's summary is: one Claude call, in the background
+    thread that asked the panel. It lands in the thread's "overall" in store."""
+    def entry(d):
+        for key in keys:
+            d = d[key]
+        return d
+
+    def save(val):
+        with ASK_LOCK:
+            d = json.loads((run / store).read_text())
+            entry(d)["overall"] = val
+            write_atomic(run / store, json.dumps(d, indent=1, ensure_ascii=False) + "\n")
+    try:
+        done = {m: a for m, a in entry(json.loads((run / store).read_text()))["answers"].items() if a.get("status") == "done"}
+        if not done:
+            return save({"status": "none"})
+        edits = lambda a: "".join(f"\nProposed edit: {c['old']!r} -> {c['new']!r}"
+                                  for c in a.get("changes") or ([a] if a.get("old") else []))
+        answers = "\n".join(f"<answer reviewer=\"{short(m)}\">{a['text']}{edits(a)}</answer>" for m, a in done.items())
+        rules, _ = load_rules(None)
+        prompt = OVERALL.format(about=about, question=question, answers=answers, draft=doc_text(path), rules=rules)
+        text = call("claude", prompt, run / f"{stem}-overall.txt", Path(path).parent, stage="overall")
+        save({"status": "done", "text": text.strip()} if text else
+             {"status": "failed", "reason": failure_reason(run, f"{stem}-overall")})
+    except Exception as e:  # a background thread: record the failure instead of losing it
+        save({"status": "failed", "reason": str(e)})
 
 
 DEFAULT_PANEL = ["claude", "gpt", "gemini"]
