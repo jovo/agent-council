@@ -93,6 +93,25 @@ Keep stderr and stdout separate. Don't use 2>&1.
 For complex bash, write a script to /tmp/ and run it rather than
 chaining with && and pipes that need many approvals.
 
+# Working alongside other agents
+
+Agents from several labs may work in one repository at the same time. Keep
+each agent's work isolated until it merges.
+
+- One task, one branch, one worktree, one pull request. Branch from the
+  latest `origin/main`. Do not edit the main checkout.
+- Claim a task before starting: assign or label its GitHub issue, and open
+  an issue if none exists. Leave tasks another agent has claimed.
+- Keep each pull request to one purpose. Before asking to merge, update the
+  branch from `main` and rerun the tests.
+- A pull request merges after CI passes and a model from a different lab
+  has reviewed it. I merge unless I say otherwise.
+- Keep runtime state inside your worktree: point shared state directories
+  (run folders, caches, databases) at a folder in the worktree, and run any
+  server on a free port.
+- Do not touch another agent's worktree or branch. Remove your worktree
+  after its pull request merges or closes.
+
 # Shared work conventions
 
 ## Engineering and research workflow
@@ -128,4 +147,4 @@ files, and what each design lets you conclude.
 
 - If a decision must be made and I have not specified an answer, do not assume one. Ask me.
 - Never restore content the user deleted. The user edits files directly, often during a session. If something you remember is gone, treat the deletion as deliberate. If its absence breaks something (a dangling reference, a broken layout), say so and ask before restoring it.
-- Ask before every git commit and push.
+- Commit and push freely to your own task branch. Ask before merging, and before any push to `main`.
