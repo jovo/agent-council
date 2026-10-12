@@ -931,6 +931,13 @@ def median_severity(sevs):
     return SEVERITIES[ranks[(len(ranks) - 1) // 2]] if ranks else "Minor"
 
 
+def only_adds(f):
+    """True when the finding's diff adds text and strikes none."""
+    if diff_parts(f["body"])[0] is None:
+        return False
+    return not any(DEL.search(p) for p in strip_end(f["body"]).split("\n\n")[1:])
+
+
 def score_group(members, votes, voters, owner):
     """Score a group of duplicate findings. A model's vote on a finding its own
     review raised is shown but not counted, since models favor their own text."""
@@ -939,7 +946,15 @@ def score_group(members, votes, voters, owner):
         f["score"] = sum(VOTE_SCORE[v["vote"]] for v in cast)
         f["n_votes"] = len(cast)
         f["frac"] = f["score"] / len(cast) if cast else 0
-    rep = max(members, key=lambda f: (f["frac"], -SEVERITIES.index(canon_sev(f["severity"])), -f["pos"]))
+    best = lambda f: (f["frac"], -SEVERITIES.index(canon_sev(f["severity"])), -f["pos"])
+    rep = max(members, key=best)
+    # A diff that only adds text keeps the quoted text as it is. When another
+    # panelist's diff for the same point strikes or rewrites text, that one
+    # fixes what the finding says is wrong, so it represents the group.
+    if only_adds(rep):
+        rewrites = [f for f in members if diff_parts(f["body"])[0] is not None and not only_adds(f)]
+        if rewrites:
+            rep = max(rewrites, key=best)
     raised_by = {owner[f["id"][0]] for f in members}
     rep_votes = {m: votes[m][rep["id"]] for m in voters if rep["id"] in votes.get(m, {}) and m not in raised_by}
     raiser = owner.get(rep["id"][0])
