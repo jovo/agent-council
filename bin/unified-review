@@ -4239,6 +4239,7 @@ class PageServer:
         self.path = Path(path).resolve()
         self.job = None  # the running Re-review or Iterate, if any
         self.job_kind = None
+        self.job_log = self.job_started = None
         self.last = time.time()
 
     def open_file(self, target):
@@ -4417,7 +4418,7 @@ class PageServer:
             # decisions, and versions aside first (Start over). verify adds the fact-check.
             if not self.job or self.job.poll() is not None:
                 env = {**os.environ, "UNIFIED_REVIEW_NO_PAGE": "1"}
-                log_file = open(RUNS_DIR / "page-update.log", "w")
+                log_file = self.open_log("update")
                 focus = "\n".join((f'About "{c["passage"]}": ' if c.get("passage") else "") + c["comment"]
                                   for c in load_comments(self.run_folder()) if c.get("focus")) if runs_for(self.path) else ""
                 if body.get("fresh") and runs_for(self.path):
@@ -4436,7 +4437,7 @@ class PageServer:
                 return 400, "application/json", json.dumps({"error": "rounds must be 1 to 10"})
             if not self.job or self.job.poll() is not None:
                 env = {**os.environ, "UNIFIED_REVIEW_NO_PAGE": "1"}
-                log_file = open(RUNS_DIR / "page-iterate.log", "w")
+                log_file = self.open_log("iterate")
                 self.job = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--iterate", str(rounds),
                                              str(self.path), "-p", ",".join(page_panel(self.path))],
                                             cwd=str(self.path.parent), env=env, stdin=subprocess.DEVNULL,
@@ -4451,15 +4452,28 @@ class PageServer:
             return 200, "text/html; charset=utf-8", (PAGE_DIR / "review.html").read_text()
         return static(method, route)
 
+    def open_log(self, kind):
+        """The log for this page's Re-review or Iterate, one per file, so two pages
+        never write to the same log. Opening it starts the job's clock."""
+        folder = RUNS_DIR / "page-logs"
+        folder.mkdir(parents=True, exist_ok=True)
+        self.job_log = folder / f"{hashlib.sha1(str(self.path).encode()).hexdigest()[:12]}-{kind}.log"
+        self.job_started = time.time()
+        return open(self.job_log, "w")
+
     def job_state(self):
+        """Where the page's job stands, as the upload page shows it: each stage and
+        each model's state in it, the time since it started, and the log's last lines."""
         if not self.job:
             return None
         code = self.job.poll()
-        st = {"running": code is None, "ok": code == 0 if code is not None else None, "kind": self.job_kind}
+        lines = self.job_log.read_text(errors="replace").splitlines() if self.job_log and self.job_log.exists() else []
+        st = {"running": code is None, "ok": code == 0 if code is not None else None, "kind": self.job_kind,
+              "elapsed": round(time.time() - (self.job_started or time.time())), "log": lines[-12:],
+              "stages": job_progress(f"{self.path}|{self.job_started}", lines, code is None)}
         if self.job_kind == "iterate":  # the loop's last progress line, such as "round 2 of 3, reviewing version 9"
-            lines = [l for l in (RUNS_DIR / "page-iterate.log").read_text(errors="replace").splitlines()
-                     if l.startswith("iterate: ")] if (RUNS_DIR / "page-iterate.log").exists() else []
-            st["progress"] = lines[-1][len("iterate: "):] if lines else ""
+            rounds = [l for l in lines if l.startswith("iterate: ")]
+            st["progress"] = rounds[-1][len("iterate: "):] if rounds else ""
         return st
 
 
