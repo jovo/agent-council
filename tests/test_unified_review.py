@@ -133,18 +133,18 @@ class Parsing(unittest.TestCase):
         self.assertEqual(ur.read_request_body({"Content-Length": str(ur.JSON_BODY_LIMIT + 1)}, io.BytesIO(b"x"), "POST", "/api/upload/memo.md"), b"x")
 
     def test_runs_for_reuses_unchanged_results_metadata(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d)):
-            ur.RUN_METADATA.clear()
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d)):
+            ur.run_store.RUN_METADATA.clear()
             draft = Path(d) / "memo.md"
-            result = ur.RUNS_DIR / "run" / "results.json"
+            result = ur.run_store.RUNS_DIR / "run" / "results.json"
             result.parent.mkdir()
             result.write_text(json.dumps({"files": [str(draft)]}))
             with mock.patch.object(ur.json, "loads", wraps=ur.json.loads) as loads:
-                self.assertEqual(ur.runs_for(draft), [result.parent])
-                self.assertEqual(ur.runs_for(draft), [result.parent])
+                self.assertEqual(ur.run_store.runs_for(draft), [result.parent])
+                self.assertEqual(ur.run_store.runs_for(draft), [result.parent])
                 time.sleep(0.01)  # ensure a distinct mtime on filesystems with coarse clocks
                 result.write_text(json.dumps({"files": [str(Path(d) / "other.md")]}))
-                self.assertEqual(ur.runs_for(draft), [])
+                self.assertEqual(ur.run_store.runs_for(draft), [])
             self.assertEqual(loads.call_count, 2)
 
     def test_parse_findings(self):
@@ -542,13 +542,13 @@ class Versions(unittest.TestCase):
     def test_numbers_count_up_and_repeat_for_same_text(self):
         tmp = Path(tempfile.mkdtemp())
         try:
-            with mock.patch.object(ur, "RUNS_DIR", tmp):
+            with mock.patch.object(ur.run_store, "RUNS_DIR", tmp):
                 f = "/x/draft.md"
-                self.assertEqual(ur.version_number(f, "va"), 1)
-                self.assertEqual(ur.version_number(f, "vb"), 2)
-                self.assertEqual(ur.version_number(f, "va"), 1)  # unchanged text keeps its number
-                self.assertIsNone(ur.version_number(f, "vc", register=False))
-                self.assertEqual(ur.version_number("/x/other.md", "va"), 1)  # numbered per file
+                self.assertEqual(ur.run_store.version_number(f, "va"), 1)
+                self.assertEqual(ur.run_store.version_number(f, "vb"), 2)
+                self.assertEqual(ur.run_store.version_number(f, "va"), 1)  # unchanged text keeps its number
+                self.assertIsNone(ur.run_store.version_number(f, "vc", register=False))
+                self.assertEqual(ur.run_store.version_number("/x/other.md", "va"), 1)  # numbered per file
         finally:
             shutil.rmtree(tmp)
 
@@ -636,7 +636,7 @@ class Decisions(unittest.TestCase):
              "where": "draft", "pos": 0, "severity": "Major", "frac": 1, "rejected": False, "members": ["A1"]}
         (self.run / "results.json").write_text(json.dumps({"files": [str(self.doc)], "headings": [], "groups": [g],
                                                            "versions": [{"path": str(self.doc), "number": 2}]}))
-        self.patch = mock.patch.object(ur, "RUNS_DIR", self.tmp)
+        self.patch = mock.patch.object(ur.run_store, "RUNS_DIR", self.tmp)
         self.patch.start()
 
     def tearDown(self):
@@ -646,7 +646,7 @@ class Decisions(unittest.TestCase):
     def test_record_lift_and_expire(self):
         with mock.patch("builtins.print"):
             ur.record_decisions("1", "ignore", "intentional", self.run)
-        d = ur.load_decisions()[str(self.doc)][0]
+        d = ur.run_store.load_decisions()[str(self.doc)][0]
         self.assertEqual((d["id"], d["decision"], d["note"], d["version"]), ("D1", "ignore", "intentional", 2))
         dnorm = ur.norm(self.doc.read_text())
         self.assertEqual([x["id"] for x in ur.active_decisions([self.doc], dnorm)[0]], ["D1"])
@@ -724,7 +724,7 @@ class FactcheckCarryOver(unittest.TestCase):
         return json.loads((run / "factcheck.json").read_text()), (run / "factcheck.md").read_text()
 
     def test_unchanged_confirmed_claim_is_carried_over(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d)):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d)):
             runs, first, second = Path(d), [], []
             self.run_fc(runs, "memo-v1", "The sky is blue. Water boils at 90 C.", first)
             fc, md = self.run_fc(runs, "memo-v2", "The sky is blue. Water boils at 90 C.", second)
@@ -733,7 +733,7 @@ class FactcheckCarryOver(unittest.TestCase):
             self.assertIn("Carried over from memo-v1", md)
 
     def test_changed_claim_is_rechecked(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d)):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d)):
             runs, first, second = Path(d), [], []
             self.run_fc(runs, "memo-v1", "The sky is blue. Water boils at 80 C.", first)
             fc, _ = self.run_fc(runs, "memo-v2", "The sky is blue. Water boils at 90 C.", second)
@@ -788,8 +788,8 @@ class Pipeline(unittest.TestCase):
             out.mkdir()
             draft = f"===== memo.md =====\n{draft_text}"
             ur.FAILURES.clear()
-            with mock.patch.object(ur, "call", fake_call), mock.patch.object(ur, "RUNS_DIR", d), \
-                 mock.patch.object(ur, "LAST_RUN", d / "last-run"), \
+            with mock.patch.object(ur, "call", fake_call), mock.patch.object(ur.run_store, "RUNS_DIR", d), \
+                 mock.patch.object(ur.run_store, "LAST_RUN", d / "last-run"), \
                  mock.patch.object(ur, "open_file", lambda p: None), mock.patch.object(ur.runtime, "log", lambda *a: None):
                 ur.foreground([f], draft, panel, "", "rules", out, d, False, [])
             return prompts, json.loads((out / "results.json").read_text()), (out / "unified.md").read_text()
@@ -1229,7 +1229,7 @@ class Iterating(unittest.TestCase):
     def test_snapshot_names_and_ignores_copies(self):
         if not shutil.which("git"):
             self.skipTest("needs git")
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d) / "runs"), \
              mock.patch.object(ur.runtime, "log", lambda *a: None):
             repo = Path(d) / "repo"
             (repo / "docs").mkdir(parents=True)
@@ -1275,7 +1275,7 @@ class Iterate(unittest.TestCase):
             self.assertFalse(ur.auto_applies(self.f(**kw)), kw)
 
     def test_loop_applies_agreed_findings_and_stops_when_nothing_applies(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d) / "runs"):
             doc = Path(d).resolve() / "memo.md"
             doc.write_text("# Memo\n\nThe sky is green today.\n\nWater is dry.\n")
             g = lambda t, q, body, votes, contested=False: {
@@ -1302,7 +1302,7 @@ class Iterate(unittest.TestCase):
             self.assertEqual(done[0]["attention"], [[2, "Water"]])
             self.assertIn("The sky is blue today.", doc.read_text())
             self.assertIn("Water is dry.", doc.read_text())
-            decided = {x["title"]: (x["decision"], x["note"]) for x in ur.load_decisions()[str(doc)]}
+            decided = {x["title"]: (x["decision"], x["note"]) for x in ur.run_store.load_decisions()[str(doc)]}
             self.assertEqual(decided, {"Sky": ("applied", "auto-loop"), "Water": ("ignore", "auto-loop: skipped")})
             self.assertTrue((doc.parent / "memo-v1.md").exists())
             self.assertTrue((doc.parent / "memo-v1-to-v2.md").exists())
@@ -1353,7 +1353,7 @@ class ReviewPage(unittest.TestCase):
         self.assertIsNone(ur.fuzzy_span(text, "Something else entirely about robots and pay.", q))
 
     def test_accept_decline_and_conflict(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d) / "runs"):
             doc = Path(d).resolve() / "memo.md"
             doc.write_text("# Memo\n\nThe sky is green today. Grass grows.\n\nWater is dry.\n")
             run = Path(d) / "runs" / "r1"
@@ -1392,7 +1392,7 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual([f["status"] for f in st["findings"]], ["accepted", "declined"])
 
     def test_rereview_options_start_over_and_fact_check(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d) / "runs"):
             doc = Path(d).resolve() / "memo.md"
             doc.write_text("# Memo\n\nThe sky is green today.\n")
             run = Path(d) / "runs" / "r1"
@@ -1414,7 +1414,7 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual(kills, [])
             self.assertEqual(code, 200)
             self.assertIn("--verify", started[0])
-            self.assertEqual(ur.runs_for(doc), [])  # set aside, not deleted
+            self.assertEqual(ur.run_store.runs_for(doc), [])  # set aside, not deleted
             self.assertTrue(list((Path(d) / "runs" / "forgotten").glob("*/runs/r1/results.json")))
             st = json.loads(page.handle("GET", "/api/state", {})[2])
             self.assertEqual((st["starting_over"], st["job"]["running"]), (True, True))
@@ -1425,10 +1425,10 @@ class ReviewPage(unittest.TestCase):
             with mock.patch.object(ur.subprocess, "Popen", Job):
                 page.handle("POST", "/api/update", {})
             self.assertNotIn("--verify", started[1])
-            self.assertEqual(len(ur.runs_for(doc)), 1)
+            self.assertEqual(len(ur.run_store.runs_for(doc)), 1)
 
     def test_each_page_logs_its_own_rereview_and_reports_its_progress(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d) / "runs"):
             docs = [Path(d).resolve() / "a.md", Path(d).resolve() / "b.md"]
             class Job:
                 def __init__(self, cmd, stdout=None, **kw): self.out = stdout
@@ -1437,7 +1437,7 @@ class ReviewPage(unittest.TestCase):
             for doc in docs:
                 doc.write_text("# Memo\n\nText.\n")
                 page = ur.PageServer(doc)
-                with mock.patch.object(ur.subprocess, "Popen", Job), mock.patch.object(ur, "runs_for", lambda p: []):
+                with mock.patch.object(ur.subprocess, "Popen", Job), mock.patch.object(ur.run_store, "runs_for", lambda p: []):
                     page.handle("POST", "/api/update", {})
                 pages.append(page)
             self.assertNotEqual(pages[0].job_log, pages[1].job_log)  # two pages never share a log
@@ -1569,7 +1569,7 @@ class ReviewPage(unittest.TestCase):
 
             def state(decisions):
                 with mock.patch.object(ur, "ordered_findings", lambda r: [(1, "Polish", "", groups[0]), (2, "Polish", "", groups[1])]), \
-                     mock.patch.object(ur, "load_decisions", lambda: {str(draft): decisions}), \
+                     mock.patch.object(ur.run_store, "load_decisions", lambda: {str(draft): decisions}), \
                      mock.patch.object(ur, "load_questions", lambda run: {}), \
                      mock.patch.object(ur, "page_panel", lambda p: []):
                     return [(f["status"], f["note"]) for f in ur.page_state(draft, run)["findings"]]
@@ -1590,7 +1590,7 @@ class ReviewPage(unittest.TestCase):
 
             def state():
                 with mock.patch.object(ur, "ordered_findings", lambda r: [(1, "Minor", "", g)]), \
-                     mock.patch.object(ur, "load_decisions", lambda: {}), \
+                     mock.patch.object(ur.run_store, "load_decisions", lambda: {}), \
                      mock.patch.object(ur, "load_questions", lambda run: {}), \
                      mock.patch.object(ur, "page_panel", lambda p: []):
                     f = ur.page_state(draft, run)["findings"][0]
@@ -1671,7 +1671,7 @@ class ReviewPage(unittest.TestCase):
             def call(m, prompt, *a, **k):
                 return review if "Review the draft" in prompt else "A1 | agree | Minor | logic | same:none | Fair."
             with mock.patch.object(ur, "call", call), mock.patch.object(ur, "page_panel", lambda p: ["claude", "gpt"]), \
-                 mock.patch.object(ur, "load_rules", lambda p: ("rules", "")), mock.patch.object(ur, "load_decisions", lambda: {}):
+                 mock.patch.object(ur, "load_rules", lambda p: ("rules", "")), mock.patch.object(ur.run_store, "load_decisions", lambda: {}):
                 ur.review_passage(draft, run, "The sky is green.")
                 for _ in range(300):
                     if json.loads((run / "edit-review.json").read_text())["status"] != "pending":
@@ -1711,7 +1711,7 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual(doc.read_text(), "# Memo\n\nFirst, rewritten.\n\nSecond paragraph.\n")
 
     def test_upload_reviews_a_copy_and_returns_unified(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d)):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d)):
             page = ur.UploadServer()
             code, _, _ = page.handle("POST", "/api/upload/notes.pptx", b"x")
             self.assertEqual(code, 400)
@@ -1737,7 +1737,7 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual(page.handle("GET", "/api/job/nope", b"")[0], 404)
 
     def test_repeated_uploads_get_distinct_job_ids(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d)), \
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d)), \
                 mock.patch.object(ur.subprocess, "Popen"):
             first = ur.start_upload("memo.md", b"# Memo\n")
             second = ur.start_upload("memo.md", b"# Memo\n")
@@ -1746,7 +1746,7 @@ class ReviewPage(unittest.TestCase):
             self.assertTrue((Path(d) / "uploads" / second / "upload" / "memo.md").exists())
 
     def test_repeated_opens_get_distinct_job_ids(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d) / "runs"), \
                 mock.patch.object(ur.subprocess, "Popen"):
             doc = Path(d) / "memo.md"
             doc.write_text("# Memo\n")
@@ -1756,7 +1756,7 @@ class ReviewPage(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("pandoc"), "needs pandoc")
     def test_upload_of_a_reviewed_word_file_offers_open_again_or_fresh(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d) / "runs"):
             src = Path(d) / "memo.md"
             src.write_text("# Memo\n\nSome text.\n")
             docx = Path(d) / "memo.docx"
@@ -1766,7 +1766,7 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual(check(), {"seen": False, "reviews": 0, "last": None})
             with contextlib.redirect_stderr(io.StringIO()):
                 md = ur.to_markdown(docx)
-            run = ur.RUNS_DIR / "2026-10-09-1200-memo-v1"
+            run = ur.run_store.RUNS_DIR / "2026-10-09-1200-memo-v1"
             run.mkdir()
             md = md.resolve()  # as a review records it
             (run / "results.json").write_text(json.dumps({"files": [str(md)]}))
@@ -1784,7 +1784,7 @@ class ReviewPage(unittest.TestCase):
             self.assertTrue(md.exists())  # the edited copy stays
 
     def test_open_reviews_the_chosen_file_in_place(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d) / "runs"), \
                 mock.patch.object(ur.sys, "platform", "darwin"):
             draft, other = Path(d) / "draft.md", Path(d) / "other.md"
             draft.write_text("# Draft\n")
@@ -1811,7 +1811,7 @@ class ReviewPage(unittest.TestCase):
         self.assertIn("{{citation: Author, year}}", prompt)
 
     def test_dropped_file_is_found_by_name_and_bytes(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"), \
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d) / "runs"), \
                 mock.patch.object(ur.sys, "platform", "darwin"):
             a, b, c = Path(d) / "a" / "memo.md", Path(d) / "b" / "memo.md", Path(d) / "c" / "memo.md"
             for f, text in ((a, "# Memo\n"), (b, "# Other memo\n"), (c, "# Memo\n")):
@@ -1837,7 +1837,7 @@ class ReviewPage(unittest.TestCase):
         def as_md(f, changes="accept"):
             return subprocess.run(["pandoc", str(f), "-t", ur.DOCX_MD, "--wrap=none", f"--track-changes={changes}"],
                                   capture_output=True, text=True, check=True).stdout
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d) / "runs"):
             src = Path(d) / "memo.md"
             src.write_text(
                 "# Memo\n\nThe cortex learns **slowly and steadily** from [work](https://x.org).[^1]\n\n"
@@ -1862,7 +1862,7 @@ class ReviewPage(unittest.TestCase):
                 for i, data in parts.items():
                     z.writestr(i, data)
             md = ur.to_markdown(docx)
-            self.assertIn(ur.RUNS_DIR / "converted", md.parents)
+            self.assertIn(ur.run_store.RUNS_DIR / "converted", md.parents)
             self.assertFalse(ur.read_only(md))
             self.assertEqual(ur.original_of(md), md.with_suffix(".docx"))
             before = md.read_text()
@@ -1913,22 +1913,22 @@ class ReviewPage(unittest.TestCase):
             self.assertRegex(as_md(out, "all"), r'author="Unified review"[^>]*>Fill this in: \{\{citation: Author, year\}\}')
 
     def test_forget_sets_aside_reviews_decisions_and_versions(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d) / "runs"):
             doc, other = Path(d).resolve() / "memo.md", Path(d).resolve() / "other.md"
             doc.write_text("# Memo\n")
             for name, f in (("r1", doc), ("r2", doc), ("r3", other)):
-                (ur.RUNS_DIR / name).mkdir(parents=True)
-                (ur.RUNS_DIR / name / "results.json").write_text(json.dumps({"files": [str(f)]}))
-            (ur.RUNS_DIR / "decisions.json").write_text(json.dumps({str(doc): [{"id": "D1"}], str(other): [{"id": "D1"}]}))
-            (ur.RUNS_DIR / "versions.json").write_text(json.dumps({str(doc): ["a", "b"], str(other): ["c"]}))
+                (ur.run_store.RUNS_DIR / name).mkdir(parents=True)
+                (ur.run_store.RUNS_DIR / name / "results.json").write_text(json.dumps({"files": [str(f)]}))
+            (ur.run_store.RUNS_DIR / "decisions.json").write_text(json.dumps({str(doc): [{"id": "D1"}], str(other): [{"id": "D1"}]}))
+            (ur.run_store.RUNS_DIR / "versions.json").write_text(json.dumps({str(doc): ["a", "b"], str(other): ["c"]}))
             with contextlib.redirect_stdout(io.StringIO()):
                 out = ur.forget(doc)
-            self.assertEqual(ur.runs_for(doc), [])
-            self.assertEqual([r.name for r in ur.runs_for(other)], ["r3"])
+            self.assertEqual(ur.run_store.runs_for(doc), [])
+            self.assertEqual([r.name for r in ur.run_store.runs_for(other)], ["r3"])
             self.assertEqual(sorted(x.name for x in (out / "runs").iterdir()), ["r1", "r2"])
-            self.assertNotIn(str(doc), json.loads((ur.RUNS_DIR / "decisions.json").read_text()))
-            self.assertIn(str(other), json.loads((ur.RUNS_DIR / "decisions.json").read_text()))
-            self.assertEqual(ur.version_number(doc, "b"), 1)  # the edited text is version 1
+            self.assertNotIn(str(doc), json.loads((ur.run_store.RUNS_DIR / "decisions.json").read_text()))
+            self.assertIn(str(other), json.loads((ur.run_store.RUNS_DIR / "decisions.json").read_text()))
+            self.assertEqual(ur.run_store.version_number(doc, "b"), 1)  # the edited text is version 1
             kept = json.loads((out / "forgotten.json").read_text())
             self.assertEqual((kept["decisions"], kept["versions"]), ([{"id": "D1"}], ["a", "b"]))
             self.assertTrue(doc.exists())
@@ -1956,7 +1956,7 @@ class ReviewPage(unittest.TestCase):
                     p.wait()
 
     def test_draft_downloads_in_the_format_it_came_in(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur, "RUNS_DIR", Path(d) / "runs"):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ur.run_store, "RUNS_DIR", Path(d) / "runs"):
             draft = Path(d) / "draft.md"
             draft.write_text("# Draft\n")
             self.assertEqual(ur.export_draft(draft), ("draft-edited.md", ur.MD_MIME, b"# Draft\n", []))
@@ -1965,7 +1965,7 @@ class ReviewPage(unittest.TestCase):
                 self.assertEqual((name, mime, data[:2]), ("draft-edited.docx", ur.DOCX_MIME, b"PK"))
             with self.assertRaises(ValueError):
                 ur.export_draft(draft, "pdf")  # only a draft that came as a PDF
-            md = ur.RUNS_DIR / "converted" / "paper-abc" / "paper.md"
+            md = ur.run_store.RUNS_DIR / "converted" / "paper-abc" / "paper.md"
             md.parent.mkdir(parents=True)
             md.write_text("# Paper\n")
             md.with_suffix(".pdf").write_bytes(b"%PDF")
