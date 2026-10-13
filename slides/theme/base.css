@@ -292,6 +292,19 @@ section > .cols:has(> figure) { flex: 1 1 0; min-height: 0; }
   text-align: center;
   color: var(--muted);
 }
+/* In a cell with an image, the arrow sits at the image's vertical centre. */
+.cols.flow > * > p:has(> img) { position: relative; }
+.cols.flow > * + *:has(> p > img)::before { content: none; }
+.cols.flow > * + * > p:has(> img)::before {
+  content: '→';
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  left: calc(-1 * var(--s3));
+  width: var(--s3);
+  text-align: center;
+  color: var(--muted);
+}
 
 /* Two rows of cells: 5–6 cells → 3 columns, 7–8 cells → 4 columns. */
 .cols.rows-2 { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); }
