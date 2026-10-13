@@ -267,6 +267,11 @@ and inspect every slide after changing shared typography.
 
 ## Content rules
 
+- A talk tells one story with the four OCAR elements from the
+  `papers-and-proposals` skill: the opening (the problem), the challenge (the
+  question), the action (what was done and found), and the resolution (the
+  answer), in that order. An early slide states the question in its title,
+  and the last content slide answers it.
 - Plan about one slide per minute of the slot, and plan to speak for 65 to 75
   percent of the allotted time. One point per slide.
 - No more than two consecutive content slides without a figure or image.
