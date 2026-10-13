@@ -28,7 +28,7 @@ Logic comes first. A draft whose steps do not follow fails however well it reads
 ## Paragraphs
 
 - Each paragraph carries one idea. By default, state it in the first sentence (topic sentence, then development). Every later sentence develops it: it follows from the one before or supports that idea.
-- At a turn in the story, such as the challenge at the end of an introduction or the resolution at the end of a discussion, a paragraph can put its point last (LDR or OCAR): the first sentence sets up the question and the last sentence answers it. Use point-last paragraphs only at those turns. In either form, the point sits in the first or last sentence, never buried in the middle.
+- At a turn in the story, such as the challenge at the end of an introduction or the resolution at the end of a discussion, a paragraph can follow OCAR itself and put its point last: the first sentence sets up the question and the last sentence answers it. Use point-last paragraphs only at those turns. In either form, the point sits in the first or last sentence, never buried in the middle.
 - A "so", "therefore", "thus", or "hence" needs its premise on the page. A conclusion whose premise is missing is a leap.
 - The last sentence leads to the next paragraph's idea. Two adjacent paragraphs with no link between them are a break in the argument.
 

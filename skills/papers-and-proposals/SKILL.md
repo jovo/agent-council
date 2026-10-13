@@ -25,13 +25,6 @@ Before drafting, write the four elements as one sentence each. If any is missing
 
 Match the opening's scope to the resolution's. An opening wider than the resolution overpromises, and one narrower undersells the work. The paper is an hourglass: wide at the opening, narrow through the challenge and action, wide again at the resolution.
 
-Choose how fast the story reaches its point by the reader's patience:
-
-- **OCAR**, the elements in order, for papers.
-- **ABDCE** (action, background, development, climax, ending), which opens on the challenge and fills in background after, for proposals, specific aims pages, and other readers who decide fast.
-- **LDR** (lead, development, resolution), which leads with the main finding, for broad-audience journals, Discussions, and writing for the public.
-- **LD** (lead, development), all up front, for Methods, Results, and other passages read for reference.
-
 ## Context, content, conclusion
 
 - Use context, content, conclusion at every scale. It is OCAR compressed: context is the opening and challenge, content the action, conclusion the resolution. The paper: introduction, results, discussion. A paragraph: a topic sentence that sets context, then the new content, then a takeaway sentence. Context answers "why am I told this?" and the conclusion answers "so what?"
@@ -42,9 +35,9 @@ Choose how fast the story reaches its point by the reader's patience:
 
 - **Abstract.** A complete OCAR story: open on the problem, narrow to the specific gap and the question it leaves, state what was done, give the key results, and close by answering the question, optionally with the broader significance. Spend two sentences on the main figure's result, one on each other figure, none on results without a figure.
 - **Introduction.** The opening, the funnel, and the challenge. The first paragraph states the opening. The next paragraphs form a funnel that narrows from the field's gap to the subfield's gap to the specific open question, then end with the challenge and a short statement of how the paper meets it. An introduction describes what is not known, not a broad literature review of what is. Cite prior work to mark the edge of knowledge ("X occurs [@Smith03]"), not to narrate who found what ("Smith found X").
-- **Methods.** An overview of the approach first, then the details (LD), so a reader can stop after the overview.
+- **Methods.** An overview of the approach first, then the details, so a reader can stop after the overview.
 - **Results.** A sequence of statements, each supported by a figure, that connect logically to the central contribution. Subsection headers and figure titles state conclusions. Each paragraph opens with the question it addresses and ends with its answer. A results paragraph for a display item gives the setting, the details, then the take-home sentence.
-- **Discussion.** The resolution, built toward with LDR: lead with the answer to the challenge, develop it, and close on how understanding changed. How the gap was filled, the limits of the interpretation and how future work could address them, and how the paper moves the field. Related work and extensions, not a summary of the results.
+- **Discussion.** The resolution: how the gap was filled, the limits of the interpretation and how future work could address them, and how the paper moves the field. Related work and extensions, not a summary of the results.
 - Number every display item (figure, table, theorem) and reference it in the text.
 - Credit the prior work the paper builds on. Its authors are likely readers and reviewers.
 
@@ -57,7 +50,6 @@ Choose how fast the story reaches its point by the reader's patience:
 ## Grants and proposals
 
 - Aim titles are action titles with a deliverable verb. Avoid "investigate" and "explore".
-- Open the proposal on the challenge (ABDCE): the first paragraph states the problem and the question, and background follows.
 - One bold sentence per aim states its objective as what the aim will learn or build, not the data it will collect. Each aim gives expected outcomes, and pitfalls with alternatives.
 - Distinguish the applicant's own work from others' at every citation.
 - A one-page summary follows OCAR: the opportunity and its significance (opening), the gap and the question it leaves (challenge), the planned work and its feasibility (action), and what will be known or possible after (resolution).
