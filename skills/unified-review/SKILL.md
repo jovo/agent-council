@@ -245,7 +245,7 @@ Reviewer instructions for feedback on drafts. This covers verification and how f
 
 ### What not to touch
 
-- Argument structure and section order, unless actually broken (a claim doesn't follow, or a section contradicts another one elsewhere). Don't restructure a passage that already works.
+- Argument structure and section order, unless actually broken (a claim doesn't follow, or a section contradicts another one elsewhere). Don't restructure a passage that already works. A broken story arc counts as broken: no explicit question, objectives stated in place of a question, a conclusion that answers a different question than the one posed, or an opening whose scope does not match the conclusion's (see OCAR in the `logic` and `papers-and-proposals` skills). These are Major when they leave the central claim unsupported.
 - Equations and notation. Flag an equation or symbol that is wrong, unused, or redundant, but do not remove one only to make the prose read faster.
 
 ### Output format
