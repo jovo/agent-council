@@ -265,6 +265,9 @@ document.addEventListener("click", () => { if (openMenu) { openMenu = null; rend
 // Pandoc's identifier for a heading, so [text](#section-name) links resolve.
 const slug = t => t.toLowerCase().replace(/<[^>]+>|\[@[^\]]*\]|[*_`]/g, "").replace(/[^\p{L}\p{N}_\-.\s]/gu, "")
   .trim().replace(/\s+/g, "-").replace(/^[^\p{L}]+/u, "") || "section";
+// Every id the draft renders carries this prefix, and so does every #link in it, so a
+// heading such as "# Draft" cannot take the id of a page element such as #draft.
+const anchor = id => "d-" + id;
 
 // A slide deck is shown rendered by Marp with the deck theme (base.css), in an
 // iframe so the theme's CSS cannot touch the page. Each finding is outlined on
@@ -403,7 +406,7 @@ function renderDraft() {
   const taken = (a, b) => { for (let k = a; k < b; k++) if (hide[k]) return true; return false; };
   const hideRange = (a, b) => { for (let k = a; k < b; k++) hide[k] = true; };
   const refNum = Object.fromEntries((S.refs || []).map((r, k) => [r.key, k + 1]));
-  const citeLink = n => `<a class="cite" href="#ref-${n}">${n}</a>`;
+  const citeLink = n => `<a class="cite" href="#${anchor("ref-" + n)}">${n}</a>`;
   if (window.katex) {  // $$display$$ and $inline$ math, by pandoc's rules: no space inside the dollars, no digit after
     for (const m of text.matchAll(/\$\$([\s\S]+?)\$\$|(?<![\\$])\$(?![\s$])((?:\\.|[^$\n\\])+?)(?<!\s)\$(?!\d)/g)) {
       try { tok[m.index] = katex.renderToString(m[1] || m[2], {displayMode: !!m[1], throwOnError: true}); }
@@ -413,7 +416,7 @@ function renderDraft() {
   }
   // Footnotes: a mark [^id] draws as a superscript number, in order of first use, linked
   // to its note. A note [^id]: text starts its own paragraph, as pandoc writes it.
-  const fnNum = {}, fnSeen = new Set(), fnId = id => "fn-" + id.replace(/[^\w-]/g, "_");
+  const fnNum = {}, fnSeen = new Set(), fnId = id => anchor("fn-") + id.replace(/[^\w-]/g, "_");
   for (const m of text.matchAll(/\[\^([^\]\s]+)\](?!:)/g)) fnNum[m[1]] ??= Object.keys(fnNum).length + 1;
   for (const m of text.matchAll(/\[\^([^\]\s]+)\](:[ \t]*)?/g)) {
     if (taken(m.index, m.index + m[0].length)) continue;
@@ -477,7 +480,7 @@ function renderDraft() {
     hide[a] = hide[b - 1] = true;
     for (let k = a + 1; k < b - 1; k++) ital[k] = true;
   }
-  const href = t => t.startsWith("#") || /^https?:\/\//.test(t) ? t : null;
+  const href = t => t.startsWith("#") ? "#" + anchor(t.slice(1)) : /^https?:\/\//.test(t) ? t : null;
   const segs = (i, b) => {
     let out = "";
     while (i < b) {
@@ -562,7 +565,7 @@ function renderDraft() {
     }
     if (h) {
       const id = slug(text.slice(a + h[0].length, b));
-      html += `<h${h[1].length} id="${esc(id)}"${at(a, b)}>${segs(a + h[0].length, b)}</h${h[1].length}>`;
+      html += `<h${h[1].length} id="${esc(anchor(id))}"${at(a, b)}>${segs(a + h[0].length, b)}</h${h[1].length}>`;
       continue;
     }
     // Lines before the first list item are a paragraph; list items follow, one per line.
@@ -580,7 +583,7 @@ function renderDraft() {
       : `<p${/^\[\^[^\]\s]+\]:/.test(raw) ? ' class="fnote"' : ""}${at(a, b)}>${segs(a, b)}</p>`;
   }
   if (S.refs && S.refs.length) {  // the book's format: PLOS style from pandoc, DOI linked
-    html += `<h2 id="references">References</h2><ol class="refs">` + S.refs.map((r, k) => `<li id="ref-${k + 1}">` +
+    html += `<h2 id="${anchor("references")}">References</h2><ol class="refs">` + S.refs.map((r, k) => `<li id="${anchor("ref-" + (k + 1))}">` +
       (r.html || (r.text ? esc(r.text) + (r.url ? ` <a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a>` : "")
                          : `${esc(r.key)} <span class="meta">(not in the bibliography)</span>`)) + `</li>`).join("") + `</ol>`;
   }
