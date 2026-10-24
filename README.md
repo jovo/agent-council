@@ -167,6 +167,7 @@ They go into `decisions.json` in the runs folder, per file. A decline lasts whil
   - `documents`: equations, citations, and tables in Markdown. Reviews apply it.
   - `papers-and-proposals`: structuring papers, grants, summaries, and rebuttals, from Mensh and Kording, "Ten simple rules for structuring papers" (*PLOS Computational Biology*, 2017, [doi:10.1371/journal.pcbi.1005619](https://doi.org/10.1371/journal.pcbi.1005619)), and the posts at [bitsandbrains.io](https://bitsandbrains.io/).
   - `pdf` and `slides`: building PDFs and Marp decks in the house style.
+  - `prfaq`: a line-by-line checklist for writing and reviewing Amazon-style PR/FAQs, including platform launches.
 - **PDFs.** `make-pdf FILE.md` builds a PDF in New Computer Modern (Sans Bold headings, Book body and math), 1 in margins, 11 pt, justified, with a rule under each table row and references on a new page (`references-page-break: false` keeps them inline). It passes pandoc only the cited bibliography entries and builds without a reference list when the bibliography cannot be read. SVG figures are converted on the fly. The style lives in `typeset/`, which a project with its own build can include.
 - **Slides.** The Marp theme in `slides/` uses the same type family. A decks repository links `theme/` to `slides/theme`.
 - **[CLAUDE.md](CLAUDE.md)** is the author's general instructions for coding agents. It is an example, not something the tool needs, except as the fallback review rules.
