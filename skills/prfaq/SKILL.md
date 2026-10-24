@@ -64,12 +64,15 @@ Write the elements in this order. Each item names what the element must do, then
 - [ ] **The platform contract.** If the platform works only under a standard (a published spec, an API, a certified configuration), name it once, plainly. It is what lets the sides work together, so it is not fine print.
 - [ ] Safety, compliance, and certification claims say what the product does and what the customer or installer still owns. "Guarantees compliance" is a claim legal will strike if compliance belongs to the installed system.
 
-### 6. Customer Zero or proof paragraph
+### 6. Customer Zero or proof paragraph (if a pilot or design partner exists)
+
+Without a pilot, skip this element and let the customer quote (element 9) carry the proof.
 
 - [ ] A named customer (placeholder if real names cannot circulate) with before and after numbers on the hero's outcome.
 - [ ] Shows the differentiator in action: a sequence, not a single metric. Example: crop A, swap to crop B, back to A at prior accuracy.
 - [ ] **Physical feasibility.** Every part the story needs exists in the product or is named as the customer's. If a fixed arm works "across greenhouses," something moved it.
 - [ ] Metrics are defined well enough to check (picks per hour including or excluding travel).
+- [ ] If pre-pilot, the narrative models a concrete Customer Zero workflow rather than abstract feature capabilities.luding or excluding travel).
 
 ### 7. Leader quote
 
@@ -130,8 +133,12 @@ The FAQ has no fixed length. Put the most important questions first, and leave o
 
 - [ ] Market size, with each figure sourced and the arithmetic shown.
 - [ ] Unit economics and what has to be true for them to hold.
+- [ ] Pricing rationale, compared with the customer's total cost of ownership and their alternatives.
+- [ ] Pricing rationale and how it compares to customer total cost of ownership or alternative options.
 - [ ] The hardest technical risk and the evidence it is solved.
 - [ ] Why now, why us, why it does not already exist.
+- [ ] Dependencies on partners, platforms, or third-party hardware, and what each has committed to by launch.
+- [ ] Dependencies across partner teams, platforms, or third-party hardware, and their launch commitments.
 - [ ] Each side of a platform: why it shows up first, how the cold start ends.
 - [ ] Who owns contributed data, who is paid for it, and how the people who generated it (crews, workers, users) are treated.
 - [ ] Risks and what would make the team stop.
