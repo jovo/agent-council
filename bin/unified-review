@@ -3746,21 +3746,14 @@ def save_fill(run, n, fill):
 
 
 def bib_key(ref):
-    """The bibliography key for a DOI or URL: addref finds it in Zotero or adds the
-    paper there. Without Zotero, a DOI already in references.bib still resolves."""
-    addref = BIB.parent / "bin" / "addref"
-    if addref.exists():
-        r = subprocess.run([str(addref), ref], capture_output=True, text=True, timeout=120)
-        if r.returncode == 0 and r.stdout.strip():
-            return r.stdout.split("\t")[0].strip(), None
-        err = r.stderr.strip().removeprefix("addref: ")
-    else:
-        err = "addref is not installed"
+    """The bibliography key for a DOI already in references.bib. Paperpile holds the
+    library and only its MCP server adds papers, so a paper it has not exported yet
+    has no key here."""
     if BIB.exists() and ref.startswith("10."):
         for m in re.finditer(r"^@\w+\{([^,\s]+),(.*?)^\}", BIB.read_text(), re.M | re.S):
             if bib_field(m.group(2), "doi").lower() == ref.lower():
                 return m.group(1), None
-    return None, err or "addref found no key"
+    return None, "it is not in references.bib. Add it in Paperpile, then fill again after the next export"
 
 
 def fill_slots(path, run, f):
@@ -3791,7 +3784,7 @@ def fill_slots(path, run, f):
             for kind, ref in set(CITE_SLOT.findall(filled)):
                 key, err = bib_key(ref)
                 if not key:
-                    return save_fill(run, f["n"], {"status": "failed", "reason": f"found {ref}, but could not add it to the bibliography: {err}"})
+                    return save_fill(run, f["n"], {"status": "failed", "reason": f"found {ref}, but {err}"})
                 filled = filled.replace(f"@{kind}:{ref}", "@" + key)
             if has_slot(filled):
                 return save_fill(run, f["n"], {"status": "failed", "reason": "a blank is still unfilled"})
