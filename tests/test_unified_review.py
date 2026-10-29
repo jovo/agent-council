@@ -1035,6 +1035,15 @@ class Decks(unittest.TestCase):
                 out = ur.checks("Play at [@Floyd](https://lichess.org/@/Floyd).", Path(d) / "x.md")
         self.assertEqual(out, [])
 
+    def test_bib_key_reads_doi_from_bib(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "refs.bib").write_text("@article{Strick09,\n  doi = {10.1146/annurev.neuro.31.060407.125606},\n}\n")
+            with mock.patch.object(ur, "BIB", Path(d) / "refs.bib"):
+                self.assertEqual(ur.bib_key("10.1146/ANNUREV.NEURO.31.060407.125606"), ("Strick09", None))
+                key, err = ur.bib_key("10.1038/nature12345")
+        self.assertIsNone(key)
+        self.assertIn("Add it in Paperpile", err)
+
 
 class Placement(unittest.TestCase):
     TEXT = ("| A | Does not learn; task examples follow. |\n| B | Measures robustness; texture is not friction. |\n\n"
