@@ -71,11 +71,14 @@ def load_words():
 
 
 def stems(word):
-    """Possible headwords for a regular inflection: plural, past, -ing, comparative, superlative."""
+    """Possible headwords for a regular inflection: plural, past, or -ing.
+
+    No -er or -est: they would also pass agent nouns (reviewer from review). NGSL already
+    lists the comparatives and superlatives of its adjectives.
+    """
     out = []
-    for suffix, repl in (("ies", "y"), ("ied", "y"), ("ier", "y"), ("iest", "y"),
-                         ("es", ""), ("s", ""), ("ed", ""), ("ed", "e"), ("ing", ""), ("ing", "e"),
-                         ("er", ""), ("er", "e"), ("est", ""), ("est", "e")):
+    for suffix, repl in (("ies", "y"), ("ied", "y"), ("es", ""), ("s", ""),
+                         ("ed", ""), ("ed", "e"), ("ing", ""), ("ing", "e")):
         if word.endswith(suffix) and len(word) > len(suffix) + 1:
             stem = word[: -len(suffix)] + repl
             out.append(stem)
@@ -107,6 +110,8 @@ SKIP = [
     re.compile(r"<!--.*?-->", re.S),                  # HTML comments
     re.compile(r"<[^>\n]+>"),                         # HTML tags
     re.compile(r"\]\([^)\n]*\)"),                     # link targets
+    re.compile(r"\]\[[^\]\n]*\]"),                     # reference link labels
+    re.compile(r"^ {0,3}\[[^\]\n]+\]:.*$", re.M),         # reference link definitions
     re.compile(r"https?://\S+"),                      # bare URLs
     re.compile(r"\[\^[^\]\n]+\]"),                    # footnote marks
     re.compile(r"-?@[\w:.#$%&+?<>~/-]+"),             # citation keys
@@ -157,7 +162,7 @@ def main(argv=None):
         return 0
     words, missing = load_words()
     if missing:
-        print(f"warning: missing {', '.join(missing)}: run `plain_words.py fetch`. Checking without them.",
+        print(f"warning: missing {', '.join(missing)}: run `plain-words fetch`. Checking without them.",
               file=sys.stderr)
     text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
     words |= read_allow(args.allow)

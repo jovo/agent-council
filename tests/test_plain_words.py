@@ -51,10 +51,15 @@ class PlainWordsTest(unittest.TestCase):
     def test_unlisted_words_flag_with_line_numbers(self):
         self.assertEqual(self.flagged("We obfuscate.\n\nThey obfuscate twice."), {"obfuscate": [1, 3]})
 
+    def test_derived_agent_nouns_flag(self):
+        self.assertEqual(self.flagged("The reviewer and the marketer."), {"reviewer": [1], "marketer": [1]})
+        self.assertEqual(self.flagged("Bigger cities, the biggest."), {})
+
     def test_markup_is_skipped(self):
         text = ("---\ntitle: Zyzzyva\n---\n"
                 "Text $\\zeta_{qq}$ and `qqfoo` [link](https://qqbar.example) [@Qqkey20] {#sec:qq}.\n"
-                "```\nqqcode\n```\n$$\nqqmath\n$$\n<!-- qqnote -->\n")
+                "```\nqqcode\n```\n$$\nqqmath\n$$\n<!-- qqnote -->\n"
+                "See [the list][qq-ref].\n\n[qq-ref]: https://qqbar.example \"Qq title\"\n")
         self.assertEqual(self.flagged(text), {})
 
     def test_words_seen_only_capitalized_are_names(self):

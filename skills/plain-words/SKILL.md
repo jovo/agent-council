@@ -11,7 +11,7 @@ links it into Claude Code, Codex, and Cursor, puts the checker on the PATH as
 
 ## The word list
 
-A word passes when it, or its regular inflection (plural, past, -ing, -er, -est),
+A word passes when it, or its regular inflection (plural, past, -ing),
 is on one of these lists:
 
 - **NGSL 1.2** and its 52-word supplement (days, months, number words), the
@@ -28,8 +28,10 @@ is on one of these lists:
 
 Contractions, possessives, and hyphenated compounds of allowed words pass. A
 derived word does not pass because its root does: "reviewer" fails though
-"review" passes, and "unchanged" fails though "change" passes. The checker skips
-front matter, code, math, URLs, link targets, HTML, citation keys, footnote
+"review" passes, and "unchanged" fails though "change" passes. Comparatives
+pass only when the list has them: NGSL lists them for its adjectives, the Oxford
+list does not. The checker skips
+front matter, code, math, URLs, link targets and reference link labels, HTML, citation keys, footnote
 marks, Pandoc attributes, and single letters.
 
 Words the draft needs and defines (a technical term, a product name) go in
