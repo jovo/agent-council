@@ -30,13 +30,16 @@ Contractions, possessives, and hyphenated compounds of allowed words pass. A
 derived word does not pass because its root does: "reviewer" fails though
 "review" passes, and "unchanged" fails though "change" passes. Comparatives
 pass only when the list has them: NGSL lists them for its adjectives, the Oxford
-list does not. The checker skips
-front matter, code, math, URLs, link targets and reference link labels, HTML, citation keys, footnote
-marks, Pandoc attributes, and single letters.
+list does not. Single letters pass, so `x-value` and `t-shirt` do too. The
+checker skips front matter, code, math (but not prose between two dollar
+amounts), URLs, link targets, reference link labels and definitions, HTML,
+citation keys, footnote marks (but not footnote text), and Pandoc attributes.
 
 Words the draft needs and defines (a technical term, a product name) go in
-`plain-words-allow.txt` next to the draft, one per line. The checker reads that
-file on every run.
+`plain-words-allow.txt` next to the draft, one per line, with `#` for comments.
+Their inflections pass too. The checker reads that file on every run, and for
+`plain-words check -` it reads the one in the current folder. For a one-off
+run, `--allow neuron,glia` adds words.
 
 ## Proposing edits
 
@@ -58,7 +61,8 @@ file on every run.
    - **Fix** it when it is a typo ("recieve").
    Names and acronyms are kept unless the user asks otherwise.
 4. Check every replacement before proposing it: pipe the new sentence to
-   `plain-words check -`. A replacement must pass, and it must follow the user's
+   `plain-words check -` from the draft's folder, so its allow file applies. A
+   replacement must pass, and it must follow the user's
    writing rules (their CLAUDE.md: no em dashes, no semicolons, no hedges).
 5. Write the edits to `<name>.plain-words.md` next to the draft, then show it to
    the user (in the Claude app, open it in the file pane). Do not edit the draft

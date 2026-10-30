@@ -2,6 +2,7 @@
 """Flag the words in a draft that are not on a list of common English words.
 
     plain_words.py check FILE [--allow WORDS]   flag words by line (FILE may be - for stdin)
+                                                --allow takes a file or comma-separated words
     plain_words.py fetch                        download the Oxford and xkcd lists
 
 The list is the union of:
@@ -9,7 +10,8 @@ The list is the union of:
   - The American Oxford 3000 (Oxford University Press), downloaded by `fetch`.
   - The xkcd Simple Writer list (Randall Munroe), downloaded by `fetch`, minus lists/blocked.txt.
 
-Words in a file named plain-words-allow.txt next to the draft, and in --allow, also pass.
+Words in a file named plain-words-allow.txt next to the draft (in the current folder for
+stdin), and in --allow, also pass, with their inflections.
 Exit status: 0 when every word passes, 1 when some do not, 2 on a usage error.
 """
 import argparse
@@ -33,6 +35,14 @@ ALLOW_FILE = "plain-words-allow.txt"
 # Contractions whose stem is not itself a word.
 CONTRACTIONS = {"won't": "will", "can't": "can", "shan't": "shall", "ain't": "be"}
 CLITICS = ("n't", "'s", "'re", "'ve", "'ll", "'d", "'m")
+# Pieces of split contractions that NGSL lists as forms (isn from isn't). They are not words.
+FRAGMENTS = {"ain", "aren", "couldn", "didn", "doesn", "don", "hadn", "hasn", "haven", "isn",
+             "mightn", "mustn", "needn", "shan", "shouldn", "wasn", "weren", "wouldn", "wo", "ca",
+             "d", "ll", "m", "re", "s", "t", "ve"}
+
+
+def norm(word):
+    return word.strip().lower().replace("’", "'")
 
 
 def fetch():
@@ -44,7 +54,8 @@ def fetch():
 
 
 def blocked():
-    return [w for w in (LISTS / "blocked.txt").read_text().split() if not w.startswith("#")]
+    return [norm(line) for line in (LISTS / "blocked.txt").read_text().splitlines()
+            if line.strip() and not line.lstrip().startswith("#")]
 
 
 def load_words():
@@ -53,21 +64,22 @@ def load_words():
     for name in ("ngsl-1.2.csv", "ngsl-supplement.csv"):
         for line in (LISTS / name).read_text().splitlines():
             if line and not line.startswith("#"):
-                words.update(w.strip().lower() for w in line.split(",") if w.strip())
+                words.update(norm(w) for w in line.split(","))
     missing = []
     oxford = DATA / "oxford-3000-us.txt"
     if oxford.exists():
-        words.update(w.strip().lower() for w in oxford.read_text().splitlines() if w.strip())
+        words.update(norm(w) for w in oxford.read_text().splitlines())
     else:
         missing.append(oxford.name)
     xkcd = DATA / "xkcd-simplewriter.js"
     if xkcd.exists():
         m = re.search(r'"([^"]*)"', xkcd.read_text())
         bad = tuple(blocked())
-        words.update(w.replace("’", "'") for w in m.group(1).split("|") if not w.startswith(bad))
+        words.update(w for w in map(norm, m.group(1).split("|") if m else []) if not w.startswith(bad))
     else:
         missing.append(xkcd.name)
-    return words, missing
+    words.discard("")
+    return words - FRAGMENTS, missing
 
 
 def stems(word):
@@ -81,41 +93,43 @@ def stems(word):
                          ("ed", ""), ("ed", "e"), ("ing", ""), ("ing", "e")):
         if word.endswith(suffix) and len(word) > len(suffix) + 1:
             stem = word[: -len(suffix)] + repl
+            if suffix == "es" and not stem.endswith(("s", "z", "x", "sh", "ch", "o")):
+                continue  # robes is robe + s, not rob + es
             out.append(stem)
-            if not repl and len(stem) > 2 and stem[-1] == stem[-2]:  # stopped, bigger
-                out.append(stem[:-1])
+            if suffix in ("ed", "ing") and not repl and len(stem) > 2 and stem[-1] == stem[-2]:
+                out.append(stem[:-1])  # stopped, running
     return out
 
 
 def allowed(word, words):
-    if word in words:
+    if len(word) == 1 or word in words:  # single letters are variables and list labels
         return True
     if word in CONTRACTIONS:
         return CONTRACTIONS[word] in words
     for clitic in CLITICS:
         if word.endswith(clitic) and len(word) > len(clitic):
             return allowed(word[: -len(clitic)], words)
-    if "-" in word:
-        return all(allowed(part, words) for part in word.split("-") if part)
-    return any(s in words for s in stems(word))
+    if any(s in words for s in stems(word)):
+        return True
+    return "-" in word and all(allowed(part, words) for part in word.split("-") if part)
 
 
 # Spans that are not prose: masked with spaces so line numbers stay put.
 SKIP = [
-    re.compile(r"\A---\n.*?\n---\n", re.S),          # YAML front matter
-    re.compile(r"^(```|~~~).*?^\1", re.S | re.M),     # fenced code
-    re.compile(r"\$\$.*?\$\$", re.S),                 # display math
-    re.compile(r"(?<![\\$])\$[^$\n]+\$"),             # inline math
-    re.compile(r"`[^`\n]+`"),                         # inline code
-    re.compile(r"<!--.*?-->", re.S),                  # HTML comments
-    re.compile(r"<[^>\n]+>"),                         # HTML tags
-    re.compile(r"\]\([^)\n]*\)"),                     # link targets
-    re.compile(r"\]\[[^\]\n]*\]"),                     # reference link labels
-    re.compile(r"^ {0,3}\[[^\]\n]+\]:.*$", re.M),         # reference link definitions
-    re.compile(r"https?://\S+"),                      # bare URLs
-    re.compile(r"\[\^[^\]\n]+\]"),                    # footnote marks
-    re.compile(r"-?@[\w:.#$%&+?<>~/-]+"),             # citation keys
-    re.compile(r"\{[#.][^}\n]*\}"),                   # Pandoc attributes
+    re.compile(r"\A---\n.*?\n---\n", re.S),                       # YAML front matter
+    re.compile(r"^[ \t]*(`{3,}|~{3,}).*?^[ \t]*\1", re.S | re.M),  # fenced code
+    re.compile(r"\$\$.*?\$\$", re.S),                              # display math
+    re.compile(r"(?<![\\$])\$(?!\s)(?:[^$\\\n]|\\.)*(?<![\\$\s])\$(?!\d)"),  # inline math, not $10 to $20
+    re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)"),                # inline code
+    re.compile(r"<!--.*?-->", re.S),                               # HTML comments
+    re.compile(r"<[^>\n]+>"),                                      # HTML tags
+    re.compile(r"\]\([^)\n]*\)"),                                  # link targets
+    re.compile(r"\]\[[^\]\n]*\]"),                                 # reference link labels
+    re.compile(r"^ {0,3}\[(?!\^)[^\]\n]+\]:.*$", re.M),            # reference link definitions
+    re.compile(r"https?://\S+"),                                   # bare URLs
+    re.compile(r"\[\^[^\]\n]+\]"),                                 # footnote marks
+    re.compile(r"-?@[\w:.#$%&+?<>~/-]+"),                          # citation keys
+    re.compile(r"\{[#.][^}\n]*\}"),                                # Pandoc attributes
 ]
 TOKEN = re.compile(r"[A-Za-z]+(?:['’-][A-Za-z]+)*")
 
@@ -126,27 +140,44 @@ def mask(text):
     return text
 
 
+def roots(word):
+    """The word without a clitic, and its possible stems, so obfuscated meets obfuscate."""
+    for clitic in CLITICS:
+        if word.endswith(clitic) and len(word) > len(clitic):
+            word = word[: -len(clitic)]
+            break
+    return {word, *stems(word)}
+
+
 def check(text, words):
     """Return {word: [line numbers]} for each word not allowed, and the set of words seen only capitalized."""
     flagged, lower_seen = {}, set()
     for n, line in enumerate(mask(text).splitlines(), 1):
         for m in TOKEN.finditer(line):
-            tok = m.group(0).replace("’", "'")
-            word = tok.lower()
-            if len(word) == 1:  # variables and list letters
-                continue
+            tok = m.group(0)
+            word = norm(tok)
             if tok[0].islower():
-                lower_seen.add(word)
+                lower_seen.update(roots(word))
             if not allowed(word, words):
                 lines = flagged.setdefault(word, [])
                 if n not in lines:
                     lines.append(n)
-    names = {w for w in flagged if w not in lower_seen}
+    names = {w for w in flagged if not roots(w) & lower_seen}
     return flagged, names
 
 
-def read_allow(path):
-    return {w.lower() for w in re.findall(r"[A-Za-z'-]+", Path(path).read_text())} if path else set()
+def read_allow(source):
+    """Words from an allow file (# starts a comment), or from a comma-separated string."""
+    if not source:
+        return set()
+    path = Path(source)
+    if path.is_file():
+        text = re.sub(r"#.*", "", path.read_text())
+    elif path.suffix or os.sep in str(source):
+        raise SystemExit(f"plain-words: no allow file {source}")
+    else:
+        text = str(source)
+    return {norm(w) for w in re.findall(r"[A-Za-z'’-]+", text)}
 
 
 def main(argv=None):
@@ -155,7 +186,7 @@ def main(argv=None):
     sub.add_parser("fetch")
     c = sub.add_parser("check")
     c.add_argument("file")
-    c.add_argument("--allow", help="file of extra words to pass")
+    c.add_argument("--allow", help="file of extra words to pass, or comma-separated words")
     args = ap.parse_args(argv)
     if args.cmd == "fetch":
         fetch()
@@ -166,10 +197,9 @@ def main(argv=None):
               file=sys.stderr)
     text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
     words |= read_allow(args.allow)
-    if args.file != "-":
-        local = Path(args.file).resolve().parent / ALLOW_FILE
-        if local.exists():
-            words |= read_allow(local)
+    folder = Path.cwd() if args.file == "-" else Path(args.file).resolve().parent
+    if (folder / ALLOW_FILE).is_file():
+        words |= read_allow(folder / ALLOW_FILE)
     flagged, names = check(text, words)
     if not flagged:
         print("all words pass.")
