@@ -69,7 +69,7 @@ that change.
 Default to markdown (.md) for documents. Marp markdown for slide decks.
 Don't produce .docx or .pptx unless I explicitly ask.
 
-Some tasks have their own skills in `~/github/agent-council/skills`: `logic` (the logic of an argument), `statistics` (experimental design and inference from data), `figures`, `documents` (equations, citations, tables), `papers-and-proposals`, `pdf`, `slides`, `prfaq` (Amazon-style PR/FAQs, line by line), and `unified-review` (reviews of drafts, including the reviewer rules and output format). Load the matching skill for those tasks.
+Some tasks have their own skills in `~/github/agent-council/skills`: `logic` (the logic of an argument), `statistics` (experimental design and inference from data), `figures`, `documents` (equations, citations, tables), `papers-and-proposals`, `pdf`, `slides`, `prfaq` (Amazon-style PR/FAQs, line by line), `plain-words` (keep a draft to common English words), and `unified-review` (reviews of drafts, including the reviewer rules and output format). Load the matching skill for those tasks.
 
 # Engineering conventions (for code work)
 

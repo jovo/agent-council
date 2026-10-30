@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Link agent-council into place: the unified-review and make-pdf commands on your PATH, and
+# Link agent-council into place: the unified-review, make-pdf, and plain-words commands on your PATH, and
 # every skill in skills/ into Claude Code, Codex, and Cursor.
 set -euo pipefail
 
@@ -21,6 +21,10 @@ for tool in unified-review make-pdf; do
 done
 link "$repo/bin/unified-review" "$bin_dir/unified-review"
 link "$repo/bin/make-pdf" "$bin_dir/make-pdf"
+chmod +x "$repo/skills/plain-words/plain_words.py"
+link "$repo/skills/plain-words/plain_words.py" "$bin_dir/plain-words"
+# Word lists the plain-words skill may not redistribute: the Oxford 3000 and the xkcd Simple Writer list.
+"$repo/skills/plain-words/plain_words.py" fetch || echo "note: plain-words fetch failed; run it once online" >&2
 # House fonts (New Computer Modern, GUST Font License) for PDFs, installed for the user.
 if [ "$(uname)" = Darwin ]; then default_fonts=$HOME/Library/Fonts; else default_fonts=$HOME/.local/share/fonts; fi
 font_dir=${FONT_DIR:-$default_fonts}
