@@ -1953,7 +1953,7 @@ class ReviewPage(unittest.TestCase):
             procs = [subprocess.Popen([sys.executable, str(REPO / "bin" / "unified-review"), "--serve", str(f)], env=env,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for f in files]
             try:
-                for _ in range(50):
+                for _ in range(300):  # cold starts on CI runners can take several seconds
                     pages = json.loads((runs / "pages.json").read_text()) if (runs / "pages.json").exists() else {}
                     if len(pages) == len(files):
                         break
