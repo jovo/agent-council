@@ -557,7 +557,8 @@ class Opening(unittest.TestCase):
     def opened(self, bundle, which=True):
         cmds, out = [], []
         env = {"__CFBundleIdentifier": bundle} if bundle else {}
-        with mock.patch.dict(ur.os.environ, env, clear=True), \
+        with mock.patch.object(ur.sys, "platform", "darwin"), \
+             mock.patch.dict(ur.os.environ, env, clear=True), \
              mock.patch.object(ur, "OPEN_APP", ""), \
              mock.patch.object(ur.shutil, "which", lambda c: "/bin/" + c if which else None), \
              mock.patch.object(ur.subprocess, "run", lambda cmd, **k: cmds.append(cmd) or SimpleNamespace(returncode=0)), \
