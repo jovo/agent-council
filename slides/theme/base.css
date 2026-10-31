@@ -232,6 +232,9 @@ section.full > :is(h1, p) {
   text-shadow: 0 2px 14px rgba(0, 0, 0, .75);
 }
 section.full > footer { position: absolute; left: var(--s5); bottom: var(--s2); text-shadow: 0 1px 8px rgba(0, 0, 0, .75); }
+/* In PDF export, Chrome rasterizes blurred text shadows into a box that
+   macOS Preview draws as a solid black rectangle; drop them in print. */
+@media print { section.full > :is(h1, p, footer) { text-shadow: none; } }
 
 /* Centre the body on the whole slide: title pinned top, takeaway pinned bottom. */
 section.center { justify-content: center; align-items: center; text-align: center; }
@@ -287,6 +290,19 @@ section > .cols:has(> figure) { flex: 1 1 0; min-height: 0; }
   content: '→';
   position: absolute;
   top: 40%;
+  left: calc(-1 * var(--s3));
+  width: var(--s3);
+  text-align: center;
+  color: var(--muted);
+}
+/* In a cell with an image, the arrow sits at the image's vertical centre. */
+.cols.flow > * > p:has(> img) { position: relative; }
+.cols.flow > * + *:has(> p > img)::before { content: none; }
+.cols.flow > * + * > p:has(> img)::before {
+  content: '→';
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
   left: calc(-1 * var(--s3));
   width: var(--s3);
   text-align: center;

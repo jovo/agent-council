@@ -98,13 +98,17 @@ deck-specific classes.
 - Slide modifiers: `center` (centres the body on the slide; the title stays at
   the top and any takeaway and footer at the bottom), `invert` (light
   palette; put `class: invert` in the front matter for a whole light deck).
+  New decks are dark: leave out `class: invert` unless the user asks for a
+  light deck.
 - Components: `cols` (equal columns, one per child; a leading `<span>` in a
   cell is its label), `contrast`, `rows-2` and `flow` (modifiers on `cols`;
-  `flow` draws an arrow between consecutive columns, for process steps).
+  `flow` draws an arrow between consecutive columns, for process steps,
+  centred on the image when a cell has one).
 
 Native Marp features replace classes where they can:
 
-- Takeaway: a Markdown blockquote, `> One bold line.` It renders as a centred
+- Takeaway (only when the user asks for one; by default the title is the
+  takeaway): a Markdown blockquote, `> One bold line.` It renders as a centred
   band (accent left border, light accent fill) at the same height on every
   slide, just above the reserved footer line. The band always wraps its full
   text; `npm run check` flags a takeaway that runs to a second line.
@@ -284,11 +288,11 @@ and inspect every slide after changing shared typography.
 - Numbers on slides have at most two significant digits; round before placing
   them. Never assert a magnitude beyond what is measured or sourced. When only
   one proof point exists, say so instead of generalizing from it.
-- A takeaway (`>`) sits at the same height on every slide, just above the
-  footer line, and is one line per slide. It adds an implication,
-  consequence, or decision; it never restates the title or summarizes the
-  body. If it has nothing to add, delete it. If it does not fit on one line,
-  cut it to the claim.
+- The title is the slide's takeaway: a one-line claim that states what the
+  slide shows. Slides have no takeaway band (`>`) by default. Add one only
+  when the user asks for it. It then sits just above the footer line, is
+  one line, adds an implication, consequence, or decision, and never
+  restates the title or summarizes the body.
 - A footer only cites what is on the slide (an image's source, a figure's
   paper, a quote's origin). Never use it for a disclaimer, caveat, or scope
   note. It fits on one line: cut the least essential entry rather than wrap.
@@ -336,13 +340,22 @@ and inspect every slide after changing shared typography.
 
 - Cite copyrighted images in the slide footer (rights holder, year).
 - People photos stay square; no cropping or circles.
+- Do not copy figures or other assets between decks. Reference each asset
+  where it first appeared, for example
+  `![bg](../prospective-learning/assets/old-deck-more-thanks.jpg)`. Copy
+  only when the asset must change for the new deck (a crop, a redraw), and
+  then keep the edited version in the new deck's `assets/`.
 
 ## Process
 
 - Speaker scripts (for example `companion.md`) change only when the user asks,
   even when slides are reordered or removed.
 - Do not build PDFs (or PNG exports) of a deck unless the user asks. The
-  deliverable is `deck.md` and its rendered `deck.html`.
+  deliverable is `deck.md` and its rendered `deck.html`. When asked, write
+  the PDF to `<deck>/deck.pdf` with `npx marp <deck>/deck.md --pdf --html
+  --allow-local-files --theme-set theme/base.css -o <deck>/deck.pdf`. Never
+  commit a PDF: the decks repository's `.gitignore` has `*.pdf`, and a new
+  decks repository gets the same line.
 - Never edit an `AGENTS.md`. Each one is a symlink to the `CLAUDE.md` beside
   it; edit that `CLAUDE.md` instead. A new deck folder that needs local rules
   gets `CLAUDE.md` plus `ln -s CLAUDE.md AGENTS.md`.
