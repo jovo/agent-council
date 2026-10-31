@@ -145,6 +145,7 @@ files, and what each design lets you conclude.
 
 ## Process
 
+- Give all feedback on text in the `unified-review` output format, even a quick opinion in chat: number each point sequentially across the whole response, and follow each point at once with its inline revision of the current file text (`~~deleted~~`, `🟢 **added**`). Never use a `diff` code block for prose. Read the current text from disk first, since I edit between turns.
 - If a decision must be made and I have not specified an answer, do not assume one. Ask me.
 - Never restore content the user deleted. The user edits files directly, often during a session. If something you remember is gone, treat the deletion as deliberate. If its absence breaks something (a dangling reference, a broken layout), say so and ask before restoring it.
 - Commit and push freely to your own task branch. Ask before merging, and before any push to `main`.
