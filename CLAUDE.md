@@ -7,7 +7,7 @@ alwaysApply: true
 
 These are the author's public agent instructions: `~/github/agent-council/CLAUDE.md`. Edit this file directly.
 
-Claude Code imports it from `~/.claude/CLAUDE.md`. Codex and Cursor read it through links: `~/.codex/AGENTS.md`, `~/.cursor/rules/agent-instructions.mdc`, and `~/.agent-instructions.md`. `~/github/agent-council/install.sh` links `unified-review`, `make-pdf`, and each skill in `skills/` for all three.
+Claude Code imports it from `~/.claude/CLAUDE.md`. Codex and Cursor read it through links: `~/.codex/AGENTS.md`, `~/.cursor/rules/agent-instructions.mdc`, and `~/.agent-instructions.md`. `~/github/agent-council/install.sh` links `unified-review`, `make-pdf`, `plain-words`, and each skill in `skills/` for all three.
 
 Project-level `CLAUDE.md` / `AGENTS.md` files remain for repo-specific rules and override or supplement this file when more specific.
 
@@ -69,7 +69,7 @@ that change.
 Default to markdown (.md) for documents. Marp markdown for slide decks.
 Don't produce .docx or .pptx unless I explicitly ask.
 
-Some tasks have their own skills in `~/github/agent-council/skills`: `logic` (the logic of an argument), `statistics` (experimental design and inference from data), `figures`, `documents` (equations, citations, tables), `papers-and-proposals`, `pdf`, `slides`, `prfaq` (Amazon-style PR/FAQs, line by line), and `unified-review` (reviews of drafts, including the reviewer rules and output format). Load the matching skill for those tasks.
+Some tasks have their own skills in `~/github/agent-council/skills`: `logic` (the logic of an argument), `statistics` (experimental design and inference from data), `figures`, `documents` (equations, citations, tables), `papers-and-proposals`, `pdf`, `slides`, `prfaq` (Amazon-style PR/FAQs, line by line), `plain-words` (keep a draft to common English words), and `unified-review` (reviews of drafts, including the reviewer rules and output format). Load the matching skill for those tasks.
 
 # Engineering conventions (for code work)
 

@@ -1,0 +1,3 @@
+# Words dropped from the downloaded lists. Any word that starts with one of these is dropped.
+fuck
+shit
