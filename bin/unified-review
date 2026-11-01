@@ -4785,6 +4785,7 @@ def serve(path):
     """Serve the review page for one file, or the upload page, on a free local
     port, and record the port so later calls reuse this server."""
     import http.server
+    import socketserver
     page = UploadServer() if path == UPLOAD else PageServer(path)
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -4846,6 +4847,13 @@ def serve(path):
         def do_POST(self):
             self.reply("POST")
 
+    class Server(http.server.ThreadingHTTPServer):
+        # HTTPServer.server_bind looks up 127.0.0.1's host name, which can stall for
+        # seconds on macOS, and it runs under the lock below, so servers queue on it.
+        def server_bind(self):
+            socketserver.TCPServer.server_bind(self)
+            self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
+
     # Servers starting together would each write back pages.json without the others'
     # entries, so one at a time reads, binds, and writes it.
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
@@ -4856,9 +4864,9 @@ def serve(path):
         # last port, so a tab left open works again after a restart. Fall back if it is taken.
         port = int(os.environ.get("UNIFIED_REVIEW_PORT") or (pages.get(str(page.path)) or {}).get("port") or 0)
         try:
-            httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            httpd = Server(("127.0.0.1", port), Handler)
         except OSError:
-            httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            httpd = Server(("127.0.0.1", 0), Handler)
         pages[str(page.path)] = {"port": httpd.server_address[1], "pid": os.getpid()}
         write_atomic(RUNS_DIR / "pages.json", json.dumps(pages, indent=1) + "\n")
     httpd.timeout = 60
