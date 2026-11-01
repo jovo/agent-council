@@ -1,6 +1,6 @@
 ---
 name: prfaq
-description: Line-by-line checklist for writing and reviewing an Amazon-style PR/FAQ (a future press release plus FAQ), including platform and marketplace launches. Use whenever the task drafts, edits, restructures, or reviews a PR/FAQ, a launch press release, its headline or subhead, or its FAQ, or asks how an Amazon executive would judge one.
+description: Line-by-line checklist for writing and reviewing an Amazon-style PR/FAQ (a future press release plus FAQ), including platform and marketplace launches. Use whenever the task drafts, edits, restructures, or reviews a PR/FAQ, a launch press release, its heading or subheading, or its FAQ, or asks how an Amazon executive would judge one.
 ---
 
 # PR/FAQ
@@ -13,18 +13,18 @@ Sources for the structure:
 - Colin Bryar and Bill Carr, [Working Backwards PR/FAQ Instructions & Template](https://workingbackwards.com/resources/working-backwards-pr-faq/), and their book *Working Backwards* (St. Martin's Press, 2021).
 - AWS, [Product Management at Amazon](https://aws.amazon.com/executive-insights/content/product-management-at-amazon/), which says the press release "must fit on a single page."
 
-McAllister and Bryar and Carr give the same press release order: heading, subheading, summary, problem, solution, then quotes and getting started, then the closing. Bryar and Carr group the spokesperson quote, the customer quote, and getting started as one block. McAllister orders them spokesperson quote, getting started, customer quote, and this skill follows him. Neither template has a separate proof paragraph, partner quote, or price section. Each check below comes from one of these sources, except the no-price rule, which is Yumzu's.
+McAllister and Bryar and Carr give the same press release order: heading, subheading, summary, problem, solution, then quotes and getting started. Bryar and Carr group the spokesperson quote, the customer quote, getting started, and a link to the website as one block. McAllister orders them spokesperson quote, getting started, customer quote, then a separate closing and call to action, and this skill follows him. Neither template has a separate proof paragraph, partner quote, or price section. Each check below comes from one of these sources, except the no-price rule, which is Yumzu's.
 
 Use the checklist two ways. Authors tick it while drafting. Reviewers report each unmet item as a finding in the `unified-review` format (severity groups, inline diffs). The `logic` skill still applies to the argument, and CLAUDE.md's writing rules still apply to every sentence.
 
 ## Before drafting
 
-- [ ] **Hero customer.** One precisely defined customer segment, named as a role ("the grower who owns the arm"), not a segment list. Bryar and Carr: "If you think your product is for everyone, you are mistaken." Everyone else is supply, channel, or partner.
+- [ ] **Hero customer.** One precisely defined customer segment. Bryar and Carr: "If you think your product is for everyone, you are mistaken."
 - [ ] **One PR/FAQ per side.** A product with two kinds of customer can need two PR/FAQs. Fulfillment by Amazon had one from the seller's side and one from the buyer's. For a marketplace, decide whether the supply side (creators, developers, sellers) needs its own.
 - [ ] **The most important problem.** Of the problems the product could solve, the one that matters most to the hero, and one with enough customers willing to pay to make the market worth entering.
 - [ ] **Today's alternatives.** What the hero uses now to deal with the problem, and why it falls short. There is always a current solution.
 - [ ] **The one differentiator.** How the product is better, faster, or cheaper than those alternatives, in language the customer understands, with no corporate jargon (Bryar and Carr). If it solves the problem the way existing products do, go back to the drawing board.
-- [ ] **Launch scope and date.** What ships, for which hardware, markets, or accounts, on a date the team expects to launch. What does not ship is for the FAQ.
+- [ ] **Launch date.** A date the team expects to launch. Bryar and Carr: a rough estimate at first, the planned launch date by the final draft.
 
 ## Press release, line by line
 
@@ -32,7 +32,7 @@ Write the elements in this order. Each item names what the element must do, then
 
 ### 1. Heading
 
-- [ ] Names the product so the target customer understands it: "[Company] Launches [Product]: [what the hero now gets]."
+- [ ] Names the product so the target customer understands it.
 
 ### 2. Subheading
 
@@ -42,12 +42,12 @@ Write the elements in this order. Each item names what the element must do, then
 ### 3. Summary paragraph
 
 - [ ] Opens with the city, the media outlet, and the launch date: "BERKELEY, Calif. (BUSINESS WIRE), November 14, 2028:" or the outlet's own dateline style.
-- [ ] Summarizes the product and its benefits. Assume the reader reads nothing else. A reader who stops here knows what launched, for whom, what it does for them, and where to get it.
+- [ ] Summarizes the product and its benefits. McAllister: "Assume the reader will not read anything else."
 
 ### 4. Problem paragraph
 
-- [ ] The problem, from the customer's point of view, with what it costs them.
-- [ ] The most important problem, not a list. If the draft argues two problems, pick the one the hero would pay to solve and move the other to the FAQ or the solution.
+- [ ] The problem(s) the product solves, from the customer's point of view.
+- [ ] The problem(s) most important to the customer. Bryar and Carr: "Not all problems are created equal."
 - [ ] Comes before the solution.
 
 ### 5. Solution paragraph(s)
@@ -63,16 +63,16 @@ Write the elements in this order. Each item names what the element must do, then
 
 ### 7. How to get started
 
-- [ ] Shows how easy it is to start: the steps, in order, with who does each and how long it takes.
+- [ ] Shows how easy it is to get started.
 
 ### 8. Customer quote
 
-- [ ] One quote from a hypothetical customer, in the hero's voice, describing how they experienced the benefit, in words they would use.
+- [ ] One quote from a hypothetical customer describing how they experienced the benefit.
 
 ### 9. Closing and call to action
 
 - [ ] Wraps up and points the reader to where to learn more and get started, with a link.
-- [ ] **No price** (Yumzu's rule). Neither template has a price section, and Bryar and Carr make "What is the price?" the first External FAQ. Price, all in, goes there, as do platform revenue splits.
+- [ ] **No price** (Yumzu's rule). Neither template has a price section, and Bryar and Carr make "What is the price?" the first External FAQ. Price goes there.
 
 ## Whole release
 
@@ -80,34 +80,46 @@ Write the elements in this order. Each item names what the element must do, then
 - [ ] One hero, one segment.
 - [ ] Two quotes: the spokesperson and the customer.
 - [ ] No jargon the hero would not use: replace "catastrophic forgetting," "TCP," "pipeline," "ecosystem" with what they mean for the customer.
-- [ ] No price or revenue split anywhere in the release, quotes included (Yumzu's rule). Savings stated as an outcome (22% less per part) can stay.
-- [ ] Reads as written for the customer, not for investors. Bryar and Carr: the release ignores "competitors, current capabilities, P&L, business partners." Business-model detail moves to the FAQ.
+- [ ] No price anywhere in the release, quotes included (Yumzu's rule).
+- [ ] Written for the customer. Bryar and Carr: while writing it, "You aren't focused on your competitors, current capabilities, P&L, business partners, or other considerations." This does not cancel element 5, which still names today's alternatives.
 
 ## FAQ
 
-The FAQ has no fixed length. External questions come first, then internal ones. Put the most important questions first in each, and leave out questions that do not change the decision (AWS: the team does not "include every possible question"). Bryar and Carr list standard questions on the [Working Backwards page](https://workingbackwards.com/resources/working-backwards-pr-faq/), Appendix 2. The ones below cover theirs and the questions AWS names.
+External questions come first, then internal ones (Bryar and Carr). AWS: "We don't include every possible question." Bryar and Carr list standard questions on the [Working Backwards page](https://workingbackwards.com/resources/working-backwards-pr-faq/), Appendix 2, and name others in its FAQ section. The questions below are theirs, in their order, plus the questions AWS names.
 
 ### External FAQ (first)
 
 Questions customers and the press will ask, in language they understand.
 
-- [ ] What is the price, all in, and what does it replace?
+- [ ] What is the price?
 - [ ] How does it work?
-- [ ] What do I need before I start, and who installs it?
-- [ ] How do I get help or support, and what happens when it fails?
+- [ ] How do I install it?
+- [ ] What is the warranty?
+- [ ] What is the return policy?
+- [ ] How do I get help or customer support?
 - [ ] Where can I buy it?
+- [ ] What happens when the product breaks? (AWS)
+- [ ] Why would I choose this over another product? (AWS)
 - [ ] Will my data be secure? (AWS)
 
 ### Internal FAQ (second)
 
-Questions senior leaders and every department (finance, marketing, support, operations, HR, legal) will ask after reading the release.
+Questions senior leaders and every department (finance, marketing, customer support, operations, HR) will ask after reading the release, and the challenging problems to solve, "whether technical, financial, legal, or operational" (Bryar and Carr).
 
-- [ ] What does the target customer use today, who are the competitors, and how is this better, faster, or cheaper?
-- [ ] Market size: how many customers have the problem, how many will pay to solve it, how much, and how many can use the product. Each figure sourced, arithmetic shown.
-- [ ] Per-unit economics: gross profit and contribution profit per unit, and what has to be true for them to hold.
-- [ ] Upfront investment (people, technology, inventory, space), how the team manages that risk, and months or years to profitability.
-- [ ] The hard problems to solve (business model, engineering, legal, UI), the hardest technical risk, and the evidence it is solved.
-- [ ] New capabilities the company must build.
-- [ ] Third-party relationships and technologies the product depends on, why each partner will commit, and what each has committed to by launch.
-- [ ] Regulatory and legal issues.
-- [ ] What must be true for the product to succeed, and the top three reasons it will not.
+- [ ] What products or solutions does the target customer use today to solve this problem?
+- [ ] What problem(s) does this product solve for customers?
+- [ ] How does it create value for customers: in what ways is it better, cheaper, and faster than the alternatives?
+- [ ] Who are the current competitors?
+- [ ] How large is the estimated demand, and what is the total addressable market? How many customers have this need, how many will pay to solve it and how much, and how many have the characteristics, capabilities, and constraints needed to use the product?
+- [ ] What happens if a customer encounters x? How does the product deal with use case x?
+- [ ] What challenging problems (business model, engineering, legal, UI) must be solved to enable the product?
+- [ ] What new capabilities must the company establish to support it?
+- [ ] What third-party relationships or dependencies does it need, and why will each partner be willing to partner (what is in it for them)? What third-party technologies must work for the product to work as promised?
+- [ ] What regulatory or legal issues apply?
+- [ ] What are the per-unit economics: expected gross profit and contribution profit per unit?
+- [ ] How much upfront investment (people, technology, inventory, warehouse space) does it need, and how will the team manage that risk?
+- [ ] From the upfront investment and the per-unit economics, how many months or years until it is profitable?
+- [ ] What assumptions need to be true for the product to succeed?
+- [ ] What are the top three reasons it will not succeed?
+- [ ] Might it cannibalize other products? (AWS)
+- [ ] Do we have the resources to make this work? (AWS)
