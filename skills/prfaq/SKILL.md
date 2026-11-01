@@ -99,8 +99,7 @@ Write the elements in this order. Each item names what the element must do, then
 ### 9. Closing and call to action
 
 - [ ] Wraps up and points the reader to where to learn more and get started, with a link.
-- [ ] **Price** *(house)*. Neither template has a price section, and Bryar and Carr make "What is the price?" the first External FAQ. Put price in the release only when it is part of the benefit (a new task for $12,000 a year instead of a new robot), as one sentence in the closing, all in: hardware, subscriptions, install. Otherwise leave it to the FAQ.
-- [ ] Platform revenue splits stay out of the release *(house)*. They go in the FAQ.
+- [ ] **No price.** Neither template has a price section, and Bryar and Carr make "What is the price?" the first External FAQ. Price, all in, goes there, as do platform revenue splits.
 
 ## Whole release
 
@@ -110,6 +109,7 @@ Write the elements in this order. Each item names what the element must do, then
 - [ ] Each concept has one name, used everywhere *(house)* (skill, cartridge, Knowledge Cartridge: pick one or define how they relate).
 - [ ] No jargon the hero would not use: replace "catastrophic forgetting," "TCP," "pipeline," "ecosystem" with what they mean for the customer.
 - [ ] No puffery labels ("premier," "leading").
+- [ ] No price or revenue split anywhere in the release, quotes included. Savings stated as an outcome (22% less per part) can stay.
 - [ ] Every number appears once or agrees everywhere it appears.
 - [ ] No claim the company cannot defend in front of legal, safety, or a skeptical customer *(house)*: absolutes, guarantees, "unbypassable."
 - [ ] Real companies and named people in invented quotes are replaced with placeholders before the document leaves the team *(house)*.
