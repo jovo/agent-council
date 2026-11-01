@@ -20,10 +20,10 @@ Use the checklist two ways. Authors tick it while drafting. Reviewers report eac
 ## Before drafting
 
 - [ ] **Hero customer.** One precisely defined customer segment, named as a role ("the grower who owns the arm"), not a segment list. Bryar and Carr: "If you think your product is for everyone, you are mistaken." Everyone else is supply, channel, or partner.
-- [ ] **One PR/FAQ per side.** A product with two kinds of customer can need two PR/FAQs. Fulfillment by Amazon had one from the seller's side and one from the buyer's. For a marketplace, write the hero's release first, then decide whether the supply side (creators, developers, sellers) needs its own.
+- [ ] **One PR/FAQ per side.** A product with two kinds of customer can need two PR/FAQs. Fulfillment by Amazon had one from the seller's side and one from the buyer's. For a marketplace, write the hero's release first *(house)*, then decide whether the supply side (creators, developers, sellers) needs its own.
 - [ ] **The most important problem.** Of the problems the product could solve, the one that matters most to the hero, and one with enough customers willing to pay to make the market worth entering.
 - [ ] **Today's alternatives.** What the hero uses now to deal with the problem, and why it falls short. There is always a current solution.
-- [ ] **The one differentiator.** How the product is better, faster, or cheaper than those alternatives, in the customer's words ("switches tasks without forgetting old ones"), not the mechanism ("continual learning"). If it solves the problem the way existing products do, go back to the drawing board.
+- [ ] **The one differentiator.** How the product is better, faster, or cheaper than those alternatives, in the customer's words, not the mechanism *(house)*: "switches tasks without forgetting old ones," not "continual learning." If it solves the problem the way existing products do, go back to the drawing board.
 - [ ] **The CFO sentence** *(house)*. One sentence the hero would repeat to whoever approves the purchase. It names an outcome they pay for: money, time, idle capacity, risk.
 - [ ] **Launch scope and date.** What ships, for which hardware, markets, or accounts, on a date the team expects to launch. What does not ship is for the FAQ.
 - [ ] **Evidence the hero exists** *(house)*. A Customer Zero, pilot, or design partner whose numbers the release can cite. If the only evidence is in another vertical, that vertical is the hero.
@@ -37,9 +37,9 @@ Write the elements in this order. Each item names what the element must do, then
 - [ ] Names the product so the target customer understands it: "[Company] Launches [Product]: [what the hero now gets]."
 - [ ] **Benefit, not mechanism** *(house)*. Ask of each clause: does it say what the customer does or what the product is, or what the customer gets? "Unlock a marketplace," "download skills," and "AI-powered" are mechanism. "Switches tasks in minutes" is benefit.
 - [ ] **Prerequisites** *(house)*. If the benefit depends on buying or installing something first, the heading says so ("Add One Device, and..."), so a time claim like "in minutes" attaches to the repeated step, not the purchase.
-- [ ] Uses the product's own terms. If the store is the Skill Store, the unit is a skill, not a "job" or a "cartridge."
-- [ ] No absolutes the evidence cannot back ("never," "every," "any").
-- [ ] No filler verbs: unlock, empower, revolutionize, transform.
+- [ ] Uses the product's own terms *(house)*. If the store is the Skill Store, the unit is a skill, not a "job" or a "cartridge."
+- [ ] No absolutes the evidence cannot back *(house)*: "never," "every," "any."
+- [ ] No filler verbs *(house)*: unlock, empower, revolutionize, transform.
 
 ### 2. Subheading
 
@@ -47,20 +47,20 @@ Write the elements in this order. Each item names what the element must do, then
 - [ ] Names the customer segment precisely and the benefit they gain.
 - [ ] Carries the CFO sentence if the heading does not.
 - [ ] States each feature as what the customer gets *(house)*. "Runs on the device" is mechanism. Its benefit (works without a network, data stays on site, no cloud fees) is a separate claim, so pick the one you will stand behind or cut it.
-- [ ] Does not repeat the heading in other words.
+- [ ] Does not repeat the heading in other words *(house)*.
 
 ### 3. Summary paragraph
 
 - [ ] Opens with the city, the media outlet, and the launch date: "BERKELEY, Calif. (BUSINESS WIRE), November 14, 2028:" or the outlet's own dateline style.
 - [ ] Summarizes the product and its benefits. Assume the reader reads nothing else. A reader who stops here knows what launched, for whom, what it does for them, and where to get it.
-- [ ] Introduces each product term once, defined by what it does ("a Knowledge Cartridge, a downloadable skill certified for a standard workcell").
+- [ ] Introduces each product term once, defined by what it does *(house)* ("a Knowledge Cartridge, a downloadable skill certified for a standard workcell").
 - [ ] The hero is the actor *(house)*. Name the role ("growers browse the store"), not a generic "operators" or "users."
 
 ### 4. Problem paragraph
 
 - [ ] The problem, from the customer's point of view, with what it costs them.
 - [ ] The most important problem, not a list. If the draft argues two problems, pick the one the hero would pay to solve and move the other to the FAQ or the solution.
-- [ ] Comes before the solution and before safety or compliance detail. The reader learns why to care first.
+- [ ] Comes before the solution, and before safety or compliance detail *(house)*. The reader learns why to care first.
 - [ ] Scale numbers are about the hero's market, not an adjacent one *(house)*. A global count that is mostly another industry misleads.
 - [ ] Market facts presented as true today have a source in the FAQ *(house)*. Invented launch metrics are fine, since the release is fiction about the future.
 
@@ -79,8 +79,8 @@ Write the elements in this order. Each item names what the element must do, then
 
 - [ ] One quote from the company's spokesperson.
 - [ ] Says why the customer is better off, in plain words *(house)*. Not a lecture on the technology.
-- [ ] No false universals ("every animal brain learns without forgetting"). State the bounded claim.
-- [ ] Consistent with the product as described. A quote that says "chip" when the body says "edge computer" is two different companies.
+- [ ] No false universals *(house)* ("every animal brain learns without forgetting"). State the bounded claim.
+- [ ] Consistent with the product as described *(house)*. A quote that says "chip" when the body says "edge computer" is two different companies.
 
 ### 7. How to get started
 
@@ -99,18 +99,18 @@ Write the elements in this order. Each item names what the element must do, then
 ### 9. Closing and call to action
 
 - [ ] Wraps up and points the reader to where to learn more and get started, with a link.
-- [ ] **No price.** Neither template has a price section, and Bryar and Carr make "What is the price?" the first External FAQ. Price, all in, goes there, as do platform revenue splits.
+- [ ] **No price** *(house)*. Neither template has a price section, and Bryar and Carr make "What is the price?" the first External FAQ. Price, all in, goes there, as do platform revenue splits.
 
 ## Whole release
 
 - [ ] Fits on one page.
-- [ ] One hero, one segment. Other verticals get one clause or move to the FAQ.
-- [ ] Two quotes: the spokesperson and the customer. A partner, creator, or channel quote belongs in that side's own PR/FAQ.
+- [ ] One hero, one segment. Other verticals get one clause or move to the FAQ *(house)*.
+- [ ] Two quotes: the spokesperson and the customer. A partner, creator, or channel quote belongs in that side's own PR/FAQ *(house)*.
 - [ ] Each concept has one name, used everywhere *(house)* (skill, cartridge, Knowledge Cartridge: pick one or define how they relate).
 - [ ] No jargon the hero would not use: replace "catastrophic forgetting," "TCP," "pipeline," "ecosystem" with what they mean for the customer.
-- [ ] No puffery labels ("premier," "leading").
-- [ ] No price or revenue split anywhere in the release, quotes included. Savings stated as an outcome (22% less per part) can stay.
-- [ ] Every number appears once or agrees everywhere it appears.
+- [ ] No puffery labels *(house)*: "premier," "leading."
+- [ ] No price or revenue split anywhere in the release, quotes included *(house)*. Savings stated as an outcome (22% less per part) can stay.
+- [ ] Every number appears once or agrees everywhere it appears *(house)*.
 - [ ] No claim the company cannot defend in front of legal, safety, or a skeptical customer *(house)*: absolutes, guarantees, "unbypassable."
 - [ ] Real companies and named people in invented quotes are replaced with placeholders before the document leaves the team *(house)*.
 - [ ] Reads as written for the customer, not for investors. Bryar and Carr: the release ignores "competitors, current capabilities, P&L, business partners." Business-model detail moves to the FAQ.
@@ -149,4 +149,4 @@ Questions senior leaders and every department (finance, marketing, support, oper
 - [ ] Each side of a platform: why it shows up first, how the cold start ends *(house)*.
 - [ ] Who owns contributed data, who is paid for it, and how the people who generated it (crews, workers, users) are treated *(house)*.
 - [ ] What must be true for the product to succeed, and the top three reasons it will not.
-- [ ] Every answer answers the question asked, with numbers that match the press release.
+- [ ] Every answer answers the question asked, with numbers that match the press release *(house)*.
