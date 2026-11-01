@@ -13,7 +13,7 @@ Sources for the structure:
 - Colin Bryar and Bill Carr, [Working Backwards PR/FAQ Instructions & Template](https://workingbackwards.com/resources/working-backwards-pr-faq/), and their book *Working Backwards* (St. Martin's Press, 2021).
 - AWS, [Product Management at Amazon](https://aws.amazon.com/executive-insights/content/product-management-at-amazon/), which says the press release "must fit on a single page."
 
-McAllister and Bryar and Carr give the same press release order: heading, subheading, summary, problem, solution, then quotes and getting started. Bryar and Carr group the spokesperson quote, the customer quote, getting started, and a link to the website as one block. McAllister orders them spokesperson quote, getting started, customer quote, then a separate closing and call to action, and this skill follows him. Neither template has a separate proof paragraph, partner quote, or price section. Each check below comes from one of these sources, except the no-price rule, which is Yumzu's.
+McAllister and Bryar and Carr give the same press release order: heading, subheading, summary, problem, solution, then quotes and getting started. Bryar and Carr group the spokesperson quote, the customer quote, getting started, and a link to the website as one block. McAllister orders them spokesperson quote, getting started, customer quote, then a separate closing and call to action, and this skill follows him. Neither template has a separate proof paragraph, partner quote, or price section. Each check below comes from one of these sources.
 
 Use the checklist two ways. Authors tick it while drafting. Reviewers report each unmet item as a finding in the `unified-review` format (severity groups, inline diffs). The `logic` skill still applies to the argument, and CLAUDE.md's writing rules still apply to every sentence.
 
@@ -55,6 +55,7 @@ Write the elements in this order. Each item names what the element must do, then
 - [ ] Describes the product in enough detail to show how it simply and directly solves the problem in element 4. More than one paragraph is fine for a complex product.
 - [ ] Addresses the stated problem, not other needs. A laundry list of features that do not touch the problem gets cut.
 - [ ] **Names today's alternatives.** Bryar and Carr: the solution paragraph "should include: 'Today, customers with this problem use x, y, or z products to meet their needs. Those products fall short of solving x problem(s). Our product addresses these unmet needs in the following ways.'" The solution paragraph contains a sentence of that form, naming the specific alternatives, how each falls short, and how the product addresses that gap. A draft that mentions competitors elsewhere, or only in the FAQ, fails this check.
+- [ ] **Price, only as the differentiator.** A price appears in the release only where it shows the product is cheaper than today's alternatives, in this paragraph beside them. Bryar and Carr's model release states its car's price as part of what makes it "meaningfully better/faster/cheaper than the alternatives." Tiers, subscriptions, what is included, revenue splits, and how the price is set go in the External FAQ under "What is the price?"
 - [ ] Clear and brief. Long, vague, or high-level descriptions fail.
 
 ### 6. Spokesperson quote
@@ -72,7 +73,7 @@ Write the elements in this order. Each item names what the element must do, then
 ### 9. Closing and call to action
 
 - [ ] Wraps up and points the reader to where to learn more and get started, with a link.
-- [ ] **No price** (Yumzu's rule). Neither template has a price section, and Bryar and Carr make "What is the price?" the first External FAQ. Price goes there.
+- [ ] No price-and-availability paragraph. Neither template has a price section, and Bryar and Carr make "What is the price?" the first External FAQ.
 
 ## Whole release
 
@@ -80,7 +81,7 @@ Write the elements in this order. Each item names what the element must do, then
 - [ ] One hero, one segment.
 - [ ] Two quotes: the spokesperson and the customer.
 - [ ] No jargon the hero would not use: replace "catastrophic forgetting," "TCP," "pipeline," "ecosystem" with what they mean for the customer.
-- [ ] No price anywhere in the release, quotes included (Yumzu's rule).
+- [ ] Any price in the release sits in the solution paragraph and shows the differentiator (element 5). Pricing detail is in the External FAQ.
 - [ ] Written for the customer. Bryar and Carr: while writing it, "You aren't focused on your competitors, current capabilities, P&L, business partners, or other considerations." This does not cancel element 5, which still names today's alternatives.
 
 ## FAQ
