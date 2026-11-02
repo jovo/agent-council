@@ -40,7 +40,7 @@ Edit the theme there, not through a copy. A change to the theme changes every de
    - source line: `<!-- _footer: Source: … -->`
    - figure: `![alt](file.svg)` on its own line (several lines = several
      figures)
-   - equation: `![alt](assets/equations/x.svg)`
+   - equation: LaTeX, `$…$` inline or `$$…$$` on lines of its own
    - image beside text: `cols` with a text cell and a `<figure>` image cell
    - two images: `![bg left:60% contain](a.jpg)` then `![bg contain](b.jpg)`
    - anything table-shaped: a pipe table; yes / partly / no as `●` `◐` `○`
@@ -147,8 +147,7 @@ Markdown images on their own lines (`![alt text](file.svg)`, one per line,
 with a blank line before and after); it fills the remaining height. Use an
 HTML `<figure>` only when it needs a caption or heading, or as a cell of
 `cols`. `***word***` carries the accent colour.
-SVGs in `assets/equations/` are exported at body size and shrink to fit
-their column. Write Markdown
+Write Markdown
 inside `cols` cells, leaving a blank line after the opening `<div>` and before
 the closing one.
 In a `cols` cell, use `### Title` for a column title over ordinary text, and
@@ -190,17 +189,26 @@ slide (see Content rules). A takeaway is a `>` blockquote, not a footer.
 
 ## Mathematical notation
 
-Every mathematical expression in a deck must be authored in LaTex and rendered
-as a local vector asset. This includes displayed equations, inline symbols,
-subscripts and superscripts, probability laws, operators, sets, and formal
-function signatures. Do not substitute Unicode math, HTML subscripts, or a
-text font for LaTex merely because the expression is short. Keep the `.tex`
-source beside the generated SVG in the deck's `assets/equations/` directory.
-Export every equation at body-text size so the SVG needs no CSS scaling:
-compile the 10pt `standalone` source and convert with `dvisvgm --zoom=2.1`.
-The theme shrinks wide equations to fit their column and scales equations in
-captions and footers down to small size. Equation colour is baked into the
-SVG: a deck with `class: invert` exports equations in dark ink.
+Every mathematical expression in a deck is LaTeX written in `deck.md`, so
+it can be edited in place: `$…$` inline, and `$$…$$` on lines of its own for
+a display equation. Marp renders it as vector SVG with MathJax. This includes
+displayed equations, inline symbols, subscripts and superscripts, probability
+laws, operators, sets, and formal function signatures. Do not substitute
+Unicode math, HTML subscripts, or a text font for LaTeX merely because the
+expression is short.
+
+Math takes the size and colour of the text around it. Display equations are
+centred at body size. Inline math in a table or caption is small and grey
+like its text. Colour math with `\color` inside the LaTeX, because
+`***…***` does not reach it: `\color{#f6c343}{…}` for the accent and
+`\color{#f4f7fb}{…}` for white text in a table (in a deck with
+`class: invert`, `#2189db` and `#111923`). Inline math sets limits beside
+operators, which keeps a takeaway on one line. Start it with `\displaystyle`
+only when the limits must sit below.
+
+Older decks keep equations as SVG files in `assets/equations/`, with the
+`.tex` source beside each one (10pt `standalone`, converted with
+`dvisvgm --zoom=2.1`). Leave them as they are unless asked to convert a deck.
 Use ordinary prose for non-mathematical arrows or labels. 
 
 ## Design schematic: binary contrasts

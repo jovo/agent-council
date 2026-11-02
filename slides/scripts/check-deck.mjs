@@ -87,7 +87,7 @@ try {
       for (const q of sec.querySelectorAll(':scope > blockquote')) {
         const lh = parseFloat(getComputedStyle(q).lineHeight) || 34;
         const pad = parseFloat(getComputedStyle(q).paddingTop) + parseFloat(getComputedStyle(q).paddingBottom);
-        const tallest = Math.max(0, ...[...q.querySelectorAll('img')].map(i => i.getBoundingClientRect().height / scale));
+        const tallest = Math.max(0, ...[...q.querySelectorAll('img, mjx-container > svg')].map(i => i.getBoundingClientRect().height / scale));
         if (q.getBoundingClientRect().height / scale - pad > Math.max(lh * 1.5, tallest + lh * 0.5)) errors.push(`${label(q)} takeaway wraps to more than one line`);
       }
       if (errors.length || warnings.length) slides.push({ n, errors: [...new Set(errors)], warnings: [...new Set(warnings)] });
