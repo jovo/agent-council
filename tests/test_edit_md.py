@@ -122,8 +122,9 @@ class ServerTests(unittest.TestCase):
         with urllib.request.urlopen(self.base + path) as r:
             return r.status, r.read()
 
-    def post(self, path, data):
-        req = urllib.request.Request(self.base + path, json.dumps(data).encode(), method="POST")
+    def post(self, path, data, headers=None):
+        headers = {"Content-Type": "application/json", **(headers or {})}
+        req = urllib.request.Request(self.base + path, json.dumps(data).encode(), headers, method="POST")
         try:
             with urllib.request.urlopen(req) as r:
                 return r.status, json.loads(r.read())
@@ -147,6 +148,31 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.md.read_text(encoding="utf-8"), "fresh")
         code, _ = self.post("/api/save", {"text": "forced", "mtime": "1", "force": True})
         self.assertEqual(code, 200)
+
+    def test_refuses_other_web_pages(self):
+        forced = {"text": "attacker", "mtime": "1", "force": True}
+        # A cross-site form or fetch can send text/plain without asking first.
+        self.assertEqual(self.post("/api/save", forced, {"Content-Type": "text/plain"})[0], 415)
+        self.assertEqual(self.post("/api/save", forced, {"Origin": "https://evil.example"})[0], 403)
+        # A page that rebinds its own domain to 127.0.0.1 sends its own Host.
+        self.assertEqual(self.post("/api/save", forced, {"Host": "evil.example"})[0], 403)
+        req = urllib.request.Request(self.base + "/api/source", headers={"Host": "evil.example"})
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req)
+        self.assertEqual(e.exception.code, 403)
+        self.assertEqual(self.md.read_text(encoding="utf-8"), DOC)
+        # The editor's own page, at either local name, still saves.
+        port = self.httpd.server_address[1]
+        for origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
+            self.assertEqual(self.post("/api/save", {"text": origin, "force": True}, {"Origin": origin})[0], 200)
+
+    def test_save_replaces_the_file_whole(self):
+        self.md.chmod(0o640)
+        mtime = json.loads(self.get("/api/source")[1])["mtime"]
+        self.assertEqual(self.post("/api/save", {"text": "new\r\nline", "mtime": mtime})[0], 200)
+        self.assertEqual(self.md.read_bytes(), b"new\r\nline")
+        self.assertEqual(self.md.stat().st_mode & 0o777, 0o640)
+        self.assertEqual([f.name for f in self.dir.iterdir() if f.name.endswith(".tmp")], [])
 
     def test_serves_document_files_only(self):
         self.assertEqual(self.get("/fig.svg"), (200, b"<svg/>"))

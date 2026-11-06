@@ -343,7 +343,7 @@ async function render(text, fresh) {
   if (rendering) { renderAgain = true; return; }
   rendering = true;
   try {
-    const r = await (await fetch("/api/render", { method: "POST", body: JSON.stringify({ text: text ?? docText() }) })).json();
+    const r = await (await fetch("/api/render", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: text ?? docText() }) })).json();
     if (r.error) { info(r.error.split("\n")[0], true); return; }
     apply(r, fresh);
     const missing = r.warnings.filter((w) => /not found/.test(w)).map((w) => w.replace(/.*citation (\S+).*/, "@$1"));
@@ -550,14 +550,22 @@ function finishRaw(b, ta) {
   const v = ta.value.replace(/\s+$/, "");
   const changed = v !== b.src.replace(/\s+$/, "");
   if (changed) { b.src = v + (b.src.match(/\s+$/) || [""])[0]; b.html = null; showStatus(); }
-  if (changed) render(); else { fill(b); relayoutSoon(); }
+  // html is also null when save() took the box's text while it had focus.
+  if (b.html == null) render(); else { fill(b); relayoutSoon(); }
+}
+// Take an open Markdown box's text into its block without closing the box.
+function takeRaw(b, ta) {
+  const v = ta.value.replace(/\s+$/, "");
+  if (v === b.src.replace(/\s+$/, "")) return;
+  b.src = v + (b.src.match(/\s+$/) || [""])[0]; b.html = null;
 }
 
 // ---------- Saving and outside edits ----------
 async function save(force) {
-  const c = saveCaret(); if (c) commit(c.b);
+  const c = saveCaret();
+  if (c && c.ta) takeRaw(c.b, c.b.el.querySelector("textarea")); else if (c) commit(c.b);
   const text = docText();
-  const r = await fetch("/api/save", { method: "POST", body: JSON.stringify({ text, mtime: diskMtime, force: force === true }) });
+  const r = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, mtime: diskMtime, force: force === true }) });
   if (r.status === 409) { showBanner("The file changed on disk since this page loaded it."); return; }
   diskMtime = (await r.json()).mtime; savedText = text; hideBanner(); showStatus();
 }

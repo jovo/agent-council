@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -165,11 +166,28 @@ def render(text, doc_dir, csl=None, bib_override=None):
             "warnings": [l for l in p.stderr.splitlines() if l.strip()]}
 
 
+def write_atomic(path, text):
+    """Write a temporary file beside path, then rename it over path, so a crash
+    or a full disk leaves the old file whole."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 class Handler(BaseHTTPRequestHandler):
     src = None      # Path of the Markdown file
     csl = None
     bib = None
     layout = LAYOUTS["default"]
+    save_lock = threading.Lock()
 
     def log_message(self, fmt, *args):
         pass
@@ -190,7 +208,21 @@ class Handler(BaseHTTPRequestHandler):
         # A string: nanosecond times exceed what a JavaScript number holds exactly.
         return str(self.src.stat().st_mtime_ns)
 
+    def local(self):
+        """Refuse requests from other web pages. Host must name this server, so a
+        page that rebinds its domain to 127.0.0.1 cannot read the file, and Origin,
+        when sent, must be this page."""
+        port = self.server.server_address[1]
+        hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        origin = self.headers.get("Origin")
+        if self.headers.get("Host") in hosts and (origin is None or origin in {f"http://{h}" for h in hosts}):
+            return True
+        self.send(403, {"error": "forbidden"})
+        return False
+
     def do_GET(self):
+        if not self.local():
+            return
         path = self.path.split("?")[0]
         if path == "/":
             self.send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
@@ -216,6 +248,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, f.read_bytes(), mimetypes.guess_type(f.name)[0] or "application/octet-stream")
 
     def do_POST(self):
+        if not self.local():
+            return
+        # A JSON content type makes a browser ask before a cross-site POST, and
+        # this server never answers that question.
+        if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+            self.send(415, {"error": "expected application/json"})
+            return
         path = self.path.split("?")[0]
         n = int(self.headers.get("Content-Length", 0))
         data = json.loads(self.rfile.read(n) or b"{}")
@@ -223,11 +262,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, render(data["text"], self.src.parent, self.csl, self.bib))
         elif path == "/api/save":
             # Refuse to overwrite a file changed on disk since the page loaded it.
-            if not data.get("force") and data.get("mtime") != self.mtime():
-                self.send(409, {"error": "changed on disk", "mtime": self.mtime()})
-                return
-            self.src.write_text(data["text"], encoding="utf-8")
-            self.send(200, {"mtime": self.mtime()})
+            # The lock makes the check and the write one step across requests.
+            with self.save_lock:
+                if not data.get("force") and data.get("mtime") != self.mtime():
+                    self.send(409, {"error": "changed on disk", "mtime": self.mtime()})
+                    return
+                write_atomic(self.src, data["text"])
+                self.send(200, {"mtime": self.mtime()})
         else:
             self.send(404, {"error": "not found"})
 
