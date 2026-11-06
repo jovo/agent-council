@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# edit-md: edit a Markdown file in the browser, typing directly into pages
+# styled like the PDF make-pdf builds (same fonts, heading scale, link colours,
+# tables, and citation numbers). Save (Cmd-S) writes the file. Blocks you do
+# not touch are written back unchanged. Edits made to the file elsewhere appear
+# in the page.
+#
+# Usage: edit-md FILE.md [--twocol] [--csl STYLE.csl] [--bibliography BIB] [--port N]
+# Then open the address it prints.
+here=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+exec python3 "$here/typeset/editor/server.py" "$@"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Link agent-council into place: the unified-review, make-pdf, and plain-words commands on your PATH, and
+# Link agent-council into place: the unified-review, make-pdf, edit-md, and plain-words commands on your PATH, and
 # every skill in skills/ into Claude Code, Codex, and Cursor.
 set -euo pipefail
 
@@ -16,11 +16,12 @@ link() {  # link SOURCE TARGET, refusing to replace a real file or folder
   echo "linked $2 -> $1"
 }
 
-for tool in unified-review make-pdf; do
+for tool in unified-review make-pdf edit-md; do
   chmod +x "$repo/bin/$tool"
 done
 link "$repo/bin/unified-review" "$bin_dir/unified-review"
 link "$repo/bin/make-pdf" "$bin_dir/make-pdf"
+link "$repo/bin/edit-md" "$bin_dir/edit-md"
 chmod +x "$repo/skills/plain-words/plain_words.py"
 link "$repo/skills/plain-words/plain_words.py" "$bin_dir/plain-words"
 # Word lists the plain-words skill may not redistribute: the Oxford 3000 and the xkcd Simple Writer list.
