@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manuscript Editor</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<style>
+/* House fonts, served from make-pdf's typeset/fonts. */
+@font-face { font-family: "NewCM"; src: url(/fonts/NewCM10-Book.otf); }
+@font-face { font-family: "NewCM"; src: url(/fonts/NewCM10-BookItalic.otf); font-style: italic; }
+@font-face { font-family: "NewCM"; src: url(/fonts/NewCM10-Bold.otf); font-weight: bold; }
+@font-face { font-family: "NewCM"; src: url(/fonts/NewCM10-BoldItalic.otf); font-weight: bold; font-style: italic; }
+@font-face { font-family: "NewCMSans"; src: url(/fonts/NewCMSans10-Bold.otf); font-weight: bold; }
+
+:root {
+  --bg: #e9e8e4; --bar: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #d6d4ce;
+  --accent: #2458c6; --warn-bg: #fff4d6; --warn-ink: #6b4e00; --err: #b3261e; --ok: #1f7a3a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #2a2a2d; --bar: #1f1f22; --ink: #e8e8ea; --muted: #9a9aa0; --line: #3a3a3e;
+    --accent: #7aa2ff; --warn-bg: #3a3013; --warn-ink: #f2d27a; --err: #ff8a80; --ok: #7fd18f;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #2a2a2d; --bar: #1f1f22; --ink: #e8e8ea; --muted: #9a9aa0; --line: #3a3a3e;
+  --accent: #7aa2ff; --warn-bg: #3a3013; --warn-ink: #f2d27a; --err: #ff8a80; --ok: #7fd18f;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--ink); font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
+header { display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: var(--bar); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header .name { font-weight: 600; }
+header .spacer { flex: 1; }
+.status { color: var(--muted); }
+.status.dirty { color: var(--warn-ink); }
+.status.err { color: var(--err); }
+button { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 3px 10px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+label { color: var(--muted); display: flex; align-items: center; gap: 4px; cursor: pointer; }
+#banner { display: none; padding: 6px 12px; background: var(--warn-bg); color: var(--warn-ink); gap: 10px; align-items: center; }
+#banner.show { display: flex; }
+#scroller { flex: 1; overflow: auto; }
+#pages { padding: 16px 0 40px; }
+
+/* ---- The page: 11pt New Computer Modern, as make-pdf sets it. The server
+   supplies the geometry (make-pdf's default, or --twocol). ---- */
+:root { --pw: 8.5in; --ph: 11in; --m: 1in; --cols: 1; --gap: 0in; }
+.page { position: relative; width: var(--pw); height: var(--ph); margin: 0 auto 16px; background: #fff; color: #000;
+  box-shadow: 0 1px 4px rgba(0,0,0,.3); padding: var(--m); }
+.body { height: calc(var(--ph) - 2 * var(--m)); columns: var(--cols); column-gap: var(--gap); column-fill: auto; overflow: hidden;
+  font: 11pt/13.6pt "NewCM", serif; text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
+.folio { position: absolute; left: 0; right: 0; top: calc(var(--ph) - var(--m) + 20pt); text-align: center; font: 11pt "NewCM", serif; color: #000; }
+.blk { outline: none; border-radius: 2px; }
+.blk:focus-within { box-shadow: 0 0 0 3px rgba(36, 88, 198, 0.12); }
+.blk p { margin: 0 0 6pt; }
+.blk.span { column-span: all; text-align: left; }
+.blk.span h1 { margin: 0 0 1.5ex; }
+.blk.span p { margin: 0 0 3ex; }
+h1, h2, h3, h4, h5 { font-family: "NewCMSans", sans-serif; font-weight: bold; text-align: left; hyphens: manual; break-after: avoid; }
+h1 { font-size: 20.74pt; line-height: 25pt; margin: 16pt 0 9pt; }
+h2 { font-size: 14.4pt; line-height: 18pt; margin: 14pt 0 5pt; }
+h3 { font-size: 12pt; line-height: 14.5pt; margin: 12pt 0 4pt; }
+h4, h5 { font-size: 11pt; line-height: 13.6pt; margin: 10pt 0 3pt; }
+em { font-style: italic; }
+strong { font-weight: bold; }
+code { font-family: "Latin Modern Mono", "Courier New", monospace; font-size: 1em; }
+a { color: #1A4D8F; text-decoration: none; }
+.citation, .citation a { color: #2E7D5B; }
+.katex { font-size: 1.1em; }
+.blk ul, .blk ol { margin: 0 0 6pt; padding-left: 2.1em; }
+.blk li { margin: 0; }
+.blk li > p { margin: 0 0 4pt; }
+.blk ul { list-style: none; }
+.blk ul > li::before { content: "•"; position: absolute; margin-left: -1.1em; }
+.blk table { width: 100%; border-collapse: collapse; font-size: 9pt; line-height: 11pt; margin: 2pt 0 8pt; text-align: left; hyphens: manual;
+  border-top: 0.8pt solid #000; border-bottom: 0.8pt solid #000; break-inside: avoid; }
+.blk th, .blk td { padding: 2pt 6pt 3pt; vertical-align: top; border-bottom: 0.4pt solid #000; font-weight: normal; }
+.blk th { padding-top: 3pt; }
+.blk th:first-child, .blk td:first-child { padding-left: 0; }
+.blk .math.display { display: block; text-align: center; margin: 6pt 0; }
+
+/* Blocks that keep Markdown visible while you edit them. */
+.blk.raw { cursor: text; }
+.blk.raw:hover { box-shadow: 0 0 0 1px rgba(36, 88, 198, 0.35); }
+.blk textarea { display: block; width: 100%; font: 8.5pt/1.35 ui-monospace, "SF Mono", Menlo, monospace; color: #222;
+  background: #fffbe6; border: 1px solid #e3d48a; border-radius: 3px; padding: 4px; resize: none; overflow: hidden; margin: 0 0 6pt; text-align: left; }
+.blk.anchor, .blk.pagebreak { display: none; }
+.blk.comment { font: 8pt/1.3 -apple-system, sans-serif; color: #7a6a20; background: #fffbe6; border: 1px dashed #e3d48a; padding: 3px 5px; margin: 0 0 6pt; text-align: left; white-space: pre-wrap; }
+body.hide-notes .blk.comment { display: none; }
+.blk.refs { cursor: default; }
+.csl-entry { display: flex; gap: 0.4em; margin: 0 0 3pt; text-align: left; font-size: 11pt; }
+.csl-left-margin { flex: none; min-width: 1.7em; text-align: right; }
+.hl-err { background: #fdd; }
+</style>
+</head>
+<body>
+<header>
+  <span class="name" id="name">…</span>
+  <span class="status" id="saveStatus"></span>
+  <span class="spacer"></span>
+  <span class="status" id="info"></span>
+  <label title="Show HTML comments, which the PDF hides"><input type="checkbox" id="notes" checked> Notes</label>
+  <button id="zoomOut" title="Zoom out">−</button>
+  <button id="zoomFit" title="Fit width">Fit</button>
+  <button id="zoomIn" title="Zoom in">+</button>
+  <button id="save" class="primary" title="Save to disk (⌘S)">Save</button>
+</header>
+<div id="banner"><span id="bannerText"></span><button id="reload">Reload from disk</button><button id="overwrite">Keep my version</button></div>
+<div id="scroller"><div id="pages"></div></div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+                set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+document.execCommand("defaultParagraphSeparator", false, "p");
+
+// ---------- Document state ----------
+// The file is front + lead + every block's src + sep. Blocks hold their own
+// Markdown, so untouched blocks are written back exactly as they were.
+let doc = { front: "", lead: "", blocks: [], refs: "", refsBreak: true };
+let geom = { width: 8.5, height: 11, margin: 1, columns: 1, gap: 0, twocol: false };
+function setGeometry(g) {
+  geom = g;
+  const st = document.documentElement.style;
+  st.setProperty("--pw", g.width + "in"); st.setProperty("--ph", g.height + "in");
+  st.setProperty("--m", g.margin + "in"); st.setProperty("--cols", g.columns); st.setProperty("--gap", g.gap + "in");
+  applyZoom();
+}
+let savedText = "", diskMtime = null, rendering = false, renderAgain = false, paginating = false;
+const docText = () => doc.front + doc.lead + doc.blocks.map((b) => b.src + b.sep).join("");
+const dirty = () => docText() !== savedText;
+function showStatus() {
+  $("saveStatus").textContent = dirty() ? "unsaved" : "saved";
+  $("saveStatus").className = "status" + (dirty() ? " dirty" : "");
+}
+
+// ---------- Markdown <-> DOM ----------
+// Source tokens that become non-editable atoms on the page: inline code, math,
+// citations, links. They map to rendered elements by kind and order.
+const TOKENS = [
+  ["skip", /\\./y],
+  ["html", /<a\s[^>]*>\s*<\/a>/y],
+  ["code", /(`+)[\s\S]*?\1/y],
+  ["math", /\$\$[\s\S]+?\$\$|\$(?![\s$])(?:\\.|[^$\\\n]|\n(?!\n))*?[^\s\\]\$(?!\d)|\$[^\s$\\]\$(?!\d)/y],
+  ["cite", /\[[^\[\]]*?-?@[A-Za-z0-9_][^\[\]]*\]/y],
+  ["link", /!?\[(?:[^\[\]]|\[[^\]]*\])*\]\([^)]*\)/y],
+  ["cite", /-?@[A-Za-z0-9_](?:\w|[:.#$%&\-+?<>~/](?=\w))*/y],
+];
+function sourceTokens(src) {
+  const out = { code: [], math: [], cite: [], link: [], html: [] };
+  let i = 0;
+  outer: while (i < src.length) {
+    for (const [kind, re] of TOKENS) {
+      if (kind === "cite" && src[i] === "@" && /\w/.test(src[i - 1] || "")) continue;
+      re.lastIndex = i;
+      const m = re.exec(src);
+      if (m) { if (kind !== "skip") out[kind].push(m[0]); i += m[0].length; continue outer; }
+    }
+    i++;
+  }
+  return out;
+}
+function domAtoms(el) {
+  const out = { code: [], math: [], cite: [], link: [], html: [] };
+  el.querySelectorAll("span.citation, span.math, code, a, img").forEach((n) => {
+    if (n.parentElement.closest("span.citation, span.math, a, code")) return;
+    const kind = n.matches("span.citation") ? "cite" : n.matches("span.math") ? "math" : n.matches("code") ? "code" : n.matches("a:not([href])") ? "html" : "link";
+    out[kind].push(n);
+  });
+  return out;
+}
+
+function esc(t) {
+  t = t.replace(/\u00a0/g, " ").replace(/[\\`*$\[\]^~]/g, "\\$&");
+  t = t.replace(/_/g, (m, o, s) => (/\w/.test(s[o - 1] || "") && /\w/.test(s[o + 1] || "") ? "_" : "\\_"));
+  t = t.replace(/(^|[^\w\\])@(?=\w)/g, "$1\\@").replace(/<(?=[A-Za-z\/!?])/g, "\\<");
+  return t;
+}
+function wrap(mark, inner) {
+  const m = inner.match(/^(\s*)([\s\S]*?)(\s*)$/);
+  return m[2] ? m[1] + mark + m[2] + mark + m[3] : inner;
+}
+function inline(node) {
+  let s = "";
+  const kids = [...node.childNodes];
+  kids.forEach((n, i) => {
+    if (n.nodeType === 3) { s += esc(n.nodeValue); return; }
+    if (n.nodeType !== 1) return;
+    if (n.dataset.src != null) { s += n.dataset.src; return; }
+    switch (n.tagName) {
+      case "EM": case "I": s += wrap("*", inline(n)); break;
+      case "STRONG": case "B": s += wrap("**", inline(n)); break;
+      case "SUP": s += wrap("^", inline(n)); break;
+      case "SUB": s += wrap("~", inline(n)); break;
+      case "BR": if (i < kids.length - 1) s += "\\\n"; break;  // a trailing <br> is the browser's placeholder
+      case "SPAN": case "FONT":
+        if (n.className && !n.className.startsWith("Apple")) throw new Error("span." + n.className);
+        s += inline(n); break;
+      default: throw new Error("cannot write <" + n.tagName.toLowerCase() + "> back as Markdown");
+    }
+  });
+  return s;
+}
+function tidy(s, heading) {
+  s = s.split("\n").map((l) => l.replace(/^[ \t]+|[ \t]+$/g, "")).join("\n").replace(/\n{2,}/g, "\n");
+  // Line breaks at a paragraph's edges mean nothing. Enter next to one leaves it there.
+  s = s.replace(/^(?:\\\n|\s)+/, "").replace(/(?:\\\n|\s)+$/, "");
+  if (heading) return s.replace(/\n/g, " ");
+  // A paragraph must not start like a heading, list, or quote.
+  return s.replace(/^#/, "\\#").replace(/^>/, "\\>").replace(/^([-+])(\s)/, "\\$1$2").replace(/^(\d+)([.)])(\s)/, "$1\\$2$3");
+}
+const LIST_RE = /^(\s*)([*+-]|\d+[.)])(\s+)/;
+function listMd(el, hint) {
+  const m = (hint || "").match(LIST_RE) || ["", "", el.tagName === "OL" ? "1." : "*", " "];
+  const ordered = el.tagName === "OL";
+  let n = parseInt(el.getAttribute("start") || "1", 10);
+  const delim = ordered ? (m[2].slice(-1) === ")" ? ")" : ".") : null;
+  const lis = [...el.children].filter((c) => c.tagName === "LI");
+  const loose = lis.some((li) => [...li.children].some((c) => c.tagName === "P"));
+  const items = lis.map((li) => {
+    const blocks = [...li.children].filter((c) => /^(P|UL|OL|DIV|TABLE|BLOCKQUOTE)$/.test(c.tagName));
+    if (blocks.length > 1 || blocks.some((c) => c.tagName !== "P")) throw new Error("nested list item");
+    const body = tidy(inline(blocks[0] || li));
+    const marker = ordered ? `${n++}${delim}` : m[2];
+    return marker + m[3] + body;
+  });
+  return items.join(loose ? "\n\n" : "\n");
+}
+// The Markdown for one editable block element.
+function blockMd(el, hint) {
+  const parts = [];
+  let loose = null;
+  const flush = () => { if (loose) { const t = tidy(inline(loose)); if (t) parts.push(t); loose = null; } };
+  for (const n of [...el.childNodes]) {
+    if (n.nodeType === 1 && /^(P|DIV|H[1-6]|UL|OL)$/.test(n.tagName) && n.dataset.src == null) {
+      flush();
+      if (n.tagName === "P" || n.tagName === "DIV") { const t = tidy(inline(n)); if (t) parts.push(t); }
+      else if (n.tagName[0] === "H") { const t = tidy(inline(n), true); if (t) parts.push("#".repeat(+n.tagName[1]) + " " + t); }
+      else parts.push(listMd(n, parts.length ? "" : hint));
+    } else if (n.nodeType === 1 && /^(TABLE|BLOCKQUOTE|PRE|FIGURE|HR)$/.test(n.tagName)) {
+      throw new Error("cannot write <" + n.tagName.toLowerCase() + "> back as Markdown");
+    } else {
+      if (n.nodeType === 3 && !n.nodeValue.trim() && !loose) continue;
+      loose = loose || document.createElement("p");
+      loose.appendChild(n.cloneNode(true));
+    }
+  }
+  flush();
+  return parts.join("\n\n");
+}
+
+// ---------- Building block elements ----------
+function renderMath(el) {
+  el.querySelectorAll("span.math").forEach((m) => {
+    if (m.dataset.done) return;
+    try { katex.render(m.textContent, m, { displayMode: m.classList.contains("display"), throwOnError: false }); } catch {}
+    m.dataset.done = "1";
+  });
+}
+// Fill a block element from its HTML. Returns true when the block can be
+// edited as rendered text: its atoms map onto its source and writing it back
+// reproduces the source exactly. Otherwise the block edits as Markdown.
+function fill(b) {
+  const el = b.el;
+  el.className = "blk " + b.kind + (b.span ? " span" : "");
+  el.removeAttribute("contenteditable");
+  if (b.kind === "comment") { el.textContent = b.src.replace(/^\s*<!--\s*|\s*-->\s*$/g, ""); b.mode = "raw"; el.classList.add("raw"); return; }
+  if (b.kind === "anchor" || b.kind === "pagebreak") { el.innerHTML = ""; b.mode = "hidden"; return; }
+  el.innerHTML = b.html;
+  softBreaks(el);
+  b.mode = "raw";
+  if (b.kind === "para" || b.kind === "heading" || b.kind === "list") {
+    const toks = sourceTokens(b.src), atoms = domAtoms(el);
+    const ok = Object.keys(toks).every((k) => toks[k].length === atoms[k].length);
+    if (ok) {
+      for (const k in toks) atoms[k].forEach((a, i) => { a.dataset.src = toks[k][i]; a.contentEditable = "false"; });
+      try {
+        if (same(blockMd(el, b.src), b.src)) b.mode = "rich";
+      } catch {}
+    }
+  }
+  renderMath(el);
+  // The PDF breaks the title after its first colon.
+  const h1 = b.span && el.querySelector("h1");
+  if (h1) {
+    const walker = document.createTreeWalker(h1, NodeFilter.SHOW_TEXT);
+    for (let t; (t = walker.nextNode());) {
+      const at = t.nodeValue.indexOf(": ");
+      if (at < 0) continue;
+      const rest = t.splitText(at + 1); rest.nodeValue = rest.nodeValue.slice(1);
+      const br = document.createElement("br"); br.dataset.src = " "; br.contentEditable = "false";
+      h1.insertBefore(br, rest); break;
+    }
+  }
+  if (b.mode === "rich") el.contentEditable = "true";
+  else el.classList.add("raw");
+}
+// Each line break in the source (one sentence per line) becomes an atom that
+// shows as a space and writes back as a newline. Left as text, Chrome rewrites
+// a newline next to the caret into a space, joining the lines.
+function softBreaks(el) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  for (let t; (t = walker.nextNode());) {
+    if (t.nodeValue.includes("\n") && !t.parentElement.closest("span.citation, span.math, code, a, pre")) nodes.push(t);
+  }
+  for (const t of nodes) {
+    const frag = document.createDocumentFragment();
+    t.nodeValue.split("\n").forEach((part, i) => {
+      if (i) {
+        const sb = document.createElement("span");
+        sb.className = "sb"; sb.dataset.src = "\n"; sb.contentEditable = "false"; sb.textContent = " ";
+        frag.appendChild(sb);
+      }
+      if (part) frag.appendChild(document.createTextNode(part));
+    });
+    t.replaceWith(frag);
+  }
+}
+function makeBlock(data) {
+  const b = { ...data, el: document.createElement("div") };
+  b.el._b = b;
+  fill(b);
+  return b;
+}
+
+// ---------- Rendering ----------
+async function load(keep) {
+  const r = await (await fetch("/api/source")).json();
+  $("name").textContent = r.name; document.title = r.name + " · Manuscript Editor";
+  savedText = r.text; diskMtime = r.mtime; hideBanner();
+  if (r.layout) setGeometry(r.layout);
+  const top = $("scroller").scrollTop;
+  doc.blocks = [];
+  await render(r.text, true);
+  if (keep) $("scroller").scrollTop = top;
+}
+async function render(text, fresh) {
+  if (rendering) { renderAgain = true; return; }
+  rendering = true;
+  try {
+    const r = await (await fetch("/api/render", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: text ?? docText() }) })).json();
+    if (r.error) { info(r.error.split("\n")[0], true); return; }
+    apply(r, fresh);
+    const missing = r.warnings.filter((w) => /not found/.test(w)).map((w) => w.replace(/.*citation (\S+).*/, "@$1"));
+    info(missing.length ? "missing citations: " + missing.join(", ") : "");
+  } catch (e) { info("server unreachable", true); }
+  finally { rendering = false; }
+  if (renderAgain) { renderAgain = false; render(); }
+}
+function info(msg, err) { $("info").textContent = msg; $("info").className = "status" + (err ? " err" : ""); }
+
+// Swap in the new render. Blocks whose source did not change keep their
+// elements (and the caret), and only refresh when their HTML changed, as when
+// citation numbers shift.
+function apply(r, fresh) {
+  const caret = saveCaret();
+  doc.front = r.front; doc.lead = r.lead;
+  let firstH2 = r.blocks.findIndex((x) => x.kind === "heading" && /^##\s/.test(x.src));
+  // In two columns, the H1 title and what sits under it before the first ## span both columns.
+  r.blocks.forEach((x, i) => (x.span = geom.twocol && i < firstH2 && r.blocks[0].kind === "heading" && /^#\s/.test(r.blocks[0].src)));
+  const old = fresh ? [] : doc.blocks, nb = r.blocks;
+  let p = 0; while (p < old.length && p < nb.length && old[p].src === nb[p].src) p++;
+  let s = 0; while (s < old.length - p && s < nb.length - p && old[old.length - 1 - s].src === nb[nb.length - 1 - s].src) s++;
+  const blocks = [];
+  nb.forEach((x, i) => {
+    const o = i < p ? old[i] : i >= nb.length - s ? old[old.length - nb.length + i] : null;
+    if (o) {
+      o.sep = x.sep; o.kind = x.kind;
+      // A block whose source changed outside its element (a join) must redraw even while focused.
+      if (o.stale || ((o.html !== x.html || o.span !== x.span) && !o.el.contains(document.activeElement))) {
+        o.html = x.html; o.span = x.span; o.stale = false; fill(o);
+      }
+      blocks.push(o);
+    } else blocks.push(makeBlock(x));
+  });
+  doc.blocks = blocks;
+  doc.refs = r.refs; doc.refsBreak = r.refsBreak;
+  layout(caret);
+  showStatus();
+}
+
+// ---------- Pagination ----------
+// Blocks flow through each page's two columns; a block that does not fit moves
+// whole to the next page (paragraphs break across columns, not across pages).
+const fits = (body) => body.scrollWidth <= body.clientWidth + 1;
+const keepWithNext = (b) => b && (b.kind === "heading" || b.kind === "anchor" || (b.kind === "para" && /^\*Table/.test(b.src)));
+function newPage(n) {
+  const page = document.createElement("div"); page.className = "page";
+  const body = document.createElement("div"); body.className = "body";
+  const folio = document.createElement("div"); folio.className = "folio"; folio.textContent = n;
+  page.append(body, folio); return page;
+}
+function refBlocks() {
+  if (!doc.refs) return [];
+  const tmp = document.createElement("div"); tmp.innerHTML = doc.refs;
+  const out = [];
+  const head = tmp.querySelector("h1, h2, h3");
+  const title = document.createElement("div"); title.className = "blk refs";
+  // The References heading takes the document's section level: ## under a single # title.
+  const h1s = doc.blocks.filter((b) => b.kind === "heading" && /^#\s/.test(b.src)).length;
+  const lvl = h1s === 1 && /^#\s/.test(doc.blocks[0]?.src || "") ? 2 : 1;
+  title.innerHTML = `<h${lvl}>References</h${lvl}>`; title._break = doc.refsBreak; out.push(title);
+  tmp.querySelectorAll(".csl-entry").forEach((e) => {
+    const d = document.createElement("div"); d.className = "blk refs"; d.appendChild(e); out.push(d);
+  });
+  return out;
+}
+let refEls = [];
+function layout(caret) {
+  paginating = true;
+  const host = $("pages");
+  const els = doc.blocks.map((b) => b.el);
+  refEls = refBlocks();
+  const all = els.concat(refEls);
+  host.replaceChildren();
+  let n = 1, page = newPage(n), body = page.lastChild.previousSibling;
+  host.appendChild(page);
+  for (let i = 0; i < all.length; i++) {
+    const el = all[i];
+    const after = all[i - 1]?._b?.kind === "pagebreak";
+    if ((el._break || after) && body.childElementCount) { page = newPage(++n); body = page.firstChild; host.appendChild(page); }
+    body.appendChild(el);
+    if (!fits(body) && body.childElementCount > 1) {
+      // Move this block, and any heading or caption that should stay with it.
+      const moving = [el];
+      while (moving.length < body.childElementCount - 0 && keepWithNext(moving[0].previousSibling?._b) && moving[0].previousSibling !== body.firstChild) moving.unshift(moving[0].previousSibling);
+      page = newPage(++n); body = page.firstChild; host.appendChild(page);
+      moving.forEach((m) => body.appendChild(m));
+    }
+  }
+  paginating = false;
+  restoreCaret(caret);
+}
+let layoutTimer;
+function relayoutSoon() { clearTimeout(layoutTimer); layoutTimer = setTimeout(() => layout(saveCaret()), 400); }
+
+// ---------- Caret ----------
+function caretOffset(el) {
+  const sel = getSelection(); if (!sel.rangeCount) return null;
+  const r = sel.getRangeAt(0); if (!el.contains(r.endContainer)) return null;
+  const pre = document.createRange(); pre.selectNodeContents(el); pre.setEnd(r.endContainer, r.endOffset);
+  return pre.toString().length;
+}
+// True when only whitespace (or a line-break unit) sits before the caret.
+function atStart(el) {
+  const sel = getSelection(); if (!sel.rangeCount) return false;
+  const r = sel.getRangeAt(0); if (!el.contains(r.endContainer)) return false;
+  const pre = document.createRange(); pre.selectNodeContents(el); pre.setEnd(r.endContainer, r.endOffset);
+  return !pre.toString().trim();
+}
+function setCaret(el, off) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let last = null;
+  for (let t; (t = walker.nextNode());) {
+    if (t.parentElement.closest('[contenteditable="false"]')) { off -= t.nodeValue.length; continue; }
+    last = t;
+    if (off <= t.nodeValue.length) { placeAt(t, Math.max(0, off)); return; }
+    off -= t.nodeValue.length;
+  }
+  if (last) placeAt(last, last.nodeValue.length); else { el.focus(); }
+}
+function placeAt(node, off) {
+  const r = document.createRange(); r.setStart(node, off); r.collapse(true);
+  const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+}
+function saveCaret() {
+  const a = document.activeElement;
+  const b = a && a.closest && a.closest(".blk")?._b;
+  if (!b) return null;
+  return { b, off: caretOffset(b.el), ta: a.tagName === "TEXTAREA" ? [a.selectionStart, a.selectionEnd] : null };
+}
+function restoreCaret(c) {
+  if (!c || !c.b.el.isConnected) return;
+  if (c.ta) { const ta = c.b.el.querySelector("textarea"); if (ta) { ta.focus(); ta.setSelectionRange(...c.ta); } return; }
+  if (c.b.mode === "rich" && c.off != null) { c.b.el.focus({ preventScroll: true }); setCaret(c.b.el, c.off); }
+}
+
+// ---------- Editing ----------
+// Equal up to whitespace that pandoc ignores: doubled spaces and line indents.
+const normWs = (s) => s.replace(/[ \t]+/g, " ").replace(/\n /g, "\n").replace(/\s+$/, "");
+const same = (a, b) => normWs(a) === normWs(b);
+function commit(b) {
+  if (!b || b.mode !== "rich" || b.stale) return false;
+  let md;
+  try { md = blockMd(b.el, b.src); } catch (e) { info(e.message, true); return false; }
+  if (same(md, b.src)) return false;
+  b.src = md + (b.src.match(/\s+$/) || [""])[0];
+  if (!md.trim()) b.src = "";
+  showStatus();
+  return true;
+}
+const pages = $("pages");
+pages.addEventListener("input", (e) => {
+  const b = e.target.closest(".blk")?._b; if (!b) return;
+  if (b.mode === "rich") { clearTimeout(b.t); b.t = setTimeout(() => commit(b), 500); }
+  relayoutSoon();
+});
+pages.addEventListener("focusout", (e) => {
+  if (paginating) return;
+  const b = e.target.closest(".blk")?._b; if (!b) return;
+  if (e.target.tagName === "TEXTAREA") { finishRaw(b, e.target); return; }
+  if (commit(b)) render();
+});
+pages.addEventListener("click", (e) => {
+  const a = e.target.closest("a[href]");
+  if (a && !(e.metaKey || e.ctrlKey)) e.preventDefault();
+  if (a && (e.metaKey || e.ctrlKey)) { const t = document.getElementById(a.getAttribute("href").slice(1)); if (t) t.scrollIntoView({ block: "center" }); e.preventDefault(); return; }
+  const b = e.target.closest(".blk")?._b;
+  if (b && b.mode === "raw" && !b.el.querySelector("textarea")) startRaw(b);
+});
+pages.addEventListener("paste", (e) => {
+  if (!e.target.closest('.blk[contenteditable="true"]')) return;
+  e.preventDefault();
+  document.execCommand("insertText", false, e.clipboardData.getData("text/plain"));
+});
+pages.addEventListener("keydown", (e) => {
+  const b = e.target.closest(".blk")?._b; if (!b) return;
+  if (e.key === "Escape") { e.target.blur(); return; }
+  if (b.mode !== "rich" || e.target.tagName === "TEXTAREA") return;
+  // Backspace at the very start of a paragraph joins it to the paragraph before.
+  if (e.key === "Backspace" && getSelection().isCollapsed && atStart(b.el)) {
+    const i = doc.blocks.indexOf(b), prev = doc.blocks[i - 1];
+    e.preventDefault();
+    if (prev && prev.kind === "para" && b.kind === "para" && prev.mode === "rich") {
+      commit(b);
+      const off = prev.el.textContent.replace(/\s+$/, "").length;
+      prev.src = prev.src.replace(/\s+$/, "") + "\n" + b.src.replace(/^\s+/, "");
+      prev.sep = b.sep; prev.stale = true; doc.blocks.splice(i, 1); b.el.remove();
+      render().then(() => { prev.el.focus(); setCaret(prev.el, off); });
+    }
+  }
+});
+
+// Blocks the page cannot write back from rendered text (tables, comments,
+// nested lists) edit as Markdown in place.
+function startRaw(b) {
+  const ta = document.createElement("textarea");
+  ta.value = b.src.replace(/\s+$/, "");
+  b.el.replaceChildren(ta);
+  const grow = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
+  ta.addEventListener("input", () => { grow(); relayoutSoon(); });
+  grow(); ta.focus();
+}
+function finishRaw(b, ta) {
+  const v = ta.value.replace(/\s+$/, "");
+  const changed = v !== b.src.replace(/\s+$/, "");
+  if (changed) { b.src = v + (b.src.match(/\s+$/) || [""])[0]; b.html = null; showStatus(); }
+  // html is also null when save() took the box's text while it had focus.
+  if (b.html == null) render(); else { fill(b); relayoutSoon(); }
+}
+// Take an open Markdown box's text into its block without closing the box.
+function takeRaw(b, ta) {
+  const v = ta.value.replace(/\s+$/, "");
+  if (v === b.src.replace(/\s+$/, "")) return;
+  b.src = v + (b.src.match(/\s+$/) || [""])[0]; b.html = null;
+}
+
+// ---------- Saving and outside edits ----------
+async function save(force) {
+  const c = saveCaret();
+  if (c && c.ta) takeRaw(c.b, c.b.el.querySelector("textarea")); else if (c) commit(c.b);
+  const text = docText();
+  const r = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, mtime: diskMtime, force: force === true }) });
+  if (r.status === 409) { showBanner("The file changed on disk since this page loaded it."); return; }
+  diskMtime = (await r.json()).mtime; savedText = text; hideBanner(); showStatus();
+}
+function showBanner(msg) { $("bannerText").textContent = msg; $("banner").classList.add("show"); }
+function hideBanner() { $("banner").classList.remove("show"); }
+$("reload").onclick = () => load(true);
+$("overwrite").onclick = () => save(true);
+$("save").onclick = () => save();
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); save(); }
+});
+setInterval(async () => {
+  try {
+    const { mtime } = await (await fetch("/api/mtime")).json();
+    if (mtime === diskMtime) return;
+    const editing = saveCaret();
+    if (!dirty() && !editing) load(true);
+    else showBanner("The file changed on disk and this page has unsaved edits.");
+  } catch {}
+}, 2000);
+window.addEventListener("beforeunload", (e) => { if (dirty()) { e.preventDefault(); e.returnValue = ""; } });
+
+// ---------- View ----------
+let zoom = parseFloat(store.get("zoom") || "0");
+function applyZoom() {
+  const fit = Math.min(1.5, ($("scroller").clientWidth - 32) / (geom.width * 96));
+  pages.style.zoom = zoom || fit;
+}
+$("zoomIn").onclick = () => { zoom = (zoom || parseFloat(pages.style.zoom)) * 1.1; store.set("zoom", zoom); applyZoom(); };
+$("zoomOut").onclick = () => { zoom = (zoom || parseFloat(pages.style.zoom)) / 1.1; store.set("zoom", zoom); applyZoom(); };
+$("zoomFit").onclick = () => { zoom = 0; store.set("zoom", 0); applyZoom(); };
+window.addEventListener("resize", applyZoom);
+$("notes").checked = store.get("notes") !== "0";
+const notes = () => { document.body.classList.toggle("hide-notes", !$("notes").checked); store.set("notes", $("notes").checked ? "1" : "0"); };
+$("notes").onchange = () => { notes(); layout(saveCaret()); };
+notes(); applyZoom();
+document.fonts.addEventListener("loadingdone", () => relayoutSoon());
+document.fonts.ready.then(() => load(false));
+</script>
+</body>
+</html>
