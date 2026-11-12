@@ -124,8 +124,7 @@ fact-check prints the same line for `factcheck.md` when it finishes, in its
 log (`factcheck.log` in the run folder).
 
 When no review page opened, copy the findings from `unified.md` into the notes
-file verbatim, in its order, and give the user its path and the counts by
-severity. Do not re-summarize or re-order the findings. With `--verify`, say whether the
+file verbatim, in its order, and reply with its path and the counts by severity. Do not re-summarize or re-order the findings. With `--verify`, say whether the
 fact-check has finished or is still running.
 
 ## The notes file
@@ -144,8 +143,13 @@ the item.
 Keep item numbers fixed, leaving gaps, so a number the user said earlier still
 names the same item.
 For a script review, record each one with `--applied N` or `--ignore N`, so the
-next review neither raises it again nor forgets it. Put revised text in the
-file, not the chat, and reply with a line naming what changed.
+next review neither raises it again nor forgets it.
+
+The notes file is the only report. Everything relevant goes there: the point,
+the evidence and sources, the revision, open questions, and answers to the
+user's questions about an item. In the chat, write one line: the file's path and
+which items were added, changed, applied, or removed. Do not repeat findings,
+revisions, or reasoning in the chat.
 
 ## Addressing items
 
