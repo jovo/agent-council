@@ -135,7 +135,12 @@ open items in a notes file in the draft's repository: `notes/<draft>-review.md`,
 or the notes file the user names. Each item gives its section, its current line
 in the draft, the point, and at least one inline revision, even while a source
 is still being checked (then the revision is provisional, and the item says so). Every turn, re-read the draft,
-fix line numbers that moved, and delete each item the user applied or rejected.
+fix line numbers that moved, and delete each item the user applied or rejected,
+so the user never has to tidy the file. Delete an item you apply in the same
+turn you apply it. Detect the user's own edits: an item whose struck text is
+gone from the draft, or whose added text is in it, is applied. When the draft
+changed the passage some other way, re-check the point and revise or delete
+the item.
 Keep item numbers fixed, leaving gaps, so a number the user said earlier still
 names the same item.
 For a script review, record each one with `--applied N` or `--ignore N`, so the
