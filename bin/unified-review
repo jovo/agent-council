@@ -3921,7 +3921,7 @@ def summary_state(run):
             prompt = SUMMARY.format(draft=summary_draft(run), review=(run / "unified.md").read_text(), rules=rules)
             model = run_model(run)
             if model is None:
-                failed.write_text("no reviewer that succeeded is recorded for this run")
+                write_atomic(failed, "no reviewer that succeeded is recorded for this run")
                 return
             text = call(model, prompt, run / "summary-raw.txt", run, stage="summary")
             if text is None:
