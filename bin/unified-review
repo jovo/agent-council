@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """unified-review: a panel of models from different labs reviews a draft, then
-votes on every finding. For one Markdown file, a local review page opens with
-the draft and each finding in place, where Accept writes a change into the
-file. unified.md gives the findings by severity, then in draft order, each with
-its votes. An optional web fact-check runs in the background and writes
+votes on every finding (one model, the default, reviews alone and skips the
+vote). unified.md opens after the review and gives the findings by severity,
+then in draft order, each with its votes. --page FILE opens a local review page
+with the draft and each finding in place, where Accept writes a change into the
+file. An optional web fact-check runs in the background and writes
 factcheck.md. A PDF or Word file is reviewed as a Markdown copy, and
 Download on the page gives the edited copy back in the file's own format.
 
@@ -23,8 +24,9 @@ Usage: unified-review [-o OUTDIR] [-n FOCUS] [-p PANEL] [--context FILE]... [--v
   -n FOCUS   extra instructions appended to the reviewer prompt
   --context FILE  supporting material the panel reads but does not review
              (reviewer comments, a call, a source paper). Text or PDF. Repeatable.
-  -p PANEL   comma-separated panel (default: claude,gpt,gemini). Short names
-             claude, gpt, gemini, grok, or harness:model[@effort], such as
+  -p PANEL   one model or a comma-separated panel (default: argon, Gemini 4
+             Argon Medium, alone). Short names argon, claude, gpt, gemini,
+             grok, or harness:model[@effort], such as
              claude:opus or codex:gpt-5.6-luna@medium or cursor:kimi-k3-low
   --verify   also fact-check the draft's claims with web search (background)
   --no-md    review a PDF as is, instead of converting it to Markdown first
@@ -125,9 +127,11 @@ VERDICTS = ["contradicted", "unverifiable", "plausible", "confirmed"]  # most ca
 
 
 # Panel name -> (harness, model passed to that harness, display label).
-# Pick one model per lab: same-family judges share biases. Fast settings by
-# default: Sonnet, GPT-5.6 Luna at low effort, Gemini Flash Low.
+# For a panel, pick one model per lab: same-family judges share biases. The
+# default (DEFAULT_PANEL) is Argon alone. Fast settings for the others: Sonnet,
+# GPT-5.6 Luna at low effort, Gemini Flash Low.
 PANELISTS = {
+    "argon": ("cursor", "gemini-4-argon-medium", "Gemini 4 Argon Medium"),
     "claude": ("claude", "sonnet", "Claude Sonnet"),
     "gpt": ("codex", "gpt-5.6-luna", "GPT-5.6 Luna"),
     "gemini": ("cursor", "gemini-3.8-flash-low", "Gemini 3.8 Flash Low"),
@@ -186,6 +190,15 @@ def open_file(path):
 EFFORT = {}  # Codex reasoning effort per panelist; "low" when not given
 CLAUDE_MODELS = {"sonnet": "Sonnet", "opus": "Opus", "fable": "Fable", "haiku": "Haiku"}
 CODEX_MODELS = {"gpt-5.6-luna": "GPT-5.6 Luna", "gpt-5.6-sol": "GPT-5.6 Sol"}
+
+
+FACTCHECK_DEFAULT = ["claude", "gpt", "gemini"]
+
+
+def factcheck_panel(panel):
+    """The fact-check's checkers: the review panel, or the three-lab panel when
+    the review ran one model, since one checker cannot cross-check a verdict."""
+    return list(panel) if len(panel) > 1 else list(FACTCHECK_DEFAULT)
 
 
 def panelist(spec):
@@ -533,8 +546,9 @@ and baseline, or a missing step, propose that content as the 🟢 text, worded a
 it would read in the draft, so the author can accept, edit, or decline it. When
 the fix depends on a decision or fact only the author has (which hardware, which
 method, what a term means, who decides), do not invent it. Write a question
-finding instead: no diff, and the body is the question to the author, naming
-the readings or options you see and the one you assumed while reading. Never
+finding instead: the body is the question to the author, naming the readings
+or options you see and the one you assumed while reading, then the inline diff
+for the reading you assumed. Never
 describe what to add in place of either. Only a citation or a measured value cannot be proposed
 truthfully: write it as a slot in double braces where it goes, shaped like the
 final text, such as "RECAP {{{{citation: Author, year}}}}" or
@@ -953,6 +967,8 @@ def score_group(members, votes, voters, owner):
         "kind": majority_kind([v.get("kind", "") for v in judged.values()], rep.get("kind", "")),
         "form": rep.get("form", "edit"),
         "rejected": len(others) >= 2 and len(backers) < 2,
+        # One model reviewed and none voted: there is no agreement to report.
+        "solo": len(others) < 2,
         # Split vote: at least one model agreed and at least one disagreed.
         "contested": n_agree > 0 and n_dis > 0,
         "pos": min(f["pos"] for f in members),
@@ -2161,8 +2177,11 @@ def render(outdir):
     parts = ["# " + ", ".join(Path(v["path"]).name + (f", version {v['number']}" if v.get("number") else
                                                       f" ({v['version']})" if "version" in v else "")
                               for v in vers) + (f", {r['started']}" if r.get("started") else "")]
-    parts += participation(r.get("failures"), [("reviewed", r["reviewers_ok"]), ("voted", voters)], names,
-                           "Agreement, duplicate grouping, and rejection by vote mean little in this run.")
+    if len(r["reviewers_ok"]) == 1 and not r.get("failures"):  # one model by choice
+        parts.append(f"*Reviewed by {names(r['reviewers_ok'])} alone, with no vote.*")
+    else:
+        parts += participation(r.get("failures"), [("reviewed", r["reviewers_ok"]), ("voted", voters)], names,
+                               "Agreement, duplicate grouping, and rejection by vote mean little in this run.")
     if r["verify"]:
         parts.append("*Fact-check running. Results go to factcheck.md.*")
     if r.get("since_last") is not None:
@@ -2391,6 +2410,9 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     if not flat:  # every reviewer found nothing to change: nothing to vote on
         runtime.log("  no findings to vote on")
         votes = {m: {} for m in ok}
+    elif len(ok) == 1:  # one reviewer: no other model's findings to vote on
+        runtime.log("  one reviewer, so no vote")
+        votes = {m: {} for m in ok}
     else:
         votes = {m: v for m, v in parallel(vote, ok).items() if v}
     if len(votes) < len(ok) and STANDIN not in panel:
@@ -2579,7 +2601,7 @@ def auto_applies(f):
     if (f.get("status") or f["form"] == "question" or f["where"] == "overview" or f["tag"] == "Contested"
             or not f["applicable"] or f["slot"]):
         return False
-    return f["tag"] == "Unanimous" or (f["severity"] in ("Major", "Minor") and f["tag"] == "Majority")
+    return f["tag"] == "Unanimous" or (f["severity"] in ("Major", "Minor") and f["tag"] in ("Majority", "Solo"))
 
 
 def review_once(path, panel):
@@ -3309,10 +3331,12 @@ def runs_for(path):
 
 
 def vote_tag(g):
-    """Unanimous, Contested, Majority, or No majority. A model that raised the
+    """Solo, Unanimous, Contested, Majority, or No majority. A model that raised the
     finding on its own casts no vote on it, so each raiser other than the one
     whose wording is shown counts as agreeing: a finding all three raised is
     unanimous, not unvoted."""
+    if g.get("solo"):
+        return "Solo"
     vs = [v["vote"] for m, v in g["votes"].items() if m != g.get("self_voter")]
     vs += ["agree" for m in g.get("raised_by", []) if m != g.get("self_voter") and m not in g["votes"]]
     agree = sum(v == "agree" for v in vs)
@@ -3670,7 +3694,9 @@ def review_passage(path, run, passage):
             flat = sorted(({**f, "id": f"{letters[m]}{i}", "pos": position(dnorm, f["quote"])}
                            for m, fs in found.items() for i, f in enumerate(fs, 1)), key=lambda f: (f["pos"], f["id"]))
             new = []
-            if flat:
+            if flat and len(ok) == 1:  # one reviewer: no other model's findings to vote on
+                votes, voters = {m: {} for m in ok}, list(ok)
+            elif flat:
                 listed = "\n\n".join(f"[{f['id']}] ({f['severity']}{', question' if f.get('form') == 'question' else ''}) {f['title']}\nquote: {f['quote'] or '(none)'}\n{f['body']}" for f in flat)
                 prompt_v = VOTE.format(draft=draft, findings=listed, decided=decided, context="",
                                        focus=f"\n<author_focus>\n{focus}\n</author_focus>\n")
@@ -3680,6 +3706,7 @@ def review_passage(path, run, passage):
                 voters = [m for m in ok if m in votes]
                 if not voters:
                     return write_atomic(status, json.dumps({"status": "failed", "reason": "every voter failed"}))
+            if flat:
                 ids = {d["id"]: d for d in declines}
                 for g in (score_group(g, votes, voters, owner) for g in group_findings(flat, votes)):
                     g["where"] = where(g, dnorm, "")
@@ -3858,6 +3885,17 @@ INFERENCE_LABEL = re.compile(r"\s*\((?:an? |the )?(?:association|associational|c
 SUMMARIZING = set()
 
 
+def run_model(run):
+    """The first model that reviewed in this run, for calls that need one model
+    (the summary): it is installed and logged in, unlike a fixed choice. None
+    when the run records no reviewer that succeeded."""
+    try:
+        ok = json.loads((run / "results.json").read_text()).get("reviewers_ok") or []
+    except (OSError, json.JSONDecodeError):
+        ok = []
+    return panelist(ok[0]) if ok else None
+
+
 def summary_state(run):
     """The summary of the run's reviews for the review page: {"status": "done",
     "themes"}, "pending", or "failed" with a reason. The first
@@ -3881,7 +3919,11 @@ def summary_state(run):
         try:
             rules, _ = load_rules(None)
             prompt = SUMMARY.format(draft=summary_draft(run), review=(run / "unified.md").read_text(), rules=rules)
-            text = call("claude", prompt, run / "summary-raw.txt", run, stage="summary")
+            model = run_model(run)
+            if model is None:
+                write_atomic(failed, "no reviewer that succeeded is recorded for this run")
+                return
+            text = call(model, prompt, run / "summary-raw.txt", run, stage="summary")
             if text is None:
                 failed.write_text(failure_reason(run, "summary-raw"))
                 return
@@ -4029,8 +4071,8 @@ prose. Reply with only the recommendation.
 
 def recommend(path, run, store, keys, about, question, stem):
     """One overall recommendation from the panel's answers to a question or comment,
-    written the way the review's summary is: one Claude call, in the background
-    thread that asked the panel. It lands in the thread's "overall" in store."""
+    written the way the review's summary is: one call to a model that answered,
+    in the background thread that asked the panel. It lands in the thread's "overall" in store."""
     def entry(d):
         for key in keys:
             d = d[key]
@@ -4050,14 +4092,14 @@ def recommend(path, run, store, keys, about, question, stem):
         answers = "\n".join(f"<answer reviewer=\"{short(m)}\">{a['text']}{edits(a)}</answer>" for m, a in done.items())
         rules, _ = load_rules(None)
         prompt = OVERALL.format(about=about, question=question, answers=answers, draft=doc_text(path), rules=rules)
-        text = call("claude", prompt, run / f"{stem}-overall.txt", Path(path).parent, stage="overall")
+        text = call(panelist(next(iter(done))), prompt, run / f"{stem}-overall.txt", Path(path).parent, stage="overall")
         save({"status": "done", "text": text.strip()} if text else
              {"status": "failed", "reason": failure_reason(run, f"{stem}-overall")})
     except Exception as e:  # a background thread: record the failure instead of losing it
         save({"status": "failed", "reason": str(e)})
 
 
-DEFAULT_PANEL = ["claude", "gpt", "gemini"]
+DEFAULT_PANEL = ["argon"]
 LABS = [("Anthropic", r"claude"), ("OpenAI", r"gpt|o\d|codex"), ("Google", r"gemini|gemma"),
         ("xAI", r"grok|cursor-grok"), ("Moonshot", r"kimi"), ("Z.ai", r"glm"), ("DeepSeek", r"deepseek"),
         ("Alibaba", r"qwen"), ("Meta", r"muse|llama"), ("Cursor", r"composer|auto")]
@@ -4980,7 +5022,7 @@ def main():
     ap.add_argument("-n", dest="focus", default="")
     ap.add_argument("--context", action="append", default=[], metavar="FILE",
                     help="supporting material the panel reads but does not review (text or PDF, repeatable)")
-    ap.add_argument("-p", dest="panel", default="claude,gpt,gemini")
+    ap.add_argument("-p", dest="panel", default=",".join(DEFAULT_PANEL))
     ap.add_argument("--verify", action="store_true")
     ap.add_argument("--no-md", action="store_true",
                     help="review a PDF as is, instead of converting it to Markdown first")
@@ -5140,7 +5182,7 @@ def main():
         # Start the fact-check first, detached, so it outlives this process.
         with open(outdir / "factcheck.log", "w") as fl:
             subprocess.Popen([sys.executable, os.path.abspath(__file__), "--factcheck-only",
-                              "-p", ",".join(panel), "-o", str(outdir)] + [str(p) for p in files],
+                              "-p", ",".join(factcheck_panel(panel)), "-o", str(outdir)] + [str(p) for p in files],
                              stdin=subprocess.DEVNULL, stdout=fl, stderr=fl, start_new_session=True)
         runtime.log("fact-check started in the background")
 
@@ -5150,11 +5192,9 @@ def main():
     unified = foreground(files, draft, panel, a.focus, rules, outdir, workdir, a.verify, versions, context, shown)
     runtime.log(f"review done in {round(time.time() - t)} s." + (
         " Fact-check still running; factcheck.md opens when it finishes." if a.verify else ""))
-    # One Markdown file opens its review page; a PDF, several files, or an
-    # Re-review from the page itself keep to unified.md.
-    page = (len(files) == 1 and not os.environ.get("UNIFIED_REVIEW_NO_PAGE")
-            and open_page(files[0]))
-    if not page and not os.environ.get("UNIFIED_REVIEW_NO_PAGE"):
+    # The review opens as unified.md. The page opens only when asked for
+    # (unified-review --page FILE). A Re-review from the page sets NO_PAGE.
+    if not os.environ.get("UNIFIED_REVIEW_NO_PAGE"):
         open_file(unified)
     print(unified)
 

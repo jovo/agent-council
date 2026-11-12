@@ -1,6 +1,6 @@
 ---
 name: unified-review
-description: Get independent reviews of a draft from a panel of models from different labs (Claude, GPT, Gemini), have them vote on each other's findings, and merge them into one review in draft order, with an optional web fact-check. Use when the user asks for a unified, combined, panel, tri-model, or multi-model review or feedback on a file. Also use when the user asks to address, apply, fix, accept, or skip numbered items (such as 3, 7, or K5) from a unified review or fact-check. Also use when the user asks to iterate (review, apply the changes, and review again) for some number of rounds. Also use for any review of or feedback on a draft, even by one model, since its Reviewer rules set what to flag and the output format.
+description: Review a draft with one model (Gemini 4 Argon by default) or a panel of models from different labs (Claude, GPT, Gemini) that vote on each other's findings, merged into one review in draft order, with an optional web fact-check. Use when the user asks for a unified, combined, panel, tri-model, or multi-model review or feedback on a file. Also use when the user asks to address, apply, fix, accept, or skip numbered items (such as 3, 7, or K5) from a unified review or fact-check. Also use when the user asks to iterate (review, apply the changes, and review again) for some number of rounds. Also use for any review of or feedback on a draft, even by one model, since its Reviewer rules set what to flag and the output format.
 ---
 
 # Unified review
@@ -10,7 +10,7 @@ This skill lives in the agent-council repo (`skills/unified-review/SKILL.md`).
 `~/.cursor/skills`, so Claude Code, Codex, and Cursor share one copy. Edit it
 in the repo.
 
-For a review by you alone, without the panel, follow the Reviewer rules at the end of this skill. The script gives the same rules to the panel.
+For a review by you alone, without the script, follow the Reviewer rules at the end of this skill. The script gives the same rules to its models.
 
 Run the script on the file(s) the user names:
 
@@ -44,14 +44,18 @@ layout are untouched. Edits it cannot place (inside an equation, citation, or
 footnote mark, new formatting, new table cells) are listed for the user to make
 by hand. A PDF comes back through make-pdf.
 
-The default panel is `claude,gpt,gemini` (Claude Sonnet, GPT-5.6 Luna at low
-effort, Gemini 3.8 Flash Low via cursor-agent). If one fails, Grok 4.7 Low Fast stands in automatically, so three models
-still vote. Pass
-`-p` only when the user names a panel. Pass `--verify` only when the user asks for a
+The default is one model, `argon` (Gemini 4 Argon Medium via cursor-agent),
+which reviews alone with no vote. `-p` takes any one model or subset: short
+names `argon`, `claude` (Sonnet), `gpt` (GPT-5.6 Luna, low effort), `gemini`
+(Gemini 3.8 Flash Low), `grok`, or `harness:model[@effort]`. For a panel that
+votes, pass `-p claude,gpt,gemini`. If a model fails, Grok 4.7 Low Fast stands
+in automatically. Pass `-p` only when the user names a model or a panel. Pass `--verify` only when the user asks for a
 fact-check or claim verification.
 
-How it works: each panelist reviews without web search, then every panelist
-votes on the other models' findings, never its own, with reviewers anonymized.
+How it works: each panelist reviews without web search. With two or more,
+every panelist then votes on the other models' findings, never its own, with
+reviewers anonymized. A single model skips the vote, and `unified.md` says it
+reviewed alone.
 The script groups duplicates, reports a finding only when two models stand
 behind it (a second model raised it, or another voted agree or partial), and
 writes `unified.md`:
@@ -89,8 +93,9 @@ and new. Report these counts to the user before the findings.
   cause: the CLI is not logged in (`claude` then `/login`, `cursor-agent login`,
   `codex login`).
 
-For one Markdown file, the script opens the review page in the user's browser
-and prints `Review page: http://127.0.0.1:<port>/`. The page shows the draft
+The review opens as `unified.md` (below). The review page opens only when the
+user asks for it: run `unified-review --page FILE` after the review. It prints
+`Review page: http://127.0.0.1:<port>/`. The page shows the draft
 with each finding in place, and the user accepts, edits, or declines findings
 there, which writes to the file and records the decision. The page opens on
 logic findings first, and lets the user ask the panel about a finding or the
@@ -104,11 +109,11 @@ is worded to show its kind of inference ("X is associated with Y",
 assess, such as whether cited sources say what the draft says they do, or,
 for a draft with numbers, code, or data, whether its results reproduce. Pass that
 line on when you report the review. Do not paste
-`unified.md` unless asked. Run `unified-review --page FILE` to reopen the page.
+`unified.md` unless asked.
 Decisions made on the page are in the same log as `--applied` and `--ignore`,
 so `--item` and later reviews see them.
 
-For a PDF reviewed with `--no-md` or several files, the script opens `unified.md` where it was run from: in Cursor or VS Code it
+The script opens `unified.md` where it was run from: in Cursor or VS Code it
 opens in the editor, and from a terminal in the default Markdown app. Inside an
 agent app that cannot open a file from outside (the Claude app, the Codex app),
 it prints `OPEN IN APP: <path>` instead. When you see that line, show the file
@@ -118,9 +123,39 @@ first). Where you cannot show files, give the user the path as a link. The
 fact-check prints the same line for `factcheck.md` when it finishes, in its
 log (`factcheck.log` in the run folder).
 
-When no review page opened, show the user the contents of `unified.md` verbatim. Do not
-re-summarize or re-order the findings. With `--verify`, say whether the
+When no review page opened, copy the findings from `unified.md` into the notes
+file verbatim, in its order, with the counts by severity at its top, and reply
+with the one line the notes-file section describes. Do not re-summarize or re-order the findings. With `--verify`, say whether the
 fact-check has finished or is still running.
+
+## The notes file
+
+Once a review has more than one item, by you alone or from the script, keep the
+open items in a notes file in the draft's repository: `notes/<draft>-review.md`,
+or the notes file the user names. Each item gives its section, its current line
+in the draft, the point, and at least one inline revision, even while a source
+is still being checked (then the revision is provisional, and the item says so). Every turn, re-read the draft,
+fix line numbers that moved, and delete each item the user applied or rejected,
+so the user never has to tidy the file. Delete an item you apply in the same
+turn you apply it. Detect the user's own edits: an item whose struck text is
+gone from the draft, or whose added text is in it, is applied. When the draft
+changed the passage some other way, re-check the point and revise or delete
+the item.
+Keep item numbers fixed, leaving gaps, so a number the user said earlier still
+names the same item.
+For a script review, record each one with `--applied N` or `--ignore N`, so the
+next review neither raises it again nor forgets it.
+
+Write each item from scratch, as if the reader has seen no conversation. Open
+with why the change is proposed: what is wrong or missing in the current text
+and what that costs the argument or the reader. Never write "you're right",
+"as you said", "partly right", or anything else that answers the chat.
+
+The notes file is the only report. Everything relevant goes there: the point,
+the evidence and sources, the revision, open questions, and answers to the
+user's questions about an item. In the chat, write one line: the file's path and
+which items were added, changed, applied, or removed. Do not repeat findings,
+revisions, or reasoning in the chat.
 
 ## Addressing items
 
@@ -252,8 +287,8 @@ Reviewer instructions for feedback on drafts. This covers verification and how f
 
 - Group findings by severity, judged by one test: do the draft's claims still stand if this goes unfixed? **Major**: no, a claim fails or is unsupported until this is fixed. **Minor**: yes, but the fix makes the draft clearer, more complete, or easier to reproduce. **Nitpick**: style, phrasing, typos, with a few words of point at most and a diff of only the words that change. Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Major first, so a finding can be cited by number alone. For each finding, state the point, then immediately show its diff, before moving to the next finding. Do not collect all diffs into a separate list at the end.
 - For each Major or Minor finding, state the claim or decision affected, the specific evidence, premise, or omission, the consequence for validity or interpretation, and the smallest adequate remedy. For a Major finding about a claim, the remedy is the missing support or the narrower claim the evidence supports. If no claim is affected, state the decision the defect could mislead and why. Keep Nitpicks terse.
-- A question finding has no diff. State the question in one or two sentences, list the readings or options you see, and say which one you assumed. Use it only when the answer is the author's to give. When the draft already implies the answer, propose the edit.
-- Show every diff as an **inline revision of the original text**, not as a `Replace:` / `With:` pair. Strike deletions with `~~tildes~~`. Bold each addition and prefix it with `🟢 `. Tildes mark deletions only, never additions. Leave genuinely unchanged sentences plain, and for a mostly-rewritten paragraph strike the whole old block and follow it with the whole new one rather than a word-level diff. When the finding says the quoted text is wrong, the diff strikes or rewrites that text. A diff that only adds text is for an omission, never for a fix to text the draft already has. The added text does not repeat what neighboring sentences already say.
+- Every finding proposes at least one revision, a question finding included. For a question, state it in one or two sentences, list the readings or options you see, say which one you assumed, and give the revision for that reading. Use a question only when the answer is the author's to give. When the draft already implies the answer, make it an edit.
+- Show every diff as an **inline revision of the original text**, not as a `Replace:` / `With:` pair. Strike deletions with `~~tildes~~`. Bold each addition and prefix it with `🟢 `. When an addition runs several sentences or lines in a row, one `🟢 ` before the first is enough: bold the whole run once, not each sentence. Tildes mark deletions only, never additions. Leave genuinely unchanged sentences plain, and for a mostly-rewritten paragraph strike the whole old block and follow it with the whole new one rather than a word-level diff. When the finding says the quoted text is wrong, the diff strikes or rewrites that text. A diff that only adds text is for an omission, never for a fix to text the draft already has. The added text does not repeat what neighboring sentences already say.
 
 ### Math and markup inside a diff
 

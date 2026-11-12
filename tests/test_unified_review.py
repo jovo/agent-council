@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 import urllib.parse
 import zipfile
@@ -470,7 +471,14 @@ class Rendering(unittest.TestCase):
         self.assertEqual((old, new), ("The method is only one possible solution enhancing potency.",
                                       "The method is only one possible solution for enhancing potency."))
         self.assertTrue(edits)
-        self.assertIsNone(ur.placed_diff(text, "Which source says so?", "The method")[0])  # a question has no diff
+        self.assertIsNone(ur.placed_diff(text, "Which source says so?", "The method")[0])  # a body with no diff
+
+    def test_a_question_with_a_revision_places_it(self):
+        text = "Intro.\n\nThe method is fast. Done.\n"
+        body = ("Fast compared with what? Readings: wall-clock or samples. I assumed wall-clock.\n\n"
+                "The method is fast 🟢 **in wall-clock time**.")
+        old, new, _ = ur.placed_diff(text, body, "The method is fast.")
+        self.assertEqual((old, new), ("The method is fast.", "The method is fast in wall-clock time."))
 
     def test_nitpicks_typos_and_checks_are_one_list(self):
         dn = ur.norm("===== draft.md =====\n" + self.doc.read_text())
@@ -820,6 +828,63 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(sorted(r["reviewers_ok"]), ["claude", "gemini", "gpt"])
         self.assertEqual(sorted(r["voters"]), ["claude", "gemini", "grok"])
 
+    def test_fact_check_keeps_three_checkers_for_a_solo_review(self):
+        self.assertEqual(ur.factcheck_panel(["argon"]), ["claude", "gpt", "gemini"])
+        self.assertEqual(ur.factcheck_panel(["claude", "gpt"]), ["claude", "gpt"])
+
+    def test_solo_groups_are_marked_solo(self):
+        _, r, _ = self.run_review(["argon"])
+        self.assertTrue(all(g["solo"] for g in r["groups"]))
+        _, r, _ = self.run_review(["claude", "gpt", "gemini"])
+        self.assertFalse(any(g["solo"] for g in r["groups"]))
+
+    def test_edit_review_with_one_reviewer_skips_the_vote(self):
+        stages = []
+
+        def fake_call(m, prompt, out, workdir, web=False, stage=""):
+            stages.append(stage)
+            return ("=== FINDING\nseverity: Minor\ntitle: Sky color\n"
+                    "quote: The sky is green today.\n---\nThe sky is ~~green~~ 🟢 **blue** today.")
+
+        real = ur.threading.Thread
+
+        def Now(*a, **kw):  # run review_passage's daemon thread in place, others as usual
+            if kw.get("daemon"):
+                return types.SimpleNamespace(start=kw["target"])
+            return real(*a, **kw)
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            f = d / "memo.md"
+            f.write_text("The sky is green today.\n")
+            run = d / "run"
+            run.mkdir()
+            (run / "results.json").write_text(json.dumps({"groups": [], "labels": {}}))
+            with mock.patch.object(ur, "call", fake_call), mock.patch.object(ur, "page_panel", lambda p: ["argon"]), \
+                 mock.patch.object(ur, "load_rules", lambda r: ("rules", "x")), mock.patch.object(ur, "RUNS_DIR", d), \
+                 mock.patch.object(ur.threading, "Thread", Now):
+                ur.review_passage(str(f), run, "The sky is green today.")
+            status = json.loads((run / "edit-review.json").read_text())
+            self.assertEqual(status["status"], "done", status)
+            self.assertEqual(status["added"], 1)
+            self.assertNotIn("edit vote", stages)
+
+    def test_default_panel_is_argon_alone(self):
+        self.assertEqual(ur.DEFAULT_PANEL, ["argon"])
+        self.assertEqual(ur.PANELISTS["argon"], ("cursor", "gemini-4-argon-medium", "Gemini 4 Argon Medium"))
+
+    def test_one_reviewer_skips_the_vote_and_keeps_its_findings(self):
+        prompts, r, md = self.run_review(["argon"])
+        self.assertNotIn("vote", prompts)
+        self.assertEqual(r["reviewers_ok"], ["argon"])
+        self.assertEqual(len([g for g in r["groups"] if not g["rejected"]]), 1)
+        self.assertIn("Reviewed by Gemini 4 Argon Medium alone, with no vote.", md)
+        self.assertNotIn("Warning", md)
+
+    def test_a_failed_solo_reviewer_still_warns(self):
+        _, r, md = self.run_review(["argon"], fails=("argon",))
+        self.assertEqual(r["reviewers_ok"], ["grok"])
+        self.assertIn("Failed: Gemini 4 Argon Medium", md)
+
     def test_no_stand_in_when_all_succeed(self):
         prompts, r, _ = self.run_review(["claude", "gpt", "gemini"])
         self.assertNotIn("grok", r["panel"])
@@ -1072,6 +1137,7 @@ class Placement(unittest.TestCase):
 class Summary(unittest.TestCase):
     def test_written_once_in_background_then_kept(self):
         run = Path(tempfile.mkdtemp())
+        (run / "results.json").write_text(json.dumps({"files": [], "reviewers_ok": ["claude"]}))
         (run / "unified.md").write_text("## Major\n\n### 1. F1 is never defined\n")
         calls = []
         def call(name, prompt, out, workdir, stage=""):
@@ -1093,7 +1159,7 @@ class Summary(unittest.TestCase):
         run = Path(tempfile.mkdtemp())
         draft = run / "memo.md"
         draft.write_text("Sparse coding predicts V1 receptive fields.\n")
-        (run / "results.json").write_text(json.dumps({"files": [str(draft)]}))
+        (run / "results.json").write_text(json.dumps({"files": [str(draft)], "reviewers_ok": ["claude"]}))
         (run / "unified.md").write_text("## Major\n\n### 1. F1 is never defined\n")
         calls = []
         def call(name, prompt, out, workdir, stage=""):
@@ -1109,6 +1175,31 @@ class Summary(unittest.TestCase):
             st = ur.summary_state(run)
         self.assertEqual(st["claim"], "Sparse coding predicts V1 receptive fields.")
         self.assertIn("<draft>\nSparse coding predicts V1 receptive fields.", calls[0])
+        shutil.rmtree(run)
+
+    def test_no_recorded_reviewer_fails_without_a_call(self):
+        run = Path(tempfile.mkdtemp())
+        (run / "unified.md").write_text("## Major\n\n### 1. F1 is never defined\n")
+        calls = []
+        def call(name, prompt, out, workdir, stage=""):
+            calls.append(name)
+            return "{}"
+        with mock.patch.object(ur, "call", call), mock.patch.object(ur, "load_rules", lambda p: ("rules", "")):
+            self.assertEqual(ur.summary_state(run), {"status": "pending"})
+            for _ in range(100):
+                if (run / "summary.failed").exists():
+                    break
+                time.sleep(0.01)
+            st = ur.summary_state(run)
+        self.assertEqual(st["status"], "failed")
+        self.assertIn("no reviewer", st["reason"])
+        self.assertEqual(calls, [])
+        shutil.rmtree(run)
+
+    def test_summary_uses_the_runs_reviewer(self):
+        run = Path(tempfile.mkdtemp())
+        (run / "results.json").write_text(json.dumps({"reviewers_ok": ["argon"]}))
+        self.assertEqual(ur.run_model(run), ur.panelist("argon"))
         shutil.rmtree(run)
 
     def test_one_sentence(self):
@@ -1275,6 +1366,14 @@ class Iterate(unittest.TestCase):
         self.assertEqual(ur.vote_tag(g), "No majority")
         g = {"votes": {"gpt": {"vote": "agree"}}, "raised_by": ["claude"], "self_voter": "claude"}
         self.assertEqual(ur.vote_tag(g), "Unanimous")
+
+    def test_a_solo_finding_is_tagged_solo(self):
+        g = {"votes": {}, "raised_by": ["argon"], "self_voter": "argon", "solo": True}
+        self.assertEqual(ur.vote_tag(g), "Solo")
+
+    def test_solo_major_and_minor_findings_auto_apply(self):
+        self.assertTrue(ur.auto_applies(self.f(tag="Solo", severity="Minor")))
+        self.assertFalse(ur.auto_applies(self.f(tag="Solo")))  # a nitpick needs every voter of a panel
 
     def test_auto_applies(self):
         self.assertTrue(ur.auto_applies(self.f()))
