@@ -145,6 +145,11 @@ names the same item.
 For a script review, record each one with `--applied N` or `--ignore N`, so the
 next review neither raises it again nor forgets it.
 
+Write each item from scratch, as if the reader has seen no conversation. Open
+with why the change is proposed: what is wrong or missing in the current text
+and what that costs the argument or the reader. Never write "you're right",
+"as you said", "partly right", or anything else that answers the chat.
+
 The notes file is the only report. Everything relevant goes there: the point,
 the evidence and sources, the revision, open questions, and answers to the
 user's questions about an item. In the chat, write one line: the file's path and
