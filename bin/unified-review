@@ -24,8 +24,9 @@ Usage: unified-review [-o OUTDIR] [-n FOCUS] [-p PANEL] [--context FILE]... [--v
   -n FOCUS   extra instructions appended to the reviewer prompt
   --context FILE  supporting material the panel reads but does not review
              (reviewer comments, a call, a source paper). Text or PDF. Repeatable.
-  -p PANEL   one model or a comma-separated panel (default: argon, Gemini 4
-             Argon Medium, alone). Short names argon, claude, gpt, gemini,
+  -p PANEL   one model or a comma-separated panel (default: gpt, GPT-5.6
+             Luna, alone, with Claude then Grok standing in if it fails).
+             Short names argon, claude, gpt, gemini,
              grok, or harness:model[@effort], such as
              claude:opus or codex:gpt-5.6-luna@medium or cursor:kimi-k3-low
   --verify   also fact-check the draft's claims with web search (background)
@@ -128,7 +129,7 @@ VERDICTS = ["contradicted", "unverifiable", "plausible", "confirmed"]  # most ca
 
 # Panel name -> (harness, model passed to that harness, display label).
 # For a panel, pick one model per lab: same-family judges share biases. The
-# default (DEFAULT_PANEL) is Argon alone. Fast settings for the others: Sonnet,
+# default (DEFAULT_PANEL) is GPT alone. Fast settings for the others: Sonnet,
 # GPT-5.6 Luna at low effort, Gemini Flash Low.
 PANELISTS = {
     "argon": ("cursor", "gemini-4-argon-medium", "Gemini 4 Argon Medium"),
@@ -137,10 +138,10 @@ PANELISTS = {
     "gemini": ("cursor", "gemini-3.8-flash-low", "Gemini 3.8 Flash Low"),
     "grok": ("cursor", "grok-4.7-low-fast", "Grok 4.7 Low Fast"),
 }
-# Grok stands in when a panelist fails, so the panel keeps three voters and
-# can break ties. It runs through cursor-agent, so it cannot stand in for Gemini
-# when cursor-agent itself is down.
-STANDIN = "grok"
+# When a panelist fails, the first of these not already on the panel stands in,
+# then the next if that one fails too, so the panel keeps its size and can
+# break ties. Claude comes first, then Grok (via cursor-agent).
+STANDINS = ["claude", "grok"]
 # The fact-check runs in the background, so speed costs nothing there. Use the
 # stronger models for Claude and GPT (each CLI's default). Gemini stays on
 # Flash Low: Medium and High took 7-9 minutes here.
@@ -2359,12 +2360,15 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
             runtime.log(f"  {m}: review done, {len(fs)} finding{'' if len(fs) == 1 else 's'} ({timings[f'review_{m}']:.0f} s)")
         return fs
     found = {m: fs for m, fs in parallel(review, panel).items() if fs is not None}
-    if len(found) < len(panel) and STANDIN not in panel:
-        runtime.log(f"  {STANDIN} stands in for {', '.join(m for m in panel if m not in found)}")
-        panel = panel + [STANDIN]
-        fs = review(STANDIN)
+    wanted = len(panel)
+    for s in [s for s in STANDINS if s not in panel]:
+        if len(found) >= wanted:
+            break
+        runtime.log(f"  {s} stands in for {', '.join(m for m in panel if m not in found)}")
+        panel = panel + [s]
+        fs = review(s)
         if fs is not None:
-            found[STANDIN] = fs
+            found[s] = fs
     if not found:
         sys.exit("error: no reviewer produced a review")
     ok = [m for m in panel if m in found]
@@ -2415,12 +2419,14 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         votes = {m: {} for m in ok}
     else:
         votes = {m: v for m, v in parallel(vote, ok).items() if v}
-    if len(votes) < len(ok) and STANDIN not in panel:
-        runtime.log(f"  {STANDIN} stands in to vote for {', '.join(m for m in ok if m not in votes)}")
-        panel = panel + [STANDIN]
-        v = vote(STANDIN)
+    for s in [s for s in STANDINS if s not in panel]:
+        if len(votes) >= len(ok):
+            break
+        runtime.log(f"  {s} stands in to vote for {', '.join(m for m in ok if m not in votes)}")
+        panel = panel + [s]
+        v = vote(s)
         if v:
-            votes[STANDIN] = v
+            votes[s] = v
     if not votes:
         sys.exit("error: every voter failed")
     voters = [m for m in panel if m in votes]
@@ -4099,7 +4105,7 @@ def recommend(path, run, store, keys, about, question, stem):
         save({"status": "failed", "reason": str(e)})
 
 
-DEFAULT_PANEL = ["argon"]
+DEFAULT_PANEL = ["gpt"]
 LABS = [("Anthropic", r"claude"), ("OpenAI", r"gpt|o\d|codex"), ("Google", r"gemini|gemma"),
         ("xAI", r"grok|cursor-grok"), ("Moonshot", r"kimi"), ("Z.ai", r"glm"), ("DeepSeek", r"deepseek"),
         ("Alibaba", r"qwen"), ("Meta", r"muse|llama"), ("Cursor", r"composer|auto")]
@@ -5120,9 +5126,12 @@ def main():
     if not a.factcheck_only:
         wanted = len(panel)
         panel = preflight(panel)
-        if len(panel) < wanted and STANDIN not in panel and available(STANDIN) and preflight([STANDIN]):
-            runtime.log(f"{STANDIN} stands in for the panelist that is not available")
-            panel.append(STANDIN)
+        for s in [s for s in STANDINS if s not in panel]:
+            if len(panel) >= wanted:
+                break
+            if available(s) and preflight([s]):
+                runtime.log(f"{s} stands in for the panelist that is not available")
+                panel.append(s)
         if not panel:
             sys.exit("error: no panelist is logged in")
 

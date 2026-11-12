@@ -868,9 +868,16 @@ class Pipeline(unittest.TestCase):
             self.assertEqual(status["added"], 1)
             self.assertNotIn("edit vote", stages)
 
-    def test_default_panel_is_argon_alone(self):
-        self.assertEqual(ur.DEFAULT_PANEL, ["argon"])
-        self.assertEqual(ur.PANELISTS["argon"], ("cursor", "gemini-4-argon-medium", "Gemini 4 Argon Medium"))
+    def test_default_panel_is_gpt_alone(self):
+        self.assertEqual(ur.DEFAULT_PANEL, ["gpt"])
+        self.assertEqual(ur.STANDINS, ["claude", "grok"])
+
+    def test_claude_then_grok_stand_in_for_a_failed_solo_reviewer(self):
+        _, r, md = self.run_review(["gpt"], fails=("gpt",))
+        self.assertEqual(r["reviewers_ok"], ["claude"])
+        self.assertIn("Failed: GPT-5.6 Luna", md)
+        _, r, _ = self.run_review(["gpt"], fails=("gpt", "claude"))
+        self.assertEqual(r["reviewers_ok"], ["grok"])
 
     def test_one_reviewer_skips_the_vote_and_keeps_its_findings(self):
         prompts, r, md = self.run_review(["argon"])
@@ -882,7 +889,7 @@ class Pipeline(unittest.TestCase):
 
     def test_a_failed_solo_reviewer_still_warns(self):
         _, r, md = self.run_review(["argon"], fails=("argon",))
-        self.assertEqual(r["reviewers_ok"], ["grok"])
+        self.assertEqual(r["reviewers_ok"], ["claude"])
         self.assertIn("Failed: Gemini 4 Argon Medium", md)
 
     def test_no_stand_in_when_all_succeed(self):
