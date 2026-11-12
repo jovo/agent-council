@@ -124,7 +124,8 @@ fact-check prints the same line for `factcheck.md` when it finishes, in its
 log (`factcheck.log` in the run folder).
 
 When no review page opened, copy the findings from `unified.md` into the notes
-file verbatim, in its order, and reply with its path and the counts by severity. Do not re-summarize or re-order the findings. With `--verify`, say whether the
+file verbatim, in its order, with the counts by severity at its top, and reply
+with the one line the notes-file section describes. Do not re-summarize or re-order the findings. With `--verify`, say whether the
 fact-check has finished or is still running.
 
 ## The notes file

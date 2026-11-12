@@ -191,6 +191,15 @@ CLAUDE_MODELS = {"sonnet": "Sonnet", "opus": "Opus", "fable": "Fable", "haiku": 
 CODEX_MODELS = {"gpt-5.6-luna": "GPT-5.6 Luna", "gpt-5.6-sol": "GPT-5.6 Sol"}
 
 
+FACTCHECK_DEFAULT = ["claude", "gpt", "gemini"]
+
+
+def factcheck_panel(panel):
+    """The fact-check's checkers: the review panel, or the three-lab panel when
+    the review ran one model, since one checker cannot cross-check a verdict."""
+    return list(panel) if len(panel) > 1 else list(FACTCHECK_DEFAULT)
+
+
 def panelist(spec):
     """Register a panelist given as harness:model[@effort] (claude:opus,
     codex:gpt-5.6-luna@medium, cursor:kimi-k3-low) and return its key. Short
@@ -536,8 +545,9 @@ and baseline, or a missing step, propose that content as the 🟢 text, worded a
 it would read in the draft, so the author can accept, edit, or decline it. When
 the fix depends on a decision or fact only the author has (which hardware, which
 method, what a term means, who decides), do not invent it. Write a question
-finding instead: no diff, and the body is the question to the author, naming
-the readings or options you see and the one you assumed while reading. Never
+finding instead: the body is the question to the author, naming the readings
+or options you see and the one you assumed while reading, then the inline diff
+for the reading you assumed. Never
 describe what to add in place of either. Only a citation or a measured value cannot be proposed
 truthfully: write it as a slot in double braces where it goes, shaped like the
 final text, such as "RECAP {{{{citation: Author, year}}}}" or
@@ -956,6 +966,8 @@ def score_group(members, votes, voters, owner):
         "kind": majority_kind([v.get("kind", "") for v in judged.values()], rep.get("kind", "")),
         "form": rep.get("form", "edit"),
         "rejected": len(others) >= 2 and len(backers) < 2,
+        # One model reviewed and none voted: there is no agreement to report.
+        "solo": len(others) < 2,
         # Split vote: at least one model agreed and at least one disagreed.
         "contested": n_agree > 0 and n_dis > 0,
         "pos": min(f["pos"] for f in members),
@@ -2588,7 +2600,7 @@ def auto_applies(f):
     if (f.get("status") or f["form"] == "question" or f["where"] == "overview" or f["tag"] == "Contested"
             or not f["applicable"] or f["slot"]):
         return False
-    return f["tag"] == "Unanimous" or (f["severity"] in ("Major", "Minor") and f["tag"] == "Majority")
+    return f["tag"] == "Unanimous" or (f["severity"] in ("Major", "Minor") and f["tag"] in ("Majority", "Solo"))
 
 
 def review_once(path, panel):
@@ -3318,10 +3330,12 @@ def runs_for(path):
 
 
 def vote_tag(g):
-    """Unanimous, Contested, Majority, or No majority. A model that raised the
+    """Solo, Unanimous, Contested, Majority, or No majority. A model that raised the
     finding on its own casts no vote on it, so each raiser other than the one
     whose wording is shown counts as agreeing: a finding all three raised is
     unanimous, not unvoted."""
+    if g.get("solo"):
+        return "Solo"
     vs = [v["vote"] for m, v in g["votes"].items() if m != g.get("self_voter")]
     vs += ["agree" for m in g.get("raised_by", []) if m != g.get("self_voter") and m not in g["votes"]]
     agree = sum(v == "agree" for v in vs)
@@ -3679,7 +3693,9 @@ def review_passage(path, run, passage):
             flat = sorted(({**f, "id": f"{letters[m]}{i}", "pos": position(dnorm, f["quote"])}
                            for m, fs in found.items() for i, f in enumerate(fs, 1)), key=lambda f: (f["pos"], f["id"]))
             new = []
-            if flat:
+            if flat and len(ok) == 1:  # one reviewer: no other model's findings to vote on
+                votes, voters = {m: {} for m in ok}, list(ok)
+            elif flat:
                 listed = "\n\n".join(f"[{f['id']}] ({f['severity']}{', question' if f.get('form') == 'question' else ''}) {f['title']}\nquote: {f['quote'] or '(none)'}\n{f['body']}" for f in flat)
                 prompt_v = VOTE.format(draft=draft, findings=listed, decided=decided, context="",
                                        focus=f"\n<author_focus>\n{focus}\n</author_focus>\n")
@@ -3689,6 +3705,7 @@ def review_passage(path, run, passage):
                 voters = [m for m in ok if m in votes]
                 if not voters:
                     return write_atomic(status, json.dumps({"status": "failed", "reason": "every voter failed"}))
+            if flat:
                 ids = {d["id"]: d for d in declines}
                 for g in (score_group(g, votes, voters, owner) for g in group_findings(flat, votes)):
                     g["where"] = where(g, dnorm, "")
@@ -3867,6 +3884,16 @@ INFERENCE_LABEL = re.compile(r"\s*\((?:an? |the )?(?:association|associational|c
 SUMMARIZING = set()
 
 
+def run_model(run):
+    """The first model that reviewed in this run, for calls that need one model
+    (the summary): it is installed and logged in, unlike a fixed choice."""
+    try:
+        ok = json.loads((run / "results.json").read_text()).get("reviewers_ok") or []
+    except (OSError, json.JSONDecodeError):
+        ok = []
+    return panelist(ok[0]) if ok else "claude"
+
+
 def summary_state(run):
     """The summary of the run's reviews for the review page: {"status": "done",
     "themes"}, "pending", or "failed" with a reason. The first
@@ -3890,7 +3917,7 @@ def summary_state(run):
         try:
             rules, _ = load_rules(None)
             prompt = SUMMARY.format(draft=summary_draft(run), review=(run / "unified.md").read_text(), rules=rules)
-            text = call("claude", prompt, run / "summary-raw.txt", run, stage="summary")
+            text = call(run_model(run), prompt, run / "summary-raw.txt", run, stage="summary")
             if text is None:
                 failed.write_text(failure_reason(run, "summary-raw"))
                 return
@@ -4038,8 +4065,8 @@ prose. Reply with only the recommendation.
 
 def recommend(path, run, store, keys, about, question, stem):
     """One overall recommendation from the panel's answers to a question or comment,
-    written the way the review's summary is: one Claude call, in the background
-    thread that asked the panel. It lands in the thread's "overall" in store."""
+    written the way the review's summary is: one call to a model that answered,
+    in the background thread that asked the panel. It lands in the thread's "overall" in store."""
     def entry(d):
         for key in keys:
             d = d[key]
@@ -4059,7 +4086,7 @@ def recommend(path, run, store, keys, about, question, stem):
         answers = "\n".join(f"<answer reviewer=\"{short(m)}\">{a['text']}{edits(a)}</answer>" for m, a in done.items())
         rules, _ = load_rules(None)
         prompt = OVERALL.format(about=about, question=question, answers=answers, draft=doc_text(path), rules=rules)
-        text = call("claude", prompt, run / f"{stem}-overall.txt", Path(path).parent, stage="overall")
+        text = call(panelist(next(iter(done))), prompt, run / f"{stem}-overall.txt", Path(path).parent, stage="overall")
         save({"status": "done", "text": text.strip()} if text else
              {"status": "failed", "reason": failure_reason(run, f"{stem}-overall")})
     except Exception as e:  # a background thread: record the failure instead of losing it
@@ -5149,7 +5176,7 @@ def main():
         # Start the fact-check first, detached, so it outlives this process.
         with open(outdir / "factcheck.log", "w") as fl:
             subprocess.Popen([sys.executable, os.path.abspath(__file__), "--factcheck-only",
-                              "-p", ",".join(panel), "-o", str(outdir)] + [str(p) for p in files],
+                              "-p", ",".join(factcheck_panel(panel)), "-o", str(outdir)] + [str(p) for p in files],
                              stdin=subprocess.DEVNULL, stdout=fl, stderr=fl, start_new_session=True)
         runtime.log("fact-check started in the background")
 
