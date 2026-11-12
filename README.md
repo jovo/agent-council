@@ -27,7 +27,7 @@ In the Claude desktop app, open the Code tab, choose the folder that holds your 
 
 > Install https://github.com/jovo/agent-council and give me a unified review of my-draft.md.
 
-Claude reads this README, runs the install, and asks before each command. If a model CLI is missing or logged out, it says which one and opens the sign-in in your browser. The review page then opens, and **Accept** writes into your draft. After the first time, ask for "a unified review of my-draft.md."
+Claude reads this README, runs the install, and asks before each command. If a model CLI is missing or logged out, it says which one and opens the sign-in in your browser. The review then opens as `unified.md`. `unified-review --page FILE` opens the review page, where **Accept** writes into your draft. After the first time, ask for "a unified review of my-draft.md."
 
 ### In a terminal
 
@@ -38,7 +38,7 @@ cd agent-council
 unified-review example.md
 ```
 
-[`example.md`](example.md) is a short proposal with planted flaws: overclaims, a conclusion that does not follow from its evidence, and two typos. Its review takes about 30 seconds, and a 1,300-word memo takes 40 to 120. For a Markdown file, the review page then opens in your browser. Click a highlighted passage to see its finding, then Accept, Edit, or Decline it. Click **Re-review ▾**, then **Run**, to review the revised text. Accept writes into `example.md`, and `git checkout example.md` restores it. [Install](#install) lists what you need first.
+[`example.md`](example.md) is a short proposal with planted flaws: overclaims, a conclusion that does not follow from its evidence, and two typos. Its review takes about 30 seconds, and a 1,300-word memo takes 40 to 120. Run `unified-review --page example.md` to open the review page in your browser. Click a highlighted passage to see its finding, then Accept, Edit, or Decline it. Click **Re-review ▾**, then **Run**, to review the revised text. Accept writes into `example.md`, and `git checkout example.md` restores it. [Install](#install) lists what you need first.
 
 To review a PDF, or a file you want left unchanged, run `unified-review --upload`. A page opens where you drop or choose a PDF, Markdown, text, or TeX file. A PDF is converted to Markdown, the panel reviews that copy, and the full review page opens on it when it finishes, with Download for the review as Markdown. Nothing is written back to your file.
 
@@ -101,7 +101,7 @@ unified-review [-n FOCUS] [-p PANEL] [--context FILE]... [--verify] [--rules FIL
 
 A model call that times out, errors, or returns nothing gets one retry, except after a login error, and so does a reply in the wrong format.
 
-The default panel is one model per lab, chosen for speed: Claude Sonnet (via `claude`), GPT-5.6 Luna at low effort (via `codex`), and Gemini 3.8 Flash Low (via `cursor-agent`). If a panelist fails, Grok 4.7 Low Fast (via `cursor-agent`) stands in, so three models still vote. Grok cannot stand in for Gemini when `cursor-agent` itself is down. The fact-check uses stronger Claude and GPT models, since it runs in the background. Choose other models with `-p`, for example `-p claude:opus,codex:gpt-5.6-luna@medium,cursor:kimi-k3-low`, or with **Panel** on the page.
+The default is one model, Gemini 4 Argon Medium (via `cursor-agent`), which reviews alone and skips the vote. For a panel that votes, pass `-p claude,gpt,gemini`: one model per lab, chosen for speed, Claude Sonnet (via `claude`), GPT-5.6 Luna at low effort (via `codex`), and Gemini 3.8 Flash Low (via `cursor-agent`). `-p` takes any one of these or any subset. If a model fails, Grok 4.7 Low Fast (via `cursor-agent`) stands in. Grok cannot stand in for Gemini when `cursor-agent` itself is down. The fact-check uses stronger Claude and GPT models, since it runs in the background. Choose other models with `-p`, for example `-p claude:opus,codex:gpt-5.6-luna@medium,cursor:kimi-k3-low`, or with **Panel** on the page.
 
 A review adds no per-call cost, since the CLIs run on their subscriptions. An October 2026 test of cheaper pay-per-token models on the same memo found none that replaced the panel. DeepSeek V4 Flash and gpt-oss-120b on Together AI cost about $0.004 per model per round. They returned 3 and 6 findings, where the panel's models returned 5 to 21, and 2 of gpt-oss-120b's 6 quotes did not match the draft. Open-weight models through `cursor-agent` (GLM 5.2, Kimi K3) took 60 to 270 seconds per review, against 13 to 22 for Gemini and GPT.
 

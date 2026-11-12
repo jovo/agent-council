@@ -23,8 +23,9 @@ Usage: unified-review [-o OUTDIR] [-n FOCUS] [-p PANEL] [--context FILE]... [--v
   -n FOCUS   extra instructions appended to the reviewer prompt
   --context FILE  supporting material the panel reads but does not review
              (reviewer comments, a call, a source paper). Text or PDF. Repeatable.
-  -p PANEL   comma-separated panel (default: claude,gpt,gemini). Short names
-             claude, gpt, gemini, grok, or harness:model[@effort], such as
+  -p PANEL   one model or a comma-separated panel (default: argon, Gemini 4
+             Argon Medium, alone). Short names argon, claude, gpt, gemini,
+             grok, or harness:model[@effort], such as
              claude:opus or codex:gpt-5.6-luna@medium or cursor:kimi-k3-low
   --verify   also fact-check the draft's claims with web search (background)
   --no-md    review a PDF as is, instead of converting it to Markdown first
@@ -125,9 +126,11 @@ VERDICTS = ["contradicted", "unverifiable", "plausible", "confirmed"]  # most ca
 
 
 # Panel name -> (harness, model passed to that harness, display label).
-# Pick one model per lab: same-family judges share biases. Fast settings by
-# default: Sonnet, GPT-5.6 Luna at low effort, Gemini Flash Low.
+# For a panel, pick one model per lab: same-family judges share biases. The
+# default (DEFAULT_PANEL) is Argon alone. Fast settings for the others: Sonnet,
+# GPT-5.6 Luna at low effort, Gemini Flash Low.
 PANELISTS = {
+    "argon": ("cursor", "gemini-4-argon-medium", "Gemini 4 Argon Medium"),
     "claude": ("claude", "sonnet", "Claude Sonnet"),
     "gpt": ("codex", "gpt-5.6-luna", "GPT-5.6 Luna"),
     "gemini": ("cursor", "gemini-3.8-flash-low", "Gemini 3.8 Flash Low"),
@@ -2161,8 +2164,11 @@ def render(outdir):
     parts = ["# " + ", ".join(Path(v["path"]).name + (f", version {v['number']}" if v.get("number") else
                                                       f" ({v['version']})" if "version" in v else "")
                               for v in vers) + (f", {r['started']}" if r.get("started") else "")]
-    parts += participation(r.get("failures"), [("reviewed", r["reviewers_ok"]), ("voted", voters)], names,
-                           "Agreement, duplicate grouping, and rejection by vote mean little in this run.")
+    if len(r["reviewers_ok"]) == 1 and not r.get("failures"):  # one model by choice
+        parts.append(f"*Reviewed by {names(r['reviewers_ok'])} alone, with no vote.*")
+    else:
+        parts += participation(r.get("failures"), [("reviewed", r["reviewers_ok"]), ("voted", voters)], names,
+                               "Agreement, duplicate grouping, and rejection by vote mean little in this run.")
     if r["verify"]:
         parts.append("*Fact-check running. Results go to factcheck.md.*")
     if r.get("since_last") is not None:
@@ -2390,6 +2396,9 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         return v or None
     if not flat:  # every reviewer found nothing to change: nothing to vote on
         runtime.log("  no findings to vote on")
+        votes = {m: {} for m in ok}
+    elif len(ok) == 1:  # one reviewer: no other model's findings to vote on
+        runtime.log("  one reviewer, so no vote")
         votes = {m: {} for m in ok}
     else:
         votes = {m: v for m, v in parallel(vote, ok).items() if v}
@@ -4057,7 +4066,7 @@ def recommend(path, run, store, keys, about, question, stem):
         save({"status": "failed", "reason": str(e)})
 
 
-DEFAULT_PANEL = ["claude", "gpt", "gemini"]
+DEFAULT_PANEL = ["argon"]
 LABS = [("Anthropic", r"claude"), ("OpenAI", r"gpt|o\d|codex"), ("Google", r"gemini|gemma"),
         ("xAI", r"grok|cursor-grok"), ("Moonshot", r"kimi"), ("Z.ai", r"glm"), ("DeepSeek", r"deepseek"),
         ("Alibaba", r"qwen"), ("Meta", r"muse|llama"), ("Cursor", r"composer|auto")]
@@ -4980,7 +4989,7 @@ def main():
     ap.add_argument("-n", dest="focus", default="")
     ap.add_argument("--context", action="append", default=[], metavar="FILE",
                     help="supporting material the panel reads but does not review (text or PDF, repeatable)")
-    ap.add_argument("-p", dest="panel", default="claude,gpt,gemini")
+    ap.add_argument("-p", dest="panel", default=",".join(DEFAULT_PANEL))
     ap.add_argument("--verify", action="store_true")
     ap.add_argument("--no-md", action="store_true",
                     help="review a PDF as is, instead of converting it to Markdown first")
@@ -5150,11 +5159,9 @@ def main():
     unified = foreground(files, draft, panel, a.focus, rules, outdir, workdir, a.verify, versions, context, shown)
     runtime.log(f"review done in {round(time.time() - t)} s." + (
         " Fact-check still running; factcheck.md opens when it finishes." if a.verify else ""))
-    # One Markdown file opens its review page; a PDF, several files, or an
-    # Re-review from the page itself keep to unified.md.
-    page = (len(files) == 1 and not os.environ.get("UNIFIED_REVIEW_NO_PAGE")
-            and open_page(files[0]))
-    if not page and not os.environ.get("UNIFIED_REVIEW_NO_PAGE"):
+    # The review opens as unified.md. The page opens only when asked for
+    # (unified-review --page FILE). A Re-review from the page sets NO_PAGE.
+    if not os.environ.get("UNIFIED_REVIEW_NO_PAGE"):
         open_file(unified)
     print(unified)
 

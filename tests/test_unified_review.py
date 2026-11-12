@@ -820,6 +820,23 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(sorted(r["reviewers_ok"]), ["claude", "gemini", "gpt"])
         self.assertEqual(sorted(r["voters"]), ["claude", "gemini", "grok"])
 
+    def test_default_panel_is_argon_alone(self):
+        self.assertEqual(ur.DEFAULT_PANEL, ["argon"])
+        self.assertEqual(ur.PANELISTS["argon"], ("cursor", "gemini-4-argon-medium", "Gemini 4 Argon Medium"))
+
+    def test_one_reviewer_skips_the_vote_and_keeps_its_findings(self):
+        prompts, r, md = self.run_review(["argon"])
+        self.assertNotIn("vote", prompts)
+        self.assertEqual(r["reviewers_ok"], ["argon"])
+        self.assertEqual(len([g for g in r["groups"] if not g["rejected"]]), 1)
+        self.assertIn("Reviewed by Gemini 4 Argon Medium alone, with no vote.", md)
+        self.assertNotIn("Warning", md)
+
+    def test_a_failed_solo_reviewer_still_warns(self):
+        _, r, md = self.run_review(["argon"], fails=("argon",))
+        self.assertEqual(r["reviewers_ok"], ["grok"])
+        self.assertIn("Failed: Gemini 4 Argon Medium", md)
+
     def test_no_stand_in_when_all_succeed(self):
         prompts, r, _ = self.run_review(["claude", "gpt", "gemini"])
         self.assertNotIn("grok", r["panel"])
