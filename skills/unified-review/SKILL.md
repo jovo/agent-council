@@ -1,6 +1,6 @@
 ---
 name: unified-review
-description: Review a draft with one model (Gemini 4 Argon by default) or a panel of models from different labs (Claude, GPT, Gemini) that vote on each other's findings, merged into one review in draft order, with an optional web fact-check. Use when the user asks for a unified, combined, panel, tri-model, or multi-model review or feedback on a file. Also use when the user asks to address, apply, fix, accept, or skip numbered items (such as 3, 7, or K5) from a unified review or fact-check. Also use when the user asks to iterate (review, apply the changes, and review again) for some number of rounds. Also use for any review of or feedback on a draft, even by one model, since its Reviewer rules set what to flag and the output format.
+description: Review a draft with one model (GPT-5.6 Luna by default) or a panel of models from different labs (Claude, GPT, Gemini) that vote on each other's findings, merged into one review in draft order, with an optional web fact-check. Use when the user asks for a unified, combined, panel, tri-model, or multi-model review or feedback on a file. Also use when the user asks to address, apply, fix, accept, or skip numbered items (such as 3, 7, or K5) from a unified review or fact-check. Also use when the user asks to iterate (review, apply the changes, and review again) for some number of rounds. Also use for any review of or feedback on a draft, even by one model, since its Reviewer rules set what to flag and the output format.
 ---
 
 # Unified review
@@ -44,12 +44,12 @@ layout are untouched. Edits it cannot place (inside an equation, citation, or
 footnote mark, new formatting, new table cells) are listed for the user to make
 by hand. A PDF comes back through make-pdf.
 
-The default is one model, `argon` (Gemini 4 Argon Medium via cursor-agent),
+The default is one model, `gpt` (GPT-5.6 Luna, low effort, via codex),
 which reviews alone with no vote. `-p` takes any one model or subset: short
 names `argon`, `claude` (Sonnet), `gpt` (GPT-5.6 Luna, low effort), `gemini`
 (Gemini 3.8 Flash Low), `grok`, or `harness:model[@effort]`. For a panel that
-votes, pass `-p claude,gpt,gemini`. If a model fails, Grok 4.7 Low Fast stands
-in automatically. Pass `-p` only when the user names a model or a panel. Pass `--verify` only when the user asks for a
+votes, pass `-p claude,gpt,gemini`. If a model fails, Claude Sonnet stands in
+automatically, and Grok 4.7 Low Fast if Claude fails too. Pass `-p` only when the user names a model or a panel. Pass `--verify` only when the user asks for a
 fact-check or claim verification.
 
 How it works: each panelist reviews without web search. With two or more,
