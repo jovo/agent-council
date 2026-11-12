@@ -1137,6 +1137,7 @@ class Placement(unittest.TestCase):
 class Summary(unittest.TestCase):
     def test_written_once_in_background_then_kept(self):
         run = Path(tempfile.mkdtemp())
+        (run / "results.json").write_text(json.dumps({"files": [], "reviewers_ok": ["claude"]}))
         (run / "unified.md").write_text("## Major\n\n### 1. F1 is never defined\n")
         calls = []
         def call(name, prompt, out, workdir, stage=""):
@@ -1158,7 +1159,7 @@ class Summary(unittest.TestCase):
         run = Path(tempfile.mkdtemp())
         draft = run / "memo.md"
         draft.write_text("Sparse coding predicts V1 receptive fields.\n")
-        (run / "results.json").write_text(json.dumps({"files": [str(draft)]}))
+        (run / "results.json").write_text(json.dumps({"files": [str(draft)], "reviewers_ok": ["claude"]}))
         (run / "unified.md").write_text("## Major\n\n### 1. F1 is never defined\n")
         calls = []
         def call(name, prompt, out, workdir, stage=""):
@@ -1174,6 +1175,31 @@ class Summary(unittest.TestCase):
             st = ur.summary_state(run)
         self.assertEqual(st["claim"], "Sparse coding predicts V1 receptive fields.")
         self.assertIn("<draft>\nSparse coding predicts V1 receptive fields.", calls[0])
+        shutil.rmtree(run)
+
+    def test_no_recorded_reviewer_fails_without_a_call(self):
+        run = Path(tempfile.mkdtemp())
+        (run / "unified.md").write_text("## Major\n\n### 1. F1 is never defined\n")
+        calls = []
+        def call(name, prompt, out, workdir, stage=""):
+            calls.append(name)
+            return "{}"
+        with mock.patch.object(ur, "call", call), mock.patch.object(ur, "load_rules", lambda p: ("rules", "")):
+            self.assertEqual(ur.summary_state(run), {"status": "pending"})
+            for _ in range(100):
+                if (run / "summary.failed").exists():
+                    break
+                time.sleep(0.01)
+            st = ur.summary_state(run)
+        self.assertEqual(st["status"], "failed")
+        self.assertIn("no reviewer", st["reason"])
+        self.assertEqual(calls, [])
+        shutil.rmtree(run)
+
+    def test_summary_uses_the_runs_reviewer(self):
+        run = Path(tempfile.mkdtemp())
+        (run / "results.json").write_text(json.dumps({"reviewers_ok": ["argon"]}))
+        self.assertEqual(ur.run_model(run), ur.panelist("argon"))
         shutil.rmtree(run)
 
     def test_one_sentence(self):

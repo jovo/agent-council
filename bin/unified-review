@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """unified-review: a panel of models from different labs reviews a draft, then
-votes on every finding. For one Markdown file, a local review page opens with
-the draft and each finding in place, where Accept writes a change into the
-file. unified.md gives the findings by severity, then in draft order, each with
-its votes. An optional web fact-check runs in the background and writes
+votes on every finding (one model, the default, reviews alone and skips the
+vote). unified.md opens after the review and gives the findings by severity,
+then in draft order, each with its votes. --page FILE opens a local review page
+with the draft and each finding in place, where Accept writes a change into the
+file. An optional web fact-check runs in the background and writes
 factcheck.md. A PDF or Word file is reviewed as a Markdown copy, and
 Download on the page gives the edited copy back in the file's own format.
 
@@ -3886,12 +3887,13 @@ SUMMARIZING = set()
 
 def run_model(run):
     """The first model that reviewed in this run, for calls that need one model
-    (the summary): it is installed and logged in, unlike a fixed choice."""
+    (the summary): it is installed and logged in, unlike a fixed choice. None
+    when the run records no reviewer that succeeded."""
     try:
         ok = json.loads((run / "results.json").read_text()).get("reviewers_ok") or []
     except (OSError, json.JSONDecodeError):
         ok = []
-    return panelist(ok[0]) if ok else "claude"
+    return panelist(ok[0]) if ok else None
 
 
 def summary_state(run):
@@ -3917,7 +3919,11 @@ def summary_state(run):
         try:
             rules, _ = load_rules(None)
             prompt = SUMMARY.format(draft=summary_draft(run), review=(run / "unified.md").read_text(), rules=rules)
-            text = call(run_model(run), prompt, run / "summary-raw.txt", run, stage="summary")
+            model = run_model(run)
+            if model is None:
+                failed.write_text("no reviewer that succeeded is recorded for this run")
+                return
+            text = call(model, prompt, run / "summary-raw.txt", run, stage="summary")
             if text is None:
                 failed.write_text(failure_reason(run, "summary-raw"))
                 return
