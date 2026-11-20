@@ -134,8 +134,12 @@ Once a review has more than one item, by you alone or from the script, keep the
 open items in a notes file in the draft's repository: `notes/<draft>-review.md`,
 or the notes file the user names. Each item gives its section, its current line
 in the draft, the point, and at least one inline revision, even while a source
-is still being checked (then the revision is provisional, and the item says so). Every turn, re-read the draft,
-fix line numbers that moved, and delete each item the user applied or rejected,
+is still being checked (then the revision is provisional, and the item says so).
+In a review of a slide deck, every line number also names its slide number,
+counted as the rendered deck counts them, with the cover as slide 1: in the
+item's heading ("B5. Slides 10 and 11 (lines 142–163)") and in each
+cross-reference ("the theorem (slide 16, line 237)"). Every turn, re-read the draft,
+fix line and slide numbers that moved, and delete each item the user applied or rejected,
 so the user never has to tidy the file. Delete an item you apply in the same
 turn you apply it. Detect the user's own edits: an item whose struck text is
 gone from the draft, or whose added text is in it, is applied. When the draft
