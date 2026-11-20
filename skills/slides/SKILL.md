@@ -128,9 +128,10 @@ Native Marp features replace classes where they can:
   with a link renders as a citation in small grey text.
 - Tables: anything shaped like a table (rows × attributes, a capability
   matrix, a component list, an evolution timeline) is a Markdown pipe table,
-  never HTML or `cols`. Tables render with no fill and no lines, left-aligned;
-  use `:---:` only for columns that should be centred (e.g. ● ◐ ○) and `--:`
-  for numbers. For yes / partly / no, type `●` `◐` `○`: the theme draws them
+  never HTML or `cols`. Tables render with no fill and no lines, left-aligned.
+  Write each separator cell as three hyphens, `| --- |`, with no padding and
+  no spaces used to line the columns up. Use `:---:` only for columns that
+  should be centred (e.g. ● ◐ ○) and `--:` for numbers. For yes / partly / no, type `●` `◐` `○`: the theme draws them
   as green, orange and red circles. For other values, write words; bold marks
   the value that matters and renders white.
 - Yes / no points outside a table: write each point as its own paragraph
@@ -265,7 +266,7 @@ components. Use the stack level that matches.
 Use one type scale with three sizes, defined in `theme/base.css`. Slides
 never set sizes:
 
-- title: 45px (every `# h1`: slide, cover, divider)
+- title: 45px (every `# h1`: slide, divider, and a cover over a picture). A text cover title is 60px and centred
 - body: 28px (body text; bold for `##`/`###` headings, claims, verdicts,
   takeaways; values in a `contrast` table)
 - small: 22px, always grey (labels, captions, ordinary tables, explanations, sources,
@@ -392,8 +393,9 @@ and inspect every slide after changing shared typography.
   every commit; it lists any tracked file over 500 KB. If a big file was
   committed but not pushed, rewrite those commits before pushing.
 - For live rebuilds while editing, run
-  `npx marp --watch --html --allow-local-files --theme-set theme/base.css
-  <deck>/deck.md`.
+  `npx marp --watch --html --allow-local-files --theme-set theme/base.css --
+  <deck>/deck.md`. The `--` is required: `--theme-set` otherwise consumes the
+  deck path and Marp exits without rendering.
 
 ## Figures
 

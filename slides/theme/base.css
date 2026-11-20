@@ -92,7 +92,8 @@
   /* type scale (repo CLAUDE.md) */
   --font: 'Base Symbols', 'NewCM Body', serif; /* reading text */
   --font-title: 'NewCM Title', serif; /* headings: #, ##, ### */
-  --type-title: 45px;     /* every h1: slide, cover, divider */
+  --type-title: 45px;     /* every h1: slide, divider, cover over a picture */
+  --type-cover: 60px;     /* h1 on a text cover */
   --type-body: 28px;      /* body text; bold for headings, claims, takeaways */
   --type-small: 22px;     /* grey: labels, captions, tables, explanations, sources */
   --bold: 700;            /* the only bold weight */
@@ -219,6 +220,18 @@ section.cover, section.divider { background: var(--glow); }
 
 section.cover { justify-content: flex-end; gap: var(--stack-cell); padding: 0 var(--s5) var(--s5); }
 section.cover p { color: var(--muted); font-size: var(--type-small); }
+/* A text cover centres a larger title. A cover with a background picture
+   keeps the title in the bottom left, over the image. */
+section.cover:not([data-marpit-advanced-background]) {
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: var(--s5);
+}
+section.cover:not([data-marpit-advanced-background]) > h1 {
+  font-size: var(--type-cover);
+  line-height: 1.05;
+}
 
 section.divider { justify-content: center; padding: 0 var(--s6); }
 
