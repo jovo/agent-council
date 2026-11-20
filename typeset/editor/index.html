@@ -133,7 +133,7 @@ function setGeometry(g) {
   st.setProperty("--m", g.margin + "in"); st.setProperty("--cols", g.columns); st.setProperty("--gap", g.gap + "in");
   applyZoom();
 }
-let savedText = "", diskMtime = null, rendering = false, renderAgain = false, paginating = false;
+let savedText = "", diskMtime = null, rendering = false, queued = null, paginating = false;
 const docText = () => doc.front + doc.lead + doc.blocks.map((b) => b.src + b.sep).join("");
 const dirty = () => docText() !== savedText;
 function showStatus() {
@@ -343,18 +343,18 @@ async function load(keep) {
   savedText = r.text; diskMtime = r.mtime; hideBanner();
   if (r.layout) setGeometry(r.layout);
   const top = $("scroller").scrollTop;
-  doc.blocks = [];
   await render(r.text, true);
   if (keep) $("scroller").scrollTop = top;
 }
 async function render(text, fresh) {
-  if (rendering) { renderAgain = true; return; }
+  // One render at a time. A queued reload (fresh) is never replaced by an edit's render.
+  if (rendering) { if (!queued?.fresh) queued = { text, fresh }; return; }
   rendering = true;
   try {
     const sent = text ?? docText();
     const r = await (await fetch("/api/render", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: sent }) })).json();
     // Edits made while pandoc ran would be overwritten by this older render: render again instead.
-    if (!fresh && docText() !== sent) { renderAgain = true; return; }
+    if (!fresh && docText() !== sent) { queued = queued || {}; return; }
     if (r.error) { info(r.error.split("\n")[0], true); return; }
     apply(r, fresh);
     const bibErr = r.warnings.find((w) => /^bibliography .* could not be read/.test(w));
@@ -362,8 +362,11 @@ async function render(text, fresh) {
     const missing = r.warnings.filter((w) => /not found/.test(w)).map((w) => w.replace(/.*citation (\S+).*/, "@$1"));
     info(missing.length ? "missing citations: " + missing.join(", ") : "");
   } catch (e) { info("server unreachable", true); }
-  finally { rendering = false; }
-  if (renderAgain) { renderAgain = false; render(); }
+  finally {
+    rendering = false;
+    // Run what was queued meanwhile, also after the early returns above.
+    if (queued) { const q = queued; queued = null; await render(q.text, q.fresh); }
+  }
 }
 function info(msg, err) { $("info").textContent = msg; $("info").className = "status" + (err ? " err" : ""); }
 
@@ -485,12 +488,25 @@ function saveCaret() {
   const a = document.activeElement;
   const b = a && a.closest && a.closest(".blk")?._b;
   if (!b) return null;
-  return { b, off: caretOffset(b.el), ta: a.tagName === "TEXTAREA" ? [a.selectionStart, a.selectionEnd] : null };
+  const sel = getSelection(), r = sel.rangeCount ? sel.getRangeAt(0) : null;
+  // The live range tells the start of a new <p> or <li> from the end of the one before;
+  // the character offset is the fallback once the block's element is rebuilt.
+  const range = r && b.el.contains(r.startContainer) && b.el.contains(r.endContainer) ? [r.startContainer, r.startOffset, r.endContainer, r.endOffset] : null;
+  return { b, off: caretOffset(b.el), range, ta: a.tagName === "TEXTAREA" ? [a.selectionStart, a.selectionEnd] : null };
 }
 function restoreCaret(c) {
   if (!c || !c.b.el.isConnected) return;
   if (c.ta) { const ta = c.b.el.querySelector("textarea"); if (ta) { ta.focus(); ta.setSelectionRange(...c.ta); } return; }
-  if (c.b.mode === "rich" && c.off != null) { c.b.el.focus({ preventScroll: true }); setCaret(c.b.el, c.off); }
+  if (c.b.mode !== "rich" || (!c.range && c.off == null)) return;
+  c.b.el.focus({ preventScroll: true });
+  if (c.range && c.b.el.contains(c.range[0]) && c.b.el.contains(c.range[2])) {
+    try {
+      const r = document.createRange(); r.setStart(c.range[0], c.range[1]); r.setEnd(c.range[2], c.range[3]);
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      return;
+    } catch (e) { /* the nodes changed: fall back to the offset */ }
+  }
+  if (c.off != null) setCaret(c.b.el, c.off);
 }
 
 // ---------- Editing ----------
