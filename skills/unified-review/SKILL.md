@@ -141,8 +141,12 @@ turn you apply it. Detect the user's own edits: an item whose struck text is
 gone from the draft, or whose added text is in it, is applied. When the draft
 changed the passage some other way, re-check the point and revise or delete
 the item.
-Keep item numbers fixed, leaving gaps, so a number the user said earlier still
-names the same item.
+Give each set of recommendations a letter: A for Major, B for Minor, C for
+Nitpick. An item's id is its letter and its number within that set (A2, B7),
+and the notes file lists the sets in that order. Ids stay fixed and are never
+reused, leaving gaps, so an id the user said earlier still names the same item.
+A new item takes the next free number in its set. An item whose severity
+changes keeps its id.
 For a script review, record each one with `--applied N` or `--ignore N`, so the
 next review neither raises it again nor forgets it.
 
@@ -164,6 +168,11 @@ numbered in `factcheck.md` (K1, K2, ...). This applies whenever the user refers 
 items by number: to address, apply, fix, skip, or just to ask whether one is
 worth doing, for example "address 3", "apply 2, 4, 7", "fix K5", or "is 6
 right?".
+
+The notes file uses its own ids (A2, B7), not the numbers in `unified.md`.
+When the user names a notes id, act on that item in the notes file, and find
+its number in `unified.md` by its quoted text before running `--item`,
+`--applied` or `--ignore`.
 
 1. Always start by running `unified-review --item <numbers>`, even if you saw
    the review earlier. Add `--run DIR` only if the user names an older run. It
