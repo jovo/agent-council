@@ -211,7 +211,7 @@ Older decks keep equations as SVG files in `assets/equations/`, with the
 `dvisvgm --zoom=2.1`). Leave them as they are unless asked to convert a deck.
 Use ordinary prose for non-mathematical arrows or labels. 
 
-## Design schematic: binary contrasts
+## Design schematic: contrasts
 
 Every slide that establishes a binary contrast uses `<div class="cols
 contrast">` with exactly two child cells. This includes conceptual comparisons,
@@ -233,11 +233,12 @@ figures.
 When one focal case answers two or more baselines (for example, a method
 that keeps one approach's strengths and another's), add a cell per baseline:
 the baselines come first and the focal case is the last cell. Only the last
-cell is tinted and divided from the rest. Put column titles that do not fit
-the slide title as a `### Title` at the top of each cell.
+cell is tinted and divided from the rest. Write the column titles as the
+slide title, one span per cell, when they fit there. Otherwise put a
+`### Title` at the top of each cell.
 
-Keep the two statements syntactically parallel. State the common language in
-both columns and mark only the minimal differing terms with `***word***`. Do not add modifier classes for contrasts.
+Keep corresponding statements syntactically parallel. State the common language in
+each column and mark only the minimal differing terms with `***word***`. Do not add modifier classes for contrasts.
 
 ## Spacing
 
