@@ -373,10 +373,11 @@ td strong { color: var(--ink); }
 tbody th { font-weight: var(--bold); }
 /* A `contrast` slide holds a table that contrasts its columns: values in
    white body text, labels and headers small and grey, and the last column, the
-   focal case, tinted and divided like the last cell of a `cols contrast`. */
+   focal case, divided like the last cell of a `cols contrast` and tinted with
+   a flat accent wash (each cell would restart the --tint gradient). */
 section.contrast table { font-size: var(--type-body); }
 section.contrast td { color: var(--ink); }
-section.contrast :is(thead th, td:first-child) { font-size: var(--type-small); color: var(--muted); font-weight: var(--bold); }
+section.contrast :is(th, td:first-child) { font-size: var(--type-small); color: var(--muted); font-weight: var(--bold); }
 section.contrast :is(th, td) { padding: var(--stack-cell) var(--cell-x); }
 section.contrast :is(th, td):first-child { padding-left: 0; }
 section.contrast :is(th, td):last-child:not(:first-child) {

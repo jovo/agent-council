@@ -204,10 +204,10 @@ Unicode math, HTML subscripts, or a text font for LaTeX merely because the
 expression is short.
 
 Math takes the size and colour of the text around it. Display equations are
-centred at body size. Inline math in a table or caption is small and grey
+centred at body size. Inline math in an ordinary table or caption is small and grey
 like its text. Colour math with `\color` inside the LaTeX, because
 `***…***` does not reach it: `\color{#f6c343}{…}` for the accent and
-`\color{#f4f7fb}{…}` for white text in a table (in a deck with
+`\color{#f4f7fb}{…}` for white text in a grey table cell (in a deck with
 `class: invert`, `#2189db` and `#111923`). Inline math sets limits beside
 operators, which keeps a takeaway on one line. Start it with `\displaystyle`
 only when the limits must sit below.
@@ -267,8 +267,8 @@ never set sizes:
 
 - title: 45px (every `# h1`: slide, cover, divider)
 - body: 28px (body text; bold for `##`/`###` headings, claims, verdicts,
-  takeaways)
-- small: 22px, always grey (labels, captions, tables, explanations, sources,
+  takeaways; values in a `contrast` table)
+- small: 22px, always grey (labels, captions, ordinary tables, explanations, sources,
   cover byline)
 
 Text uses one bold weight (`--bold`, 700), no uppercase or letter-spaced
@@ -278,9 +278,9 @@ New Computer Modern Book for everything a viewer reads as text (body, bold phras
 takeaways, labels, captions, tables, sources). These are the only treatments:
 
 - title: white bold
-- body: white regular, or white bold
+- body: white regular (including values in a `contrast` table), or white bold
 - small: grey bold (labels, captions, table headers; accent colour on the
-  right of a contrast) or grey regular (explanations, table cells, sources, byline)
+  right of a contrast) or grey regular (explanations, ordinary table cells, sources, byline)
 - italic `*word*` and bold `**word**` in the colour of the surrounding text
 - highlighted words `***word***`: accent colour (yellow on dark, blue on
   light), bold, any size
