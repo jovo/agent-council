@@ -230,6 +230,12 @@ Markdown list; rows line up across the two columns. A plain paragraph after
 the list is the cell's verdict line, pinned to the bottom. Cells may also be `<figure>` elements for paired
 figures.
 
+When one focal case answers two or more baselines (for example, a method
+that keeps one approach's strengths and another's), add a cell per baseline:
+the baselines come first and the focal case is the last cell. Only the last
+cell is tinted and divided from the rest. Put column titles that do not fit
+the slide title as a `### Title` at the top of each cell.
+
 Keep the two statements syntactically parallel. State the common language in
 both columns and mark only the minimal differing terms with `***word***`. Do not add modifier classes for contrasts.
 
