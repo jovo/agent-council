@@ -285,14 +285,19 @@ section > .cols:has(> figure) { flex: 1 1 0; min-height: 0; }
 .cols > figure > img { flex: 1 1 0; width: 100%; min-height: 0; max-height: 100%; object-fit: contain; }
 .cols > figure > :is(h2, h3) { align-self: stretch; }
 
-/* Flow: an arrow between consecutive columns, for steps in a process. */
+/* Flow: an arrow between consecutive columns, for steps in a process. The
+   gap is wider than other columns' so the arrow clears the text on both
+   sides, and the arrow is centred on the cell's height so it lines up with
+   a one-line cell's text. */
+.cols.flow { column-gap: var(--s4); }
 .cols.flow > * { position: relative; }
 .cols.flow > * + *::before {
   content: '→';
   position: absolute;
-  top: 40%;
-  left: calc(-1 * var(--s3));
-  width: var(--s3);
+  top: 50%;
+  transform: translateY(-50%);
+  left: calc(-1 * var(--s4));
+  width: var(--s4);
   text-align: center;
   color: var(--muted);
 }
@@ -304,8 +309,8 @@ section > .cols:has(> figure) { flex: 1 1 0; min-height: 0; }
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  left: calc(-1 * var(--s3));
-  width: var(--s3);
+  left: calc(-1 * var(--s4));
+  width: var(--s4);
   text-align: center;
   color: var(--muted);
 }
