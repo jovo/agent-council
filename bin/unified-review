@@ -421,6 +421,12 @@ def call_once(name, prompt, out, workdir, web):
     return None, "empty output"
 
 
+def usable_standin(s):
+    """A stand-in mid-run needs its CLI, and must not have failed already,
+    e.g. in preflight before choose_panel dropped it."""
+    return available(s) and all(f["model"] != s for f in FAILURES)
+
+
 def choose_panel(panel, factcheck_only=False):
     """Drop requested panelists whose CLI is missing or logged out, and fill
     their places from STANDINS. A stand-in never replaces itself, and the
@@ -2385,7 +2391,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         return fs
     found = {m: fs for m, fs in parallel(review, panel).items() if fs is not None}
     wanted = len(panel)
-    for s in [s for s in STANDINS if s not in panel]:
+    for s in [s for s in STANDINS if s not in panel and usable_standin(s)]:
         if len(found) >= wanted:
             break
         runtime.log(f"  {s} stands in for {', '.join(m for m in panel if m not in found)}")
@@ -2443,7 +2449,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         votes = {m: {} for m in ok}
     else:
         votes = {m: v for m, v in parallel(vote, ok).items() if v}
-    for s in [s for s in STANDINS if s not in panel]:
+    for s in [s for s in STANDINS if s not in panel and usable_standin(s)]:
         if len(votes) >= len(ok):
             break
         runtime.log(f"  {s} stands in to vote for {', '.join(m for m in ok if m not in votes)}")
@@ -2492,7 +2498,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         "files": [str(p) for p in files], "versions": versions, "context": ctx_names,
         "started": STARTED,
         "panel": panel, "reviewers_ok": ok, "voters": voters,
-        "labels": {m: label(m) for m in panel}, "verify": verify,
+        "labels": {m: label(m) for m in [*panel, *(f["model"] for f in FAILURES)] if m in PANELISTS}, "verify": verify,
         "failures": FAILURES, "agreement": vote_agreement(flat, votes, owner),
         "anonymization": letters, "timings_s": timings, "headings": slide_headings(draft) if DECK else draft_headings(draft), "deck": DECK,
         "findings": flat, "votes": votes, "groups": groups, "checks": mech, "since_last": since}, indent=1, ensure_ascii=False) + "\n")

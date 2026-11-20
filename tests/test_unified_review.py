@@ -804,7 +804,8 @@ class PdfExtras(unittest.TestCase):
 class Pipeline(unittest.TestCase):
     """A whole review with fake model calls."""
 
-    def run_review(self, panel, fails=(), draft_text="The sky is green today. Grass grows slowly.", reply=None):
+    def run_review(self, panel, fails=(), draft_text="The sky is green today. Grass grows slowly.", reply=None,
+                   missing=(), failed_before=()):
         prompts = {}
 
         def fake_call(m, prompt, out, workdir, web=False, stage=""):
@@ -827,7 +828,10 @@ class Pipeline(unittest.TestCase):
             out.mkdir()
             draft = f"===== memo.md =====\n{draft_text}"
             ur.FAILURES.clear()
+            for m in failed_before:
+                ur.FAILURES.append({"stage": "preflight", "model": m, "reason": "not logged in"})
             with mock.patch.object(ur, "call", fake_call), mock.patch.object(ur, "RUNS_DIR", d), \
+                 mock.patch.object(ur, "available", lambda m: m not in missing), \
                  mock.patch.object(ur, "LAST_RUN", d / "last-run"), \
                  mock.patch.object(ur, "open_file", lambda p: None), mock.patch.object(ur.runtime, "log", lambda *a: None):
                 ur.foreground([f], draft, panel, "", "rules", out, d, False, [])
@@ -908,6 +912,15 @@ class Pipeline(unittest.TestCase):
         self.assertIn("Failed: GPT-5.6 Luna", md)
         _, r, _ = self.run_review(["gpt"], fails=("gpt", "claude"))
         self.assertEqual(r["reviewers_ok"], ["grok"])
+
+    def test_a_missing_or_already_failed_stand_in_is_skipped(self):
+        prompts, r, _ = self.run_review(["gpt"], fails=("gpt",), missing=("claude",))
+        self.assertEqual(r["reviewers_ok"], ["grok"])
+        self.assertNotIn("claude", prompts["review"])
+        prompts, r, md = self.run_review(["gpt", "gemini", "grok"], fails=("gpt",), failed_before=("claude",))
+        self.assertNotIn("claude", prompts["review"])
+        self.assertEqual(r["labels"]["claude"], ur.label("claude"))
+        self.assertIn(f"Failed: {ur.label('claude')}", md)
 
     def test_claude_then_grok_stand_in_for_a_failed_voter(self):
         _, r, _ = self.run_review(["gpt", "gemini"], fails=(("vote", "gpt"),))
