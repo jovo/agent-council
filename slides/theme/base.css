@@ -165,6 +165,12 @@ section.full a[href]::after { content: none; }
 mark { padding: 0; background: none; color: var(--accent); font-weight: var(--bold); } /* same as ***word*** */
 ul, ol { padding-left: 1.1em; }
 li + li { margin-top: var(--stack-list); }
+/* Nested numbered lists letter like a word processor: 1, then a, then i. */
+ol ol { list-style-type: lower-alpha; }
+ol ol ol { list-style-type: lower-roman; }
+/* Inline code (`text`): a quiet aside such as a pseudocode comment, in grey
+   monospace at the size of the text around it. */
+code { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 0.85em; color: var(--muted); background: none; }
 
 /* Page numbers, when a deck sets `paginate: true`. */
 section[data-marpit-pagination]::after {
