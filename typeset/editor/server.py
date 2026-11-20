@@ -57,12 +57,24 @@ def split_front(text):
     return (m.group(0), text[m.end():]) if m else ("", text)
 
 
+FENCE_RE = re.compile(r"^[ \t]*(```|~~~)", re.M)
+
+
+def unclosed(src):
+    """True while a code fence, an HTML comment, or a $$ display block that
+    opens in src has not closed, so a blank line inside it does not split it."""
+    return (len(FENCE_RE.findall(src)) % 2 == 1
+            or src.count("<!--") > src.count("-->")
+            or src.count("$$") % 2 == 1)
+
+
 def chunk(body):
     """Split Markdown into top-level blocks: (lead, [[source, separator_after]]).
     lead + every source + separator reproduces body exactly. A list whose items
     are separated by blank lines stays one block, and so do indented
-    continuation paragraphs."""
-    parts = re.split(r"(\n[ \t]*\n\s*)", body)
+    continuation paragraphs, code fences, comments, and $$ blocks."""
+    # Split on whole blank lines only, so each block keeps its own indentation.
+    parts = re.split(r"(\n(?:[ \t]*\n)+)", body)
     lead = ""
     if parts and parts[0].strip() == "":
         lead = parts[0] + (parts[1] if len(parts) > 1 else "")
@@ -79,7 +91,8 @@ def chunk(body):
         prev = chunks[-1][0] if chunks else None
         cur_item, prev_item = LIST_RE.match(src), LIST_RE.match(prev or "")
         cont = prev is not None and (
-            src[:1] in " \t"
+            unclosed(prev)
+            or src[:1] in " \t"
             or (cur_item and prev_item and cur_item.group(2)[-1:] == prev_item.group(2)[-1:]))
         if cont:
             chunks[-1][0] += chunks[-1][1] + src
@@ -135,6 +148,7 @@ def render(text, doc_dir, csl=None, bib_override=None):
     if csl:
         args += ["--csl", str(csl)]
     tmp = Path(tempfile.mkdtemp(prefix="edit-md-"))
+    bib_args, bib_error = [], ""
     try:
         bib = find_bib(front, doc_dir, bib_override)
         if isinstance(bib, Path) and bib.exists():
@@ -143,14 +157,19 @@ def render(text, doc_dir, csl=None, bib_override=None):
             keys = {k.rstrip(".:") for k in KEY_RE.findall(body)}
             (tmp / "refs.bib").write_text("\n\n".join(ents[k] for k in sorted(keys) if k in ents) + "\n",
                                           encoding="utf-8")
-            args += ["--bibliography", str(tmp / "refs.bib")]
+            bib_args = ["--bibliography", str(tmp / "refs.bib")]
         elif isinstance(bib, str):
-            args += ["--bibliography", bib]
-        p = subprocess.run(args, input=md, capture_output=True, text=True, cwd=doc_dir, timeout=60)
+            bib_args = ["--bibliography", bib]
+        p = subprocess.run(args + bib_args, input=md, capture_output=True, text=True, cwd=doc_dir, timeout=60)
+        if p.returncode != 0 and bib_args:
+            # As make-pdf does: an unreadable or unreachable bibliography still
+            # renders the document, with its citations unresolved.
+            bib_error = f"bibliography {bib} could not be read:\n{p.stderr}"
+            p = subprocess.run(args, input=md, capture_output=True, text=True, cwd=doc_dir, timeout=60)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     if p.returncode != 0:
-        return {"error": p.stderr}
+        return {"error": bib_error + p.stderr}
     pieces = MARK_RE.split(p.stdout)
     out = {int(pieces[i]): pieces[i + 1] for i in range(1, len(pieces) - 1, 2)}
     refs = ""
@@ -163,7 +182,7 @@ def render(text, doc_dir, csl=None, bib_override=None):
               for i, (src, sep) in enumerate(chunks)]
     refs_break = not re.search(r"^references-page-break:\s*false\s*$", front, re.M)
     return {"front": front, "lead": lead, "blocks": blocks, "refs": refs, "refsBreak": refs_break,
-            "warnings": [l for l in p.stderr.splitlines() if l.strip()]}
+            "warnings": [l for l in (bib_error + p.stderr).splitlines() if l.strip()]}
 
 
 def write_atomic(path, text):

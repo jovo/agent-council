@@ -93,6 +93,17 @@ class ChunkTests(unittest.TestCase):
         _, chunks = server.chunk("* a\n\n1. b\n")
         self.assertEqual([src.strip() for src, _ in chunks], ["* a", "1. b"])
 
+    def test_indented_continuation_after_a_blank_line_stays_in_the_list(self):
+        text = "1. First\n\n   Continuation\n\nAfter\n"
+        self.assertEqual(reassemble(text)[0], text)
+        self.assertEqual([src for src, _ in server.chunk(text)[1]], ["1. First\n\n   Continuation", "After\n"])
+
+    def test_blank_lines_inside_fences_comments_and_display_math_do_not_split(self):
+        for block in ("```python\nx = 1\n\ny = 2\n```", "~~~\na\n\n\nb\n~~~", "<!-- p1\n\np2\n\np3 -->", "$$\na\n\nb\n$$"):
+            text = f"Before\n\n{block}\n\nAfter\n"
+            self.assertEqual(reassemble(text)[0], text, block)
+            self.assertEqual([src for src, _ in server.chunk(text)[1]], ["Before", block, "After\n"], block)
+
     def test_find_bib(self):
         d = Path("/doc")
         self.assertEqual(server.find_bib("---\nbibliography: refs.bib\n---\n", d), d / "refs.bib")
@@ -208,6 +219,18 @@ class RenderTests(unittest.TestCase):
             self.assertNotIn("ref-Beta21", r["blocks"][-1]["html"].split("citation")[0])
             self.assertNotIn('id="refs"', r["blocks"][-1]["html"])
             self.assertTrue(r["refsBreak"])
+        finally:
+            shutil.rmtree(d)
+
+    def test_unreachable_bibliography_still_renders(self):
+        d = Path(tempfile.mkdtemp())
+        try:
+            # Port 9 (discard) on this machine refuses the connection at once.
+            text = DOC.replace("bibliography: refs.bib", "bibliography: http://127.0.0.1:9/refs.bib")
+            r = server.render(text, d)
+            self.assertNotIn("error", r)
+            self.assertEqual(len(r["blocks"]), 10)
+            self.assertTrue(r["warnings"][0].startswith("bibliography http://127.0.0.1:9/refs.bib could not be read"))
         finally:
             shutil.rmtree(d)
 

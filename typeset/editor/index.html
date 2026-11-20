@@ -88,11 +88,14 @@ a { color: #1A4D8F; text-decoration: none; }
 .blk.raw:hover { box-shadow: 0 0 0 1px rgba(36, 88, 198, 0.35); }
 .blk textarea { display: block; width: 100%; font: 8.5pt/1.35 ui-monospace, "SF Mono", Menlo, monospace; color: #222;
   background: #fffbe6; border: 1px solid #e3d48a; border-radius: 3px; padding: 4px; resize: none; overflow: hidden; margin: 0 0 6pt; text-align: left; }
-.blk.anchor, .blk.pagebreak { display: none; }
+.blk.pagebreak { display: none; }
+.blk.anchor { height: 0; overflow: hidden; }  /* kept in the flow so links to its id can scroll to it */
 .blk.comment { font: 8pt/1.3 -apple-system, sans-serif; color: #7a6a20; background: #fffbe6; border: 1px dashed #e3d48a; padding: 3px 5px; margin: 0 0 6pt; text-align: left; white-space: pre-wrap; }
 body.hide-notes .blk.comment { display: none; }
 .blk.refs { cursor: default; }
-.csl-entry { display: flex; gap: 0.4em; margin: 0 0 3pt; text-align: left; font-size: 11pt; }
+.csl-entry { margin: 0 0 3pt; text-align: left; font-size: 11pt; }
+/* Numbered styles put the label in its own margin column. Author-date styles do not. */
+.csl-entry:has(> .csl-left-margin) { display: flex; gap: 0.4em; }
 .csl-left-margin { flex: none; min-width: 1.7em; text-align: right; }
 .hl-err { background: #fdd; }
 </style>
@@ -269,7 +272,12 @@ function fill(b) {
   el.className = "blk " + b.kind + (b.span ? " span" : "");
   el.removeAttribute("contenteditable");
   if (b.kind === "comment") { el.textContent = b.src.replace(/^\s*<!--\s*|\s*-->\s*$/g, ""); b.mode = "raw"; el.classList.add("raw"); return; }
-  if (b.kind === "anchor" || b.kind === "pagebreak") { el.innerHTML = ""; b.mode = "hidden"; return; }
+  if (b.kind === "anchor" || b.kind === "pagebreak") {
+    el.innerHTML = ""; b.mode = "hidden";
+    const id = b.kind === "anchor" && b.src.match(/id="([^"]*)"/);
+    if (id) { const a = document.createElement("a"); a.id = id[1]; el.appendChild(a); }
+    return;
+  }
   el.innerHTML = b.html;
   softBreaks(el);
   b.mode = "raw";
@@ -343,9 +351,14 @@ async function render(text, fresh) {
   if (rendering) { renderAgain = true; return; }
   rendering = true;
   try {
-    const r = await (await fetch("/api/render", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: text ?? docText() }) })).json();
+    const sent = text ?? docText();
+    const r = await (await fetch("/api/render", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: sent }) })).json();
+    // Edits made while pandoc ran would be overwritten by this older render: render again instead.
+    if (!fresh && docText() !== sent) { renderAgain = true; return; }
     if (r.error) { info(r.error.split("\n")[0], true); return; }
     apply(r, fresh);
+    const bibErr = r.warnings.find((w) => /^bibliography .* could not be read/.test(w));
+    if (bibErr) { info(bibErr, true); return; }
     const missing = r.warnings.filter((w) => /not found/.test(w)).map((w) => w.replace(/.*citation (\S+).*/, "@$1"));
     info(missing.length ? "missing citations: " + missing.join(", ") : "");
   } catch (e) { info("server unreachable", true); }
@@ -388,7 +401,7 @@ function apply(r, fresh) {
 // Blocks flow through each page's two columns; a block that does not fit moves
 // whole to the next page (paragraphs break across columns, not across pages).
 const fits = (body) => body.scrollWidth <= body.clientWidth + 1;
-const keepWithNext = (b) => b && (b.kind === "heading" || b.kind === "anchor" || (b.kind === "para" && /^\*Table/.test(b.src)));
+const keepWithNext = (b) => b && (b.kind === "heading" || b.kind === "anchor" || (b.kind === "para" && /^(?:<a\s[^>]*><\/a>\s*)?\*Table/.test(b.src)));
 function newPage(n) {
   const page = document.createElement("div"); page.className = "page";
   const body = document.createElement("div"); body.className = "body";
@@ -406,7 +419,7 @@ function refBlocks() {
   const lvl = h1s === 1 && /^#\s/.test(doc.blocks[0]?.src || "") ? 2 : 1;
   title.innerHTML = `<h${lvl}>References</h${lvl}>`; title._break = doc.refsBreak; out.push(title);
   tmp.querySelectorAll(".csl-entry").forEach((e) => {
-    const d = document.createElement("div"); d.className = "blk refs"; d.appendChild(e); out.push(d);
+    const d = document.createElement("div"); d.className = "blk refs"; d.appendChild(e); renderMath(d); out.push(d);
   });
   return out;
 }
@@ -491,6 +504,7 @@ function commit(b) {
   if (same(md, b.src)) return false;
   b.src = md + (b.src.match(/\s+$/) || [""])[0];
   if (!md.trim()) b.src = "";
+  b.unrendered = true;  // re-render when the caret leaves, even if a timer committed it
   showStatus();
   return true;
 }
@@ -504,7 +518,8 @@ pages.addEventListener("focusout", (e) => {
   if (paginating) return;
   const b = e.target.closest(".blk")?._b; if (!b) return;
   if (e.target.tagName === "TEXTAREA") { finishRaw(b, e.target); return; }
-  if (commit(b)) render();
+  clearTimeout(b.t);
+  if (commit(b) || b.unrendered) { b.unrendered = false; render(); }
 });
 pages.addEventListener("click", (e) => {
   const a = e.target.closest("a[href]");
@@ -543,7 +558,8 @@ function startRaw(b) {
   ta.value = b.src.replace(/\s+$/, "");
   b.el.replaceChildren(ta);
   const grow = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
-  ta.addEventListener("input", () => { grow(); relayoutSoon(); });
+  // Take each keystroke into the block, so the status and the unload warning see it.
+  ta.addEventListener("input", () => { grow(); takeRaw(b, ta); showStatus(); relayoutSoon(); });
   grow(); ta.focus();
 }
 function finishRaw(b, ta) {
