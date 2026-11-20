@@ -12,7 +12,7 @@
  *
  * Classless conventions:
  *   # h1                       slide title; the body flows beneath it
- *   # <span>A</span> <span>B</span>   paired column titles over a contrast
+ *   # <span>A</span> <span>B</span>   column titles over a contrast
  *   <figure>                   at slide level, fills the remaining height
  *   *x* italic · **x** bold · ***x*** highlight (accent colour)
  *   > sentence                 the slide's takeaway (bold, pinned to the bottom)
@@ -315,21 +315,21 @@ section > .cols:has(> figure) { flex: 1 1 0; min-height: 0; }
 .cols.rows-2:has(> :nth-child(7)) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .cols.rows-2 > div { margin-bottom: var(--stack-slide); }  /* subgrid rows can't use row-gap */
 
-/* Binary contrast: neutral baseline left, focal case right. List items are
+/* Contrast: neutral baseline(s) left, focal case in the last column. List items are
    rows of the cell grid (the list itself drops out), so rows align across
    columns. A paragraph after the list is the verdict, pinned to the bottom. */
 /* A contrast that ends the slide body fills the remaining height. */
 section > .cols.contrast:is(:last-child, :has(+ blockquote)) { flex: 1 1 0; min-height: 0; }
 .cols.contrast { column-gap: 0; }
 .cols.contrast > * { padding: var(--s3) var(--cell-x); }
-.cols.contrast > * + * { border-left: 1px solid var(--rule); background: var(--tint); }
-.cols.contrast > * + * > span:first-child { color: var(--accent); }
+.cols.contrast > :last-child:not(:first-child) { border-left: 1px solid var(--rule); background: var(--tint); }
+.cols.contrast > :last-child:not(:first-child) > span:first-child { color: var(--accent); }
 .cols.contrast ul { display: contents; list-style: none; }
 .cols.contrast li { margin: 0; padding: var(--stack-cell) 0; }
 .cols.contrast > div > ul ~ p:last-child { grid-row-end: -1; align-self: end; font-weight: var(--bold); }
 
-/* A title made of two spans is a pair of column titles over a contrast. */
-section > h1:has(> span + span) { display: grid; grid-template-columns: 1fr 1fr; }
+/* A title made of two or more spans holds the column titles over a contrast. */
+section > h1:has(> span + span) { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
 section > h1:has(> span + span) > span { padding: 0 var(--cell-x); }
 
 /* Bottom of the slide: the takeaway (a Markdown blockquote, `> ...`) is the
