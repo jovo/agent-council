@@ -124,7 +124,8 @@ fact-check prints the same line for `factcheck.md` when it finishes, in its
 log (`factcheck.log` in the run folder).
 
 When no review page opened, copy the findings from `unified.md` into the notes
-file verbatim, in its order, with the counts by severity at its top, and reply
+file verbatim, in its order, with the counts by severity in its closing
+section (see below), and reply
 with the one line the notes-file section describes. Do not re-summarize or re-order the findings. With `--verify`, say whether the
 fact-check has finished or is still running.
 
@@ -148,6 +149,11 @@ turn you apply it. Detect the user's own edits: an item whose struck text is
 gone from the draft, or whose added text is in it, is applied. When the draft
 changed the passage some other way, re-check the point and revise or delete
 the item.
+
+The file opens with its title and goes straight to the items. Everything else
+goes in one section at the end, `## About this review`: the counts by
+severity, the date the line numbers refer to, the review run, how ids work,
+which items are closed and why, and what the review could not assess.
 Give each set of recommendations a letter: A for Major, B for Minor, C for
 Nitpick. An item's id is its letter and its number within that set (A2, B7),
 and the notes file lists the sets in that order. Ids stay fixed and are never
