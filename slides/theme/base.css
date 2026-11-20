@@ -6,8 +6,9 @@
  *
  * Vocabulary (the complete list; do not add deck- or slide-specific classes):
  *   Slide layouts (_class):  (none) · cover · divider · full
- *   Slide modifiers:         center · invert (light palette; set `class: invert` in
- *                            front matter for a whole light deck)
+ *   Slide modifiers:         center · contrast (a table whose last column is the
+ *                            focal case) · invert (light palette; set `class: invert`
+ *                            in front matter for a whole light deck)
  *   Components:              cols · contrast · rows-2 · flow
  *
  * Classless conventions:
@@ -25,9 +26,9 @@
  * Paths in url() resolve from the rendered deck.html, i.e. decks/<deck>/.
  */
 
-/* Status symbols for tables: ● yes, ◐ partly, ○ no. A tiny colour font
-   (built by fonts/build-symbols.py) draws only these three characters, in
-   green, orange and red; all other text falls through to New Computer Modern. */
+/* Status symbols: ● yes, ◐ partly, ○ no in tables, ✓ yes and ✗ no as list
+   markers. A tiny colour font (built by fonts/build-symbols.py) draws only
+   these five characters, in green, orange and red; all other text falls through to New Computer Modern. */
 /* New Computer Modern (GUST Font License, fonts/LICENSE-NewCM.txt): Sans Bold
    titles, Book body. The same family as the PDF house style. */
 @font-face {
@@ -68,7 +69,7 @@
 @font-face {
   font-family: 'Base Symbols';
   src: url('../theme/fonts/base-symbols.ttf') format('truetype');
-  unicode-range: U+25CB, U+25CF, U+25D0;
+  unicode-range: U+25CB, U+25CF, U+25D0, U+2713, U+2717;
 }
 
 :root {
@@ -370,4 +371,17 @@ thead th { color: var(--muted); font-weight: var(--bold); }
 /* Bold in a table cell marks the value that matters: white, not grey. */
 td strong { color: var(--ink); }
 tbody th { font-weight: var(--bold); }
+/* A `contrast` slide holds a table that contrasts its columns: values in
+   white body text, labels and headers small and grey, and the last column, the
+   focal case, divided like the last cell of a `cols contrast` and tinted with
+   a flat accent wash (each cell would restart the --tint gradient). */
+section.contrast table { font-size: var(--type-body); }
+section.contrast td { color: var(--ink); }
+section.contrast :is(th, td:first-child) { font-size: var(--type-small); color: var(--muted); font-weight: var(--bold); }
+section.contrast :is(th, td) { padding: var(--stack-cell) var(--cell-x); }
+section.contrast :is(th, td):first-child { padding-left: 0; }
+section.contrast :is(th, td):last-child:not(:first-child) {
+  border-left: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--accent) 7%, transparent) !important;
+}
 

@@ -44,6 +44,7 @@ Edit the theme there, not through a copy. A change to the theme changes every de
    - image beside text: `cols` with a text cell and a `<figure>` image cell
    - two images: `![bg left:60% contain](a.jpg)` then `![bg contain](b.jpg)`
    - anything table-shaped: a pipe table; yes / partly / no as `●` `◐` `○`
+   - yes / no points: one paragraph per point, starting with `✓` or `✗`
    - full-slide media with a link: `_class: full`, `![bg](…)`,
      `[Play · 2:10](url)`
    - numbered steps: `1.` `2.` `3.`
@@ -96,7 +97,9 @@ deck-specific classes.
   `divider`, `full` (full-bleed image or video; use Marp `![bg](...)` for
   images).
 - Slide modifiers: `center` (centres the body on the slide; the title stays at
-  the top and any takeaway and footer at the bottom), `invert` (light
+  the top and any takeaway and footer at the bottom), `contrast` (a table
+  whose last column is the focal case; see Design schematic: contrasts),
+  `invert` (light
   palette; put `class: invert` in the front matter for a whole light deck).
   New decks are dark: leave out `class: invert` unless the user asks for a
   light deck.
@@ -130,6 +133,9 @@ Native Marp features replace classes where they can:
   for numbers. For yes / partly / no, type `●` `◐` `○`: the theme draws them
   as green, orange and red circles. For other values, write words; bold marks
   the value that matters and renders white.
+- Yes / no points outside a table: write each point as its own paragraph
+  starting with `✓` (green) or `✗` (red), for example `✓ Reuse SL code`. Use
+  paragraphs, not a list, so no bullet sits before the mark.
 - Source line: `<!-- _footer: Source: Lazer et al., 2014 -->` on the slide. It
   sits in a line reserved at the bottom of every content slide, below the
   takeaway.
@@ -198,10 +204,10 @@ Unicode math, HTML subscripts, or a text font for LaTeX merely because the
 expression is short.
 
 Math takes the size and colour of the text around it. Display equations are
-centred at body size. Inline math in a table or caption is small and grey
+centred at body size. Inline math in an ordinary table or caption is small and grey
 like its text. Colour math with `\color` inside the LaTeX, because
 `***…***` does not reach it: `\color{#f6c343}{…}` for the accent and
-`\color{#f4f7fb}{…}` for white text in a table (in a deck with
+`\color{#f4f7fb}{…}` for white text in a grey table cell (in a deck with
 `class: invert`, `#2189db` and `#111923`). Inline math sets limits beside
 operators, which keeps a takeaway on one line. Start it with `\displaystyle`
 only when the limits must sit below.
@@ -237,6 +243,13 @@ cell is tinted and divided from the rest. Write the column titles as the
 slide title, one span per cell, when they fit there. Otherwise put a
 `### Title` at the top of each cell.
 
+When the rows need labels (Data, Loss, Risk), write the contrast as a pipe
+table with the labels in its first column, the baseline next, and the focal
+case last, and put `<!-- _class: contrast -->` on the slide. The class sets the
+values in white body text, keeps the labels and headers small and grey, and
+tints and divides the last column. The title is then a claim, not the column
+names, since the table's header row names the columns.
+
 Keep corresponding statements syntactically parallel. State the common language in
 each column and mark only the minimal differing terms with `***word***`. Do not add modifier classes for contrasts.
 
@@ -254,8 +267,8 @@ never set sizes:
 
 - title: 45px (every `# h1`: slide, cover, divider)
 - body: 28px (body text; bold for `##`/`###` headings, claims, verdicts,
-  takeaways)
-- small: 22px, always grey (labels, captions, tables, explanations, sources,
+  takeaways; values in a `contrast` table)
+- small: 22px, always grey (labels, captions, ordinary tables, explanations, sources,
   cover byline)
 
 Text uses one bold weight (`--bold`, 700), no uppercase or letter-spaced
@@ -265,9 +278,9 @@ New Computer Modern Book for everything a viewer reads as text (body, bold phras
 takeaways, labels, captions, tables, sources). These are the only treatments:
 
 - title: white bold
-- body: white regular, or white bold
+- body: white regular (including values in a `contrast` table), or white bold
 - small: grey bold (labels, captions, table headers; accent colour on the
-  right of a contrast) or grey regular (explanations, table cells, sources, byline)
+  right of a contrast) or grey regular (explanations, ordinary table cells, sources, byline)
 - italic `*word*` and bold `**word**` in the colour of the surrounding text
 - highlighted words `***word***`: accent colour (yellow on dark, blue on
   light), bold, any size
