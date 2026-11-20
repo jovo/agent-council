@@ -47,7 +47,10 @@ Edit the theme there, not through a copy. A change to the theme changes every de
    - yes / no points: one paragraph per point, starting with `✓` or `✗`
    - full-slide media with a link: `_class: full`, `![bg](…)`,
      `[Play · 2:10](url)`
-   - numbered steps: `1.` `2.` `3.`
+   - numbered steps: `1.` `2.` `3.`, with a nested numbered list lettered
+     (a, b, c) and one level deeper in roman numerals
+   - a quiet aside, such as a pseudocode comment: inline code, `` `# comment` ``,
+     drawn in grey monospace
 
    HTML is allowed only for what Markdown cannot express: the `cols` /
    `contrast` wrappers, a `<span>` label inside them, a `<figure>` that is a
