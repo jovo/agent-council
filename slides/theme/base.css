@@ -380,6 +380,9 @@ section > blockquote { margin-top: auto; }
 /* Reference lists: a list item that ends with a link is a citation
    (`- De Silva et al. (2023). [Title](url)`), set in small grey text. */
 li:has(> a:last-child) { color: var(--muted); font-size: var(--type-small); }
+/* A slide whose body is only a reference list (title, then the list) sets it
+   at body size in white, so it reads from the back of the room. */
+section > h1 + ul:last-of-type > li:has(> a:last-child) { color: var(--ink); font-size: var(--type-body); }
 
 /* ---------- tables ---------- */
 
