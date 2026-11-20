@@ -15,4 +15,5 @@ Build PDFs from Markdown with `make-pdf FILE.md` (from `~/github/agent-council`,
 - Manual page break: `<div style="page-break-after: always;"></div>`, which Obsidian honors and the PDF build turns into a page break.
 - Figures: SVG works directly. Pandoc converts it to vector PDF during the build with `rsvg-convert` (Homebrew `librsvg`). The caption is the italic line under the image, so alt text never prints as a second caption.
 - Footnotes: do not reuse a `[^N]` marker. Obsidian and GitHub link a reuse back to one note, but the PDF prints it as a new, renumbered footnote.
+- To edit a document while seeing it as the PDF lays it out, run `edit-md FILE.md` (`--twocol` for landscape two-column pages, `--csl` as in make-pdf). It opens a local page where you type into the rendered text. Saving writes back only the changed blocks. It is a preview: build the PDF with make-pdf for the final page breaks.
 - Slide decks use the same family through the deck theme (`slides/theme`), so documents and decks match.
