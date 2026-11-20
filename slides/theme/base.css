@@ -169,8 +169,9 @@ li + li { margin-top: var(--stack-list); }
 ol ol { list-style-type: lower-alpha; }
 ol ol ol { list-style-type: lower-roman; }
 /* Inline code (`text`): a quiet aside such as a pseudocode comment, in grey
-   monospace at the size of the text around it. */
-code { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 0.85em; color: var(--muted); background: none; }
+   monospace at the small size. Monospace letters are wide and tall, so at
+   22px they match the height of 28px body text rather than outsize it. */
+code { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: var(--type-small); color: var(--muted); background: none; }
 
 /* Page numbers, when a deck sets `paginate: true`. */
 section[data-marpit-pagination]::after {
