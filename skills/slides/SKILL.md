@@ -125,7 +125,9 @@ Native Marp features replace classes where they can:
 - References: author-date, the standard short form (APA / Chicago author-date):
   `- De Silva et al. (2023). [Title](url)`. First author, `et al.` for more
   than one, year in parentheses and a full stop, then the linked title. A list item that ends
-  with a link renders as a citation in small grey text.
+  with a link renders as a citation in small grey text. On a slide whose
+  body is only that list, such as a references slide, it renders at body
+  size in white.
 - Tables: anything shaped like a table (rows × attributes, a capability
   matrix, a component list, an evolution timeline) is a Markdown pipe table,
   never HTML or `cols`. Tables render with no fill and no lines, left-aligned.
