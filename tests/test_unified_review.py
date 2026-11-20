@@ -346,6 +346,36 @@ class Calls(unittest.TestCase):
             self.assertEqual(ur.preflight(["gpt", "gemini"]), ["gpt", "gemini"])
         self.assertEqual(ur.FAILURES, [])
 
+    def choose(self, panel, missing=(), logged_out=()):
+        checked = []
+
+        def fake_preflight(ms):
+            checked.extend(ms)
+            for m in ms:
+                if m in logged_out:
+                    ur.fail("preflight", m, "not logged in")
+            return [m for m in ms if m not in logged_out]
+        ur.FAILURES.clear()
+        with mock.patch.object(ur, "available", lambda m: m not in missing), \
+                mock.patch.object(ur, "preflight", fake_preflight), mock.patch.object(ur.runtime, "log", lambda *a: None):
+            return ur.choose_panel(panel), checked
+
+    def test_a_logged_out_panelist_is_not_tried_again_as_its_own_stand_in(self):
+        panel, checked = self.choose(["claude", "gpt", "gemini"], logged_out=("claude",))
+        self.assertEqual(panel, ["gpt", "gemini", "grok"])
+        self.assertEqual(checked.count("claude"), 1)
+        self.assertEqual([f["model"] for f in ur.FAILURES], ["claude"])
+
+    def test_a_stand_in_replaces_a_panelist_whose_cli_is_missing(self):
+        panel, _ = self.choose(["gpt"], missing=("gpt",))
+        self.assertEqual(panel, ["claude"])
+        panel, _ = self.choose(["claude", "gpt", "gemini"], missing=("gpt",))
+        self.assertEqual(panel, ["claude", "gemini", "grok"])
+
+    def test_no_panel_when_nothing_is_available(self):
+        with self.assertRaises(SystemExit):
+            self.choose(["gpt"], missing=("gpt", "claude", "grok"))
+
 
 class Rendering(unittest.TestCase):
     def setUp(self):
@@ -878,6 +908,12 @@ class Pipeline(unittest.TestCase):
         self.assertIn("Failed: GPT-5.6 Luna", md)
         _, r, _ = self.run_review(["gpt"], fails=("gpt", "claude"))
         self.assertEqual(r["reviewers_ok"], ["grok"])
+
+    def test_claude_then_grok_stand_in_for_a_failed_voter(self):
+        _, r, _ = self.run_review(["gpt", "gemini"], fails=(("vote", "gpt"),))
+        self.assertEqual(sorted(r["voters"]), ["claude", "gemini"])
+        _, r, _ = self.run_review(["gpt", "gemini"], fails=(("vote", "gpt"), ("vote", "claude")))
+        self.assertEqual(sorted(r["voters"]), ["gemini", "grok"])
 
     def test_one_reviewer_skips_the_vote_and_keeps_its_findings(self):
         prompts, r, md = self.run_review(["argon"])

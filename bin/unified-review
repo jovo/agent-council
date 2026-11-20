@@ -421,6 +421,30 @@ def call_once(name, prompt, out, workdir, web):
     return None, "empty output"
 
 
+def choose_panel(panel, factcheck_only=False):
+    """Drop requested panelists whose CLI is missing or logged out, and fill
+    their places from STANDINS. A stand-in never replaces itself, and the
+    requested panel size counts the panelists dropped for a missing CLI."""
+    wanted, tried = len(panel), set(panel)
+    for m in [m for m in panel if not available(m)]:
+        fail("preflight", m, f"{PANELISTS[m][0]} command not found. Set {PANELISTS[m][0].upper()}_BIN to its path")
+    panel = [m for m in panel if available(m)]
+    if factcheck_only:
+        if not panel:
+            sys.exit("error: no panelist CLIs found")
+        return panel
+    panel = preflight(panel)
+    for s in [s for s in STANDINS if s not in tried]:
+        if len(panel) >= wanted:
+            break
+        if available(s) and preflight([s]):
+            runtime.log(f"{s} stands in for the panelist that is not available")
+            panel.append(s)
+    if not panel:
+        sys.exit("error: no panelist is available and logged in")
+    return panel
+
+
 def preflight(panel):
     """Check, without a model call, that each panelist's CLI is logged in.
     Returns the panelists to use. An unclear status keeps the panelist."""
@@ -5118,22 +5142,7 @@ def main():
     bad = [m for m in panel if m not in PANELISTS]
     if bad:
         sys.exit(f"error: unknown panelist(s) {bad}; known: {', '.join(PANELISTS)}")
-    for m in [m for m in panel if not available(m)]:
-        fail("preflight", m, f"{PANELISTS[m][0]} command not found. Set {PANELISTS[m][0].upper()}_BIN to its path")
-    panel = [m for m in panel if available(m)]
-    if not panel:
-        sys.exit("error: no panelist CLIs found")
-    if not a.factcheck_only:
-        wanted = len(panel)
-        panel = preflight(panel)
-        for s in [s for s in STANDINS if s not in panel]:
-            if len(panel) >= wanted:
-                break
-            if available(s) and preflight([s]):
-                runtime.log(f"{s} stands in for the panelist that is not available")
-                panel.append(s)
-        if not panel:
-            sys.exit("error: no panelist is logged in")
+    panel = choose_panel(panel, a.factcheck_only)
 
     files = []
     for f in a.files:
