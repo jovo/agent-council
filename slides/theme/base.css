@@ -327,6 +327,9 @@ section > .cols.contrast:is(:last-child, :has(+ blockquote)) { flex: 1 1 0; min-
 .cols.contrast > :last-child:not(:first-child) > span:first-child { color: var(--accent); }
 .cols.contrast ul { display: contents; list-style: none; }
 .cols.contrast li { margin: 0; padding: var(--stack-cell) 0; }
+/* A column title gets the items' bottom padding, so the gap below it matches
+   the gap between items. */
+.cols.contrast > div > :is(h2, h3) { padding-bottom: var(--stack-cell); }
 .cols.contrast > div > ul ~ p:last-child { grid-row-end: -1; align-self: end; font-weight: var(--bold); }
 
 /* A title made of two or more spans holds the column titles over a contrast. */
