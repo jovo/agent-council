@@ -44,6 +44,7 @@ Edit the theme there, not through a copy. A change to the theme changes every de
    - image beside text: `cols` with a text cell and a `<figure>` image cell
    - two images: `![bg left:60% contain](a.jpg)` then `![bg contain](b.jpg)`
    - anything table-shaped: a pipe table; yes / partly / no as `●` `◐` `○`
+   - yes / no points: one paragraph per point, starting with `✓` or `✗`
    - full-slide media with a link: `_class: full`, `![bg](…)`,
      `[Play · 2:10](url)`
    - numbered steps: `1.` `2.` `3.`
@@ -132,6 +133,9 @@ Native Marp features replace classes where they can:
   for numbers. For yes / partly / no, type `●` `◐` `○`: the theme draws them
   as green, orange and red circles. For other values, write words; bold marks
   the value that matters and renders white.
+- Yes / no points outside a table: write each point as its own paragraph
+  starting with `✓` (green) or `✗` (red), for example `✓ Reuse SL code`. Use
+  paragraphs, not a list, so no bullet sits before the mark.
 - Source line: `<!-- _footer: Source: Lazer et al., 2014 -->` on the slide. It
   sits in a line reserved at the bottom of every content slide, below the
   takeaway.
