@@ -1,9 +1,11 @@
 """Build theme/fonts/base-symbols.ttf: a tiny colour font (COLR/CPAL) with only
-three status glyphs, so slides can type them as plain characters:
+five status glyphs, so slides can type them as plain characters:
 
     U+25CF  ●  yes     (palette colour 0, green)
     U+25D0  ◐  partly  (palette colour 1, orange)
     U+25CB  ○  no      (palette colour 2, red)
+    U+2713  ✓  yes     (palette colour 0, green)
+    U+2717  ✗  no      (palette colour 2, red)
 
 Palette 1 is a monochrome alternative (white / grey / grey).
 Run from theme/fonts:  python3 build-symbols.py   (needs: pip install fonttools)
@@ -38,6 +40,18 @@ def halfdisk(pen, cx, cy, r):  # left half, clockwise: top -> down along arc on 
     pen.curveTo((cx-k, cy-r),(cx-r, cy-k),(cx-r, cy))
     pen.curveTo((cx-r, cy+k),(cx-k, cy+r),(cx, cy+r))
     pen.closePath()
+def bar(pen, a, b, w):  # a stroke from a to b, width w, square caps
+    (ax,ay),(bx,by)=a,b; dx,dy=bx-ax,by-ay; n=(dx*dx+dy*dy)**.5
+    ux,uy=dx/n*w/2,dy/n*w/2; nx,ny=-uy,ux
+    pts=[(ax-ux+nx,ay-uy+ny),(bx+ux+nx,by+uy+ny),(bx+ux-nx,by+uy-ny),(ax-ux-nx,ay-uy-ny)]
+    area=sum(pts[i][0]*pts[(i+1)%4][1]-pts[(i+1)%4][0]*pts[i][1] for i in range(4))
+    if area>0: pts.reverse()  # TrueType outer contours run clockwise
+    pen.moveTo(pts[0])
+    for q in pts[1:]: pen.lineTo(q)
+    pen.closePath()
+SW=110  # stroke width of the check and the x
+def check(p): bar(p,(170,350),(400,100),SW); bar(p,(400,100),(840,660),SW)
+def cross(p): bar(p,(200,0),(800,660),SW); bar(p,(200,660),(800,0),SW)
 def glyph(draw):
     tp=TTGlyphPen(None); p=Cu2QuPen(tp, 1, reverse_direction=False); draw(p); return tp.glyph()
 glyphs={'.notdef':glyph(lambda p:None),'space':glyph(lambda p:None),
@@ -47,11 +61,13 @@ glyphs={'.notdef':glyph(lambda p:None),'space':glyph(lambda p:None),
  'uni25CF':glyph(lambda p:circle(p,CX,CY,R,True)),
  'uni25D0':glyph(lambda p:(circle(p,CX,CY,R,True),circle(p,CX,CY,R-T,False),halfdisk(p,CX,CY,R-T+1))),
  'uni25CB':glyph(lambda p:(circle(p,CX,CY,R,True),circle(p,CX,CY,R-T,False))),
+ 'uni2713':glyph(check),
+ 'uni2717':glyph(cross),
 }
 order=list(glyphs)
 fb=FontBuilder(UPM,isTTF=True)
 fb.setupGlyphOrder(order)
-fb.setupCharacterMap({0x20:'space',0x25CF:'uni25CF',0x25D0:'uni25D0',0x25CB:'uni25CB'})
+fb.setupCharacterMap({0x20:'space',0x25CF:'uni25CF',0x25D0:'uni25D0',0x25CB:'uni25CB',0x2713:'uni2713',0x2717:'uni2717'})
 fb.setupGlyf(glyphs)
 fb.setupHorizontalMetrics({g:(ADV if g!='.notdef' else 500,0) for g in order})
 fb.setupHorizontalHeader(ascent=800,descent=-200)
@@ -59,7 +75,8 @@ fb.setupNameTable({'familyName':'Base Symbols','styleName':'Regular'})
 fb.setupOS2(sTypoAscender=800,sTypoDescender=-200,usWinAscent=800,usWinDescent=200)
 fb.setupPost()
 # COLR: each status glyph = one layer with its palette colour
-fb.font['COLR']=buildCOLR({'uni25CF':[('uni25CF',0)],'uni25D0':[('uni25D0',1)],'uni25CB':[('uni25CB',2)]})
+fb.font['COLR']=buildCOLR({'uni25CF':[('uni25CF',0)],'uni25D0':[('uni25D0',1)],'uni25CB':[('uni25CB',2)],
+                       'uni2713':[('uni2713',0)],'uni2717':[('uni2717',2)]})
 hexrgb=lambda h:(int(h[1:3],16)/255,int(h[3:5],16)/255,int(h[5:7],16)/255,1.0)
 fb.font['CPAL']=buildCPAL([[hexrgb('#56d38c'),hexrgb('#f6a83a'),hexrgb('#ef5a50')],
                            [hexrgb('#f4f7fb'),hexrgb('#a6b2c4'),hexrgb('#a6b2c4')]])
