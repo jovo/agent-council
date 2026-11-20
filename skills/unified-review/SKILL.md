@@ -131,8 +131,11 @@ fact-check has finished or is still running.
 ## The notes file
 
 Once a review has more than one item, by you alone or from the script, keep the
-open items in a notes file in the draft's repository: `notes/<draft>-review.md`,
-or the notes file the user names. Each item gives its section, its current line
+open items in a notes file in a `notes/` folder inside the draft's own folder:
+`notes/review.md`, or `notes/review-<file>.md` when that folder holds more than
+one draft (`<file>` is the draft's file name without its extension). Use the
+notes file the user names instead, if they name one. A notes file keeps its
+name once it exists, even if a second draft later joins the folder. Each item gives its section, its current line
 in the draft, the point, and at least one inline revision, even while a source
 is still being checked (then the revision is provisional, and the item says so).
 In a review of a slide deck, every line number also names its slide number,
