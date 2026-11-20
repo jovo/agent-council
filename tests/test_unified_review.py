@@ -346,6 +346,36 @@ class Calls(unittest.TestCase):
             self.assertEqual(ur.preflight(["gpt", "gemini"]), ["gpt", "gemini"])
         self.assertEqual(ur.FAILURES, [])
 
+    def choose(self, panel, missing=(), logged_out=()):
+        checked = []
+
+        def fake_preflight(ms):
+            checked.extend(ms)
+            for m in ms:
+                if m in logged_out:
+                    ur.fail("preflight", m, "not logged in")
+            return [m for m in ms if m not in logged_out]
+        ur.FAILURES.clear()
+        with mock.patch.object(ur, "available", lambda m: m not in missing), \
+                mock.patch.object(ur, "preflight", fake_preflight), mock.patch.object(ur.runtime, "log", lambda *a: None):
+            return ur.choose_panel(panel), checked
+
+    def test_a_logged_out_panelist_is_not_tried_again_as_its_own_stand_in(self):
+        panel, checked = self.choose(["claude", "gpt", "gemini"], logged_out=("claude",))
+        self.assertEqual(panel, ["gpt", "gemini", "grok"])
+        self.assertEqual(checked.count("claude"), 1)
+        self.assertEqual([f["model"] for f in ur.FAILURES], ["claude"])
+
+    def test_a_stand_in_replaces_a_panelist_whose_cli_is_missing(self):
+        panel, _ = self.choose(["gpt"], missing=("gpt",))
+        self.assertEqual(panel, ["claude"])
+        panel, _ = self.choose(["claude", "gpt", "gemini"], missing=("gpt",))
+        self.assertEqual(panel, ["claude", "gemini", "grok"])
+
+    def test_no_panel_when_nothing_is_available(self):
+        with self.assertRaises(SystemExit):
+            self.choose(["gpt"], missing=("gpt", "claude", "grok"))
+
 
 class Rendering(unittest.TestCase):
     def setUp(self):
@@ -774,7 +804,8 @@ class PdfExtras(unittest.TestCase):
 class Pipeline(unittest.TestCase):
     """A whole review with fake model calls."""
 
-    def run_review(self, panel, fails=(), draft_text="The sky is green today. Grass grows slowly.", reply=None):
+    def run_review(self, panel, fails=(), draft_text="The sky is green today. Grass grows slowly.", reply=None,
+                   missing=(), failed_before=()):
         prompts = {}
 
         def fake_call(m, prompt, out, workdir, web=False, stage=""):
@@ -797,7 +828,10 @@ class Pipeline(unittest.TestCase):
             out.mkdir()
             draft = f"===== memo.md =====\n{draft_text}"
             ur.FAILURES.clear()
+            for m in failed_before:
+                ur.FAILURES.append({"stage": "preflight", "model": m, "reason": "not logged in"})
             with mock.patch.object(ur, "call", fake_call), mock.patch.object(ur, "RUNS_DIR", d), \
+                 mock.patch.object(ur, "available", lambda m: m not in missing), \
                  mock.patch.object(ur, "LAST_RUN", d / "last-run"), \
                  mock.patch.object(ur, "open_file", lambda p: None), mock.patch.object(ur.runtime, "log", lambda *a: None):
                 ur.foreground([f], draft, panel, "", "rules", out, d, False, [])
@@ -868,9 +902,31 @@ class Pipeline(unittest.TestCase):
             self.assertEqual(status["added"], 1)
             self.assertNotIn("edit vote", stages)
 
-    def test_default_panel_is_argon_alone(self):
-        self.assertEqual(ur.DEFAULT_PANEL, ["argon"])
-        self.assertEqual(ur.PANELISTS["argon"], ("cursor", "gemini-4-argon-medium", "Gemini 4 Argon Medium"))
+    def test_default_panel_is_gpt_alone(self):
+        self.assertEqual(ur.DEFAULT_PANEL, ["gpt"])
+        self.assertEqual(ur.STANDINS, ["claude", "grok"])
+
+    def test_claude_then_grok_stand_in_for_a_failed_solo_reviewer(self):
+        _, r, md = self.run_review(["gpt"], fails=("gpt",))
+        self.assertEqual(r["reviewers_ok"], ["claude"])
+        self.assertIn("Failed: GPT-5.6 Luna", md)
+        _, r, _ = self.run_review(["gpt"], fails=("gpt", "claude"))
+        self.assertEqual(r["reviewers_ok"], ["grok"])
+
+    def test_a_missing_or_already_failed_stand_in_is_skipped(self):
+        prompts, r, _ = self.run_review(["gpt"], fails=("gpt",), missing=("claude",))
+        self.assertEqual(r["reviewers_ok"], ["grok"])
+        self.assertNotIn("claude", prompts["review"])
+        prompts, r, md = self.run_review(["gpt", "gemini", "grok"], fails=("gpt",), failed_before=("claude",))
+        self.assertNotIn("claude", prompts["review"])
+        self.assertEqual(r["labels"]["claude"], ur.label("claude"))
+        self.assertIn(f"Failed: {ur.label('claude')}", md)
+
+    def test_claude_then_grok_stand_in_for_a_failed_voter(self):
+        _, r, _ = self.run_review(["gpt", "gemini"], fails=(("vote", "gpt"),))
+        self.assertEqual(sorted(r["voters"]), ["claude", "gemini"])
+        _, r, _ = self.run_review(["gpt", "gemini"], fails=(("vote", "gpt"), ("vote", "claude")))
+        self.assertEqual(sorted(r["voters"]), ["gemini", "grok"])
 
     def test_one_reviewer_skips_the_vote_and_keeps_its_findings(self):
         prompts, r, md = self.run_review(["argon"])
@@ -882,7 +938,7 @@ class Pipeline(unittest.TestCase):
 
     def test_a_failed_solo_reviewer_still_warns(self):
         _, r, md = self.run_review(["argon"], fails=("argon",))
-        self.assertEqual(r["reviewers_ok"], ["grok"])
+        self.assertEqual(r["reviewers_ok"], ["claude"])
         self.assertIn("Failed: Gemini 4 Argon Medium", md)
 
     def test_no_stand_in_when_all_succeed(self):
