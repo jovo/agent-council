@@ -96,7 +96,9 @@ deck-specific classes.
   `divider`, `full` (full-bleed image or video; use Marp `![bg](...)` for
   images).
 - Slide modifiers: `center` (centres the body on the slide; the title stays at
-  the top and any takeaway and footer at the bottom), `invert` (light
+  the top and any takeaway and footer at the bottom), `contrast` (a table
+  whose last column is the focal case; see Design schematic: contrasts),
+  `invert` (light
   palette; put `class: invert` in the front matter for a whole light deck).
   New decks are dark: leave out `class: invert` unless the user asks for a
   light deck.
@@ -236,6 +238,13 @@ the baselines come first and the focal case is the last cell. Only the last
 cell is tinted and divided from the rest. Write the column titles as the
 slide title, one span per cell, when they fit there. Otherwise put a
 `### Title` at the top of each cell.
+
+When the rows need labels (Data, Loss, Risk), write the contrast as a pipe
+table with the labels in its first column, the baseline next, and the focal
+case last, and put `<!-- _class: contrast -->` on the slide. The class sets the
+values in white body text, keeps the labels and headers small and grey, and
+tints and divides the last column. The title is then a claim, not the column
+names, since the table's header row names the columns.
 
 Keep corresponding statements syntactically parallel. State the common language in
 each column and mark only the minimal differing terms with `***word***`. Do not add modifier classes for contrasts.
