@@ -357,6 +357,14 @@ section > .cols.contrast:is(:last-child, :has(+ blockquote)) { flex: 1 1 0; min-
 .cols.contrast > div > :is(h2, h3) { padding-bottom: var(--stack-cell); }
 .cols.contrast > div > ul ~ p:last-child { grid-row-end: -1; align-self: end; font-weight: var(--bold); }
 
+/* The block after a slide title sits a step further away (--s4, 48px, not
+   --stack-slide), so the title reads as a heading over the body rather than
+   as its first line. Contrast titles stay tight to their columns, and cover,
+   divider, full and center slides keep their own layouts. */
+section:not(.cover, .divider, .full, .center) > h1:not(:has(> span + span)) + * {
+  margin-top: calc(var(--s4) - var(--stack-slide));
+}
+
 /* A title made of two or more spans holds the column titles over a contrast. */
 section > h1:has(> span + span) { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
 section > h1:has(> span + span) > span { padding: 0 var(--cell-x); }
