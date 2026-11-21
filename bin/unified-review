@@ -39,7 +39,7 @@ Foreground:
   1. review   each panelist reviews the draft, no web search
   2. vote     each panelist votes on every other finding's problem and fix,
               reviewers anonymized
-  3. mediate  with two reviewers, MEDIATOR rules on disputed findings and
+  3. mediate  with two or more reviewers, MEDIATOR (else a reviewer) rules on disputed findings and
               differing fixes, and shortens long problems
   4. merge    this script groups duplicates, sets aside findings voters or the
               mediator reject, runs mechanical checks, writes unified.md and
@@ -1068,14 +1068,17 @@ def problem_of(f):
 
 def two_lab(groups, flat, votes, owner, ok):
     """Mark each group agreed or disputed, and note when its fixes differ.
-    Only for a panel of exactly two reviewers."""
+    For a panel of two or more reviewers. Agreed means a majority of the
+    reviewers stand behind the problem: they raised it or voted agree.
+    With two, that is both."""
     byid = {f["id"]: f for f in flat}
     for g in groups:
         members = [byid[i] for i in g["members"] if i in byid]
         rep = g["rep"] = {**g["rep"], "problem": problem_of(g["rep"]), "fix": fix_of(g["rep"])}
         raised = g["raised_by"]
         cast = list(g["votes"].values())
-        g["disputed"] = not (len(raised) >= 2 or (cast and all(v["vote"] == "agree" for v in cast)))
+        backers = set(raised) | {m for m, v in g["votes"].items() if v["vote"] == "agree"}
+        g["disputed"] = not (len(backers) * 2 > len(ok))
         g["rejected"] = False  # nothing is dropped before the mediator rules
         # One fix per model that raised the point, the shown finding's first.
         alts, seen = [], []
@@ -1093,8 +1096,8 @@ def two_lab(groups, flat, votes, owner, ok):
     return groups
 
 
-MEDIATE = """Two reviewers from different labs reviewed the draft below, then each voted
-on the other's findings. Settle what they left open. Do not raise findings of
+MEDIATE = """Reviewers from different labs reviewed the draft below, then each voted
+on the others' findings. Settle what they left open. Do not raise findings of
 your own, and do not judge factual accuracy: a separate pass does that.
 
 Each item is one finding: its problem, its fix or fixes (Fix a, Fix b), and the
@@ -1215,19 +1218,26 @@ def apply_mediation(items, rulings, mediator):
 
 def mediate(groups, shown, focus, ok, outdir, workdir):
     """Ask the mediator to settle disputed findings, differing fixes, and long
-    problems. Returns the number of items it was given."""
+    problems. MEDIATOR goes first. If it is logged out or fails, a reviewer
+    mediates instead. Returns the number of items it was given."""
     items = mediation_items(groups)
     if not items:
         return 0
-    m = panelist(MEDIATOR)
-    runtime.log(f"3/4 mediate {len(items)} finding{'' if len(items) == 1 else 's'}: {label(m)}")
-    for attempt in (1, 2):
-        text = call(m, mediation_prompt(items, shown, focus, ok), outdir / "mediation.txt", workdir, stage="mediate")
-        rulings = parse_mediation(text) if text else {}
-        if rulings or text is None:
+    rulings, m = {}, None
+    first = panelist(MEDIATOR)
+    for m in [first] + [r for r in ok if r != first]:
+        if m == first and not preflight([m]):
+            continue  # logged out: hand it to a reviewer without a wasted call
+        runtime.log(f"3/4 mediate {len(items)} finding{'' if len(items) == 1 else 's'}: {label(m)}")
+        for attempt in (1, 2):
+            text = call(m, mediation_prompt(items, shown, focus, ok), outdir / "mediation.txt", workdir, stage="mediate")
+            rulings = parse_mediation(text) if text else {}
+            if rulings or text is None:
+                break
+            if attempt == 2:
+                fail("mediate", m, "reply had no rulings in the expected format, after one retry")
+        if rulings:
             break
-        if attempt == 2:
-            fail("mediate", m, "reply had no rulings in the expected format, after one retry")
     apply_mediation(items, rulings, m)
     for mid, g in items:
         if mid not in rulings and g.get("disputed"):
@@ -2527,7 +2537,7 @@ def render(outdir):
                      "the script ran without a model.\n\n" + "\n".join(nits))
     if disp or dnits:
         who = labels.get(r.get("mediator") or "")
-        parts.append("*Below: findings the two reviewers split on. "
+        parts.append("*Below: findings the reviewers split on. "
                      + (f"{who} broke the tie.*" if who else "No mediator ruled on them.*"))
         parts += disp
         if dnits:
@@ -2669,7 +2679,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         runtime.log(f"carrying {len(prev)} open findings from the last review")
     prompt = review_prompt(shown, focus, rules, decided + open_block(prev), ctx_block)
     (outdir / "prompt.md").write_text(prompt)
-    steps = 4 if len(panel) == 2 else 3  # two reviewers add a mediation step
+    steps = 4 if len(panel) >= 2 else 3  # two or more reviewers add a mediation step
     runtime.log(f"1/{steps} review (no web): {', '.join(panel)}")
 
     def review(m):
@@ -2764,7 +2774,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     voters = [m for m in panel if m in votes]
 
     groups = [score_group(g, votes, voters, owner) for g in group_findings(flat, votes)]
-    two = len(ok) == 2 and bool(flat)  # two reviewers: agreed or disputed, and a mediator
+    two = len(ok) >= 2 and bool(flat)  # two or more reviewers: agreed or disputed, and a mediator
     if two:
         two_lab(groups, flat, votes, owner, ok)
     material = focus + "\n" + ctx_text  # findings may quote the focus or the supporting material
@@ -2793,11 +2803,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
                     g["held"] = why
     n_med = 0
     open_groups = [g for g in groups if not g.get("declined") and not g.get("held")]
-    # Check the mediator's login only when there is something to settle, so a
-    # review that needs no mediator does not report it as failed.
-    if two and mediation_items(open_groups) and not preflight([panelist(MEDIATOR)]):
-        runtime.log(f"3/4 mediate skipped: {label(panelist(MEDIATOR))} is not logged in")
-    elif two:
+    if two:  # mediate() checks the mediator's login only when something needs settling
         t = time.time()
         n_med = mediate([g for g in groups if not g.get("declined") and not g.get("held")],
                         shown, focus, ok, outdir, workdir)
@@ -2816,7 +2822,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         "files": [str(p) for p in files], "versions": versions, "context": ctx_names,
         "started": STARTED,
         "panel": panel, "reviewers_ok": ok, "voters": voters,
-        "mediator": panelist(MEDIATOR) if any(g.get("ruling") for g in groups) else None,  # only when it ruled
+        "mediator": next((g["ruling"]["by"] for g in groups if g.get("ruling")), None),  # whoever ruled
         "labels": {m: label(m) for m in [*panel, *(f["model"] for f in FAILURES), *([panelist(MEDIATOR)] if n_med else [])]
                    if m in PANELISTS}, "verify": verify,
         "failures": FAILURES, "agreement": vote_agreement(flat, votes, owner),
@@ -3058,7 +3064,7 @@ def write_notes(draft, run):
     about = [f"- Open items: {counts or 'none'}.",
              f"- Line numbers refer to {draft.name} as of {time.strftime('%Y-%m-%d %H:%M')}.",
              f"- Review run: `{run}`. Reviewed by {who}" + (f", ties broken by {med}." if med else "."),
-             "- Ids: A Major, B Minor, C Nitpick, X disputed (the two reviewers split, and the mediator ruled). "
+             "- Ids: A Major, B Minor, C Nitpick, X disputed (the reviewers split, and the mediator ruled). "
              "Ids stay fixed and are never reused. Fix a and Fix b under one item are alternatives: apply one.",
              *([f"- Not raised this round, passage unchanged: {', '.join(not_raised)}."] if not_raised else []),
              *([f"- Closed this round: {', '.join(closed)}."] if closed else []),

@@ -1,6 +1,6 @@
 ---
 name: unified-review
-description: Review a draft with two models from different labs (GPT and Gemini by default) that vote on each other's findings, with Claude Opus breaking ties, merged into one review in draft order and written to notes/review.md, with an optional web fact-check. One model or a three-lab panel also works. Use when the user asks for a unified, combined, panel, tri-model, or multi-model review or feedback on a file. Also use when the user asks to address, apply, fix, accept, or skip numbered items (such as 3, 7, or K5) from a unified review or fact-check. Also use when the user asks to iterate (review, apply the changes, and review again) for some number of rounds. Also use for any review of or feedback on a draft, even by one model, since its Reviewer rules set what to flag and the output format.
+description: Review a draft with two models from different labs (GPT and Gemini by default) that vote on each other's findings, with Claude Opus breaking ties, merged into one review in draft order and written to notes/review.md, with an optional web fact-check. One model alone, or a panel of three or more, also works. Use when the user asks for a unified, combined, panel, tri-model, or multi-model review or feedback on a file. Also use when the user asks to address, apply, fix, accept, or skip numbered items (such as 3, 7, or K5) from a unified review or fact-check. Also use when the user asks to iterate (review, apply the changes, and review again) for some number of rounds. Also use for any review of or feedback on a draft, even by one model, since its Reviewer rules set what to flag and the output format.
 ---
 
 # Unified review
@@ -49,8 +49,8 @@ effort, via codex) and `argon` (Gemini 4 Argon Medium, via cursor-agent), with
 Claude Opus as mediator. `-p` takes any one model or subset: short names
 `argon`, `claude` (Sonnet), `gpt` (GPT-5.6 Luna, low effort), `gemini` (Gemini
 3.8 Flash Low), `grok`, or `harness:model[@effort]`. `-p gpt` reviews with one
-model alone. `-p claude,gpt,gemini` is a three-lab panel that votes by
-majority, with no mediator. If a model fails, Claude Sonnet stands in
+model alone, with no vote and no mediator. `-p claude,gpt,gemini` is a
+three-lab panel, mediated the same way. If a model fails, Claude Sonnet stands in
 automatically, and Grok 4.7 Low Fast if Claude fails too. Pass `-p` only when the user names a model or a panel. Pass `--verify` only when the user asks for a
 fact-check or claim verification.
 
@@ -61,9 +61,10 @@ own, with reviewers anonymized: once on the problem (agree, partial, disagree)
 and once on the fix (agree, disagree). A single model skips the vote, and the
 review says it reviewed alone.
 
-With two reviewers (the default), a finding goes in the main review only when
-both stand behind its problem: both raised it, or the other voted agree. A
-partial or disagree vote makes it disputed. Claude Opus then mediates, and
+With two or more reviewers, a finding goes in the main review when a majority
+of the reviewers stand behind its problem: they raised it or voted agree. With
+two, that means both. Partial does not count as agreeing. The rest are
+disputed. Claude Opus then mediates, even when Claude is also a reviewer, and
 raises no findings of its own:
 - A disputed finding is upheld or dropped. Upheld ones follow the main review
   under Disputed, in the same severity groups and draft order, each with the
@@ -72,10 +73,9 @@ raises no findings of its own:
   other's fix, the mediator keeps one fix, shows both (Fix a and Fix b, its pick
   first), or writes its own, marked as not reviewed by the panel.
 - It shortens a problem over 25 words and leaves the diff as it is.
-If the mediator fails, Disputed lists its findings without a ruling, and the
-review says so. With three or more reviewers, the script reports a finding when
-two models stand behind it (a second model raised it, or another voted agree or
-partial), and there is no mediator.
+If Claude is logged out or fails, one of the reviewers mediates instead, and
+the review names it. If no mediator answers, Disputed lists its findings
+without a ruling, and the review says so.
 
 The script groups duplicates and writes `unified.md` in the run folder and the
 notes file (below) in the draft's folder:
@@ -294,7 +294,8 @@ so follow them when the user asks you to iterate.
    not rejected) and either:
    - every voter agreed on its problem and its fix, or
    - with three or more reviewers, it is Major or Minor and a majority of
-     voters agreed (more ✓ than half the votes, ~ counting as not agreeing).
+     voters agreed (more ✓ than half the votes, ~ counting as not agreeing),
+     and no voter rejected its fix.
    Skip everything else, and always skip disputed findings, findings whose
    fixes differ (even when the mediator picked one), contested findings,
    whole-draft findings, question findings, and findings whose quoted text is
