@@ -762,6 +762,13 @@ def word_count(s):
     return len(re.findall(r"\S+", s or ""))
 
 
+def sentences(s):
+    """Sentences in a short text: an end mark followed by a capital starts a new one.
+    Abbreviations such as "e.g." are not counted as ends."""
+    s = re.sub(r"\b(?:e\.g|i\.e|et al|vs|cf|Fig|Eq|Ref|Dr|Mr|Ms|No)\.", "", s or "")
+    return 1 + len(re.findall(r"[.?!][\"'”)]*\s+(?=[A-Z0-9“\"(])", s.strip()))
+
+
 
 def parse_findings(text):
     """Findings in a reviewer's reply. An empty list when the reply says NO
@@ -1092,7 +1099,8 @@ def two_lab(groups, flat, votes, owner, ok):
         fix_no = [m for m in votes for f in members
                   if m != owner.get(f["id"][0]) and votes[m].get(f["id"], {}).get("fix") == "disagree"]
         g["fix_issue"] = "differ" if len(alts) > 1 else "rejected" if fix_no and alts else None
-        g["long"] = word_count(rep["problem"]) > MAX_PROBLEM_WORDS
+        g["long"] = word_count(rep["problem"]) > MAX_PROBLEM_WORDS or (
+            g.get("form") != "question" and sentences(rep["problem"]) > 1)
     return groups
 
 
@@ -1104,24 +1112,26 @@ Each item is one finding: its problem, its fix or fixes (Fix a, Fix b), and the
 votes, with reviewers anonymized. Its first line says what to settle:
 - DISPUTED: the reviewers split on the problem. Rule uphold if the problem is
   real and worth the author's time as stated, drop if not.
-- FIXES DIFFER: the two fixes differ. a or b keeps one (when they do the same
-  thing, the shorter). a,b or b,a shows both, your pick first, when they reflect
-  different readings or tradeoffs the author should choose between.
-- FIX REJECTED: the other reviewer disagreed with the fix. a keeps it.
-- In every case, c is your own fix, only when every fix given is flawed.
-- TOO LONG: the problem runs over {words} words. Shorten it.
+- FIXES DIFFER: the fixes differ. One letter keeps that fix (when they do the
+  same thing, the shorter). Several letters, your pick first (such as b,a),
+  show them all, when they reflect different readings or tradeoffs the author
+  should choose between.
+- FIX REJECTED: another reviewer disagreed with the fix. a keeps it.
+- In every case, own is your own fix, only when every fix given is flawed.
+- TOO LONG: the problem runs over {words} words or more than one sentence.
+  Shorten it to one sentence.
 
 Reply with one block per item, in the order given, and nothing else:
 
 === <item id>
 ruling: uphold | drop
 severity: Major | Minor | Nitpick
-fix: a | b | a,b | b,a | c
+fix: <the letters of the fixes to show, your pick first, such as a or b,a> | own
 reason: <at most 12 words, readable without the fix letters, since the author may
   see only the fix you keep. When the fixes do the same thing, the word same.>
 problem: <the problem, one sentence of at most {words} words, or the word same>
 ---
-<only when fix is c: your fix, an inline diff in the same form as the others>
+<only when fix is own: your fix, an inline diff in the same form as the others>
 
 For an item that is not DISPUTED, ruling is uphold. Severity: Major, a claim of
 the draft fails or is unsupported until this is fixed. Minor, the claims stand
@@ -1155,6 +1165,7 @@ def parse_mediation(text):
                 r["severity"] = next((s for s in SEVERITIES if s.lower() in v.lower()), "")
             elif k == "fix":
                 r["fix"] = re.findall(r"\b([a-h])\b", v.lower())
+                r["own_fix"] = bool(re.search(r"\bown\b", v, re.I))
             elif k in ("reason", "problem"):
                 r[k] = v
         out[mid.upper()] = r
@@ -1199,7 +1210,10 @@ def apply_mediation(items, rulings, mediator):
         if r["severity"] and g.get("disputed"):
             g["severity"] = r["severity"]
         alts = {a["label"]: a for a in g.get("alts") or []}
-        if "c" in r["fix"] and r["own"] and (diff_parts(r["own"])[0] is not None or "🟢" in r["own"]):
+        # "own" is the mediator's fix. An older reply used "c", which is the
+        # mediator's only when no reviewer's fix has that letter.
+        own = r.get("own_fix") or ("c" in r["fix"] and "c" not in alts)
+        if own and r["own"] and (diff_parts(r["own"])[0] is not None or "🟢" in r["own"]):
             chosen = [{"by": mediator, "fix": r["own"], "unreviewed": True}]
         else:
             chosen = [alts[x] for x in dict.fromkeys(r["fix"]) if x in alts] or list(alts.values())[:1]
@@ -1223,22 +1237,29 @@ def mediate(groups, shown, focus, ok, outdir, workdir):
     items = mediation_items(groups)
     if not items:
         return 0
-    rulings, m = {}, None
+    rulings, pending = {}, list(items)
     first = panelist(MEDIATOR)
-    for m in [first] + [r for r in ok if r != first]:
+    for i, m in enumerate([first] + [r for r in ok if r != first]):
         if m == first and not preflight([m]):
             continue  # logged out: hand it to a reviewer without a wasted call
-        runtime.log(f"3/4 mediate {len(items)} finding{'' if len(items) == 1 else 's'}: {label(m)}")
+        runtime.log(f"3/4 mediate {len(pending)} finding{'' if len(pending) == 1 else 's'}: {label(m)}")
+        got = {}
         for attempt in (1, 2):
-            text = call(m, mediation_prompt(items, shown, focus, ok), outdir / "mediation.txt", workdir, stage="mediate")
-            rulings = parse_mediation(text) if text else {}
-            if rulings or text is None:
+            text = call(m, mediation_prompt(pending, shown, focus, ok),
+                        outdir / ("mediation.txt" if i == 0 else f"mediation-{i + 1}.txt"), workdir, stage="mediate")
+            got = {k: v for k, v in (parse_mediation(text) if text else {}).items() if k in dict(pending)}
+            if got or text is None:
                 break
             if attempt == 2:
                 fail("mediate", m, "reply had no rulings in the expected format, after one retry")
-        if rulings:
+        apply_mediation(pending, got, m)
+        rulings.update(got)
+        # Items this mediator skipped go to the next one, so each gets a ruling.
+        pending = [(mid, g) for mid, g in pending if mid not in got]
+        if got and pending:
+            runtime.log(f"  {label(m)} left {len(pending)} unruled, passing them on")
+        if not pending:
             break
-    apply_mediation(items, rulings, m)
     for mid, g in items:
         if mid not in rulings and g.get("disputed"):
             g["ruling"] = None
@@ -2932,10 +2953,28 @@ def note_resolved(entry, text):
     return (norm(old) not in t) or (norm(new) != norm(old) and norm(new) in t and norm(new) not in norm(old))
 
 
+def match_score(entry, g):
+    """How surely a notes item is this finding: 3 same carry-over key, 2 same
+    title and the quotes do not conflict, 1 overlapping quotes, 0 not it. A title
+    alone is not enough: two findings may both be called "Missing citation"."""
+    if entry.get("key") and entry["key"] == g.get("key"):
+        return 3
+    a, b = entry.get("quote") or "", g["rep"]["quote"] or ""
+    overlap = bool(a and b and quote_overlap(a, b))
+    if norm(entry.get("title", "")) == norm(g["rep"]["title"]) and (overlap or not a or not b):
+        return 2
+    return 1 if overlap else 0
+
+
 def same_finding(entry, g):
-    t = norm(g["rep"]["title"])
-    return (entry.get("key") and entry["key"] == g.get("key")) or norm(entry.get("title", "")) == t or (
-        entry.get("quote") and g["rep"]["quote"] and quote_overlap(entry["quote"], g["rep"]["quote"]))
+    return match_score(entry, g) > 0
+
+
+def best_match(entry, cands):
+    """The candidate (n, sev, label, group) that best matches a notes item, or None."""
+    scored = [(match_score(entry, x[3]), x) for x in cands]
+    top = max((s for s, _ in scored), default=0)
+    return next((x for s, x in scored if s == top), None) if top else None
 
 
 def write_notes(draft, run):
@@ -2952,6 +2991,9 @@ def write_notes(draft, run):
     entries, nxt = mine.get("items", {}), dict(mine.get("next", {}))
     chunks = split_notes(old_text) if old_text else [["pre", None, f"# Review of {Path(original_of(draft) or draft).name}\n\n"]]
     present = {c[1] for c in chunks if c[0] == "item"}
+    m = re.search(r"^- Next free ids: (.+?)\.?$", old_text, re.M)
+    for s, k in re.findall(r"\b([ABCX])(\d+)\b", m.group(1) if m else ""):
+        nxt[s] = max(nxt.get(s, 1), int(k))
     for nid in present:  # ids are never reused, even ones the map does not know
         s, k = nid[0], int(nid[1:])
         nxt[s] = max(nxt.get(s, 1), k + 1)
@@ -2974,11 +3016,13 @@ def write_notes(draft, run):
             # No record of this item (the map was lost, or someone else wrote it):
             # adopt it only when its heading carries a current finding's title.
             head = re.sub(r"^### [ABCX]\d+\.\s+(?:Slide \d+ \(line \d+\): )?", "", c[2].partition("\n")[0])
-            x = next((x for x in unmatched if head.startswith(x[3]["rep"]["title"])), None)
+            # Only a title that one current finding carries, so two alike are not confused.
+            hits = [x for x in unmatched if head.startswith(x[3]["rep"]["title"])]
+            x = hits[0] if len(hits) == 1 else None
             if x is None:
                 continue  # an item the script did not write: leave it
             e = entries[nid] = {"title": x[3]["rep"]["title"], "quote": x[3]["rep"]["quote"]}
-        hit = next((x for x in unmatched if same_finding(e, x[3])), None)
+        hit = best_match(e, unmatched)
         if hit:
             unmatched.remove(hit)
             n, sev, lab, g = hit
@@ -3066,6 +3110,7 @@ def write_notes(draft, run):
              f"- Review run: `{run}`. Reviewed by {who}" + (f", ties broken by {med}." if med else "."),
              "- Ids: A Major, B Minor, C Nitpick, X disputed (the reviewers split, and the mediator ruled). "
              "Ids stay fixed and are never reused. Fix a and Fix b under one item are alternatives: apply one.",
+             "- Next free ids: " + ", ".join(f"{s}{nxt.get(s, 1)}" for s in "ABCX") + ".",
              *([f"- Not raised this round, passage unchanged: {', '.join(not_raised)}."] if not_raised else []),
              *([f"- Closed this round: {', '.join(closed)}."] if closed else []),
              *([f"- Dropped by {med or 'the mediator'} (the reviewers split): " + ", ".join(
@@ -3581,8 +3626,12 @@ def carry_over(groups, prev, dnorm):
     left = list(prev)
     for g in groups:
         t, q = norm(g["rep"]["title"]), g["rep"]["quote"]
-        hit = next((p for p in left if norm(p["title"]) == t), None) or next(
-            (p for p in left if q and p["quote"] and quote_overlap(q, p["quote"])), None)
+        # Same title and overlapping quotes first, then same title where a quote is
+        # missing, then overlapping quotes. Two findings may share a generic title.
+        both = lambda p: bool(q and p["quote"] and quote_overlap(q, p["quote"]))
+        hit = (next((p for p in left if norm(p["title"]) == t and both(p)), None)
+               or next((p for p in left if norm(p["title"]) == t and not (q and p["quote"])), None)
+               or next((p for p in left if both(p)), None))
         if hit:
             left.remove(hit)
             g["key"], g["seen"] = hit["key"], hit["seen"] + 1
@@ -5803,7 +5852,7 @@ def main():
     unified = foreground(files, draft, panel, a.focus, rules, outdir, workdir, a.verify, versions, context, shown)
     runtime.log(f"review done in {round(time.time() - t)} s." + (
         " Fact-check still running; factcheck.md opens when it finishes." if a.verify else ""))
-    # The review opens as unified.md. The page opens only when asked for
+    # The review opens as the notes file (unified.md for several files). The page opens only when asked for
     # (unified-review --page FILE). A Re-review from the page sets NO_PAGE.
     notes = None
     if len(files) == 1:

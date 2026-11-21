@@ -27,7 +27,7 @@ In the Claude desktop app, open the Code tab, choose the folder that holds your 
 
 > Install https://github.com/jovo/agent-council and give me a unified review of my-draft.md.
 
-Claude reads this README, runs the install, and asks before each command. If a model CLI is missing or logged out, it says which one and opens the sign-in in your browser. The review then opens as `unified.md`. `unified-review --page FILE` opens the review page, where **Accept** writes into your draft. After the first time, ask for "a unified review of my-draft.md."
+Claude reads this README, runs the install, and asks before each command. If a model CLI is missing or logged out, it says which one and opens the sign-in in your browser. The review then opens as `notes/review.md`, in your draft's folder. `unified-review --page FILE` opens the review page, where **Accept** writes into your draft. After the first time, ask for "a unified review of my-draft.md."
 
 ### In a terminal
 
@@ -134,7 +134,7 @@ When the file was reviewed before, `unified.md` opens with **Since the last revi
 - **Not reported**: findings no second model backed, one line each.
 - **Agreement:** ordinal Krippendorff's alpha over the votes, with a bootstrap 95% confidence interval over findings, leaving out each model's votes on its own findings. Most votes are "agree", and that imbalance pulls alpha down even when raw agreement is high.
 
-After a review, `unified.md` opens in Cursor or VS Code if you ran the command there, or in your default Markdown app. Inside the Claude or Codex app, the script prints `OPEN IN APP: <path>`. Set `UNIFIED_REVIEW_OPEN_APP` to always use one app. For one Markdown file, `unified-review --page FILE` opens the review page.
+After a review of one file, `notes/review.md` opens in Cursor or VS Code if you ran the command there, or in your default Markdown app. A review of several files opens `unified.md`, which every run also writes in its run folder. Inside the Claude or Codex app, the script prints `OPEN IN APP: <path>`. Set `UNIFIED_REVIEW_OPEN_APP` to always use one app. For one Markdown file, `unified-review --page FILE` opens the review page.
 
 ## Working with agents
 

@@ -115,7 +115,8 @@ and new. Report these counts to the user before the findings.
   cause: the CLI is not logged in (`claude` then `/login`, `cursor-agent login`,
   `codex login`).
 
-The review opens as `unified.md` (below). The review page opens only when the
+The review of one file opens as the notes file (below), and a review of several
+files opens as `unified.md`. The review page opens only when the
 user asks for it: run `unified-review --page FILE` after the review. It prints
 `Review page: http://127.0.0.1:<port>/`. The page shows the draft
 with each finding in place, and the user accepts, edits, or declines findings
