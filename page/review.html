@@ -148,7 +148,7 @@ kbd{font-family:ui-monospace,Menlo,monospace;font-size:12px;border:1px solid var
 <div id="droptoast" class="card" hidden style="position:fixed;right:24px;bottom:24px;z-index:5;font-size:15px;max-width:480px"></div>
 <script>
 const SEV = ["Major", "Minor", "Nitpick"];
-const TAGS = ["Solo", "Unanimous", "Majority", "Contested"];
+const TAGS = ["Solo", "Unanimous", "Majority", "Contested", "Disputed", "Fixes differ"];
 const KINDS = ["Logic", "Evidence", "Clarity", "Style"];
 let S = null, cur = null, filt = {kind: "All", form: "All", sev: "All", tag: "All", status: "Open"}, mode = null, lastRun = null;
 let commentOpen = false, passage = "";  // passage: text selected in the draft that the next Ask is about
@@ -668,6 +668,8 @@ function renderCard() {
   el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity}${f.kind ? " · " + kindOf(f) : ""}${f.form === "question" ? " · Question" : ""} · ${f.tag}${f.added ? " · from your edit" : ""}</div>
     <div class="title">${esc(f.title)} <span class="flagged">${flagged}</span></div>${f.severity === "Nitpick" ? "" : `<p class="point">${inline(pointOf(f))}</p>`}
     ${f.body.includes("~~") || f.body.includes("🟢") ? `<div class="diff">${f.old != null && f.new != null ? revHtml(f) : diffHtml(f.body)}</div>` : ""}
+    ${(f.alts || []).length > 1 ? f.alts.slice(1).map(a => `<p class="meta">Fix ${esc(a.label)}${a.unreviewed ? ", not reviewed by the panel" : ` from ${esc(a.by)}`} (Accept applies Fix a):</p><div class="diff">${marks(esc(a.fix))}</div>`).join("") : ""}
+    ${f.ruling ? `<p class="meta">${esc(f.ruling)}</p>` : ""}
 
     ${S.readonly && !f.status ? `<p class="reason">Read-only: make this change in the source document.</p>` : ""}
     ${!S.readonly && !f.status && !f.applicable && !f.editable && f.form !== "question" ? `<p class="reason">Cannot apply here: ${esc(f.reason || "it is about the whole draft")}.</p>` : ""}
