@@ -361,16 +361,33 @@ class Calls(unittest.TestCase):
             return ur.choose_panel(panel), checked
 
     def test_a_logged_out_panelist_is_not_tried_again_as_its_own_stand_in(self):
-        panel, checked = self.choose(["claude", "gpt", "gemini"], logged_out=("claude",))
-        self.assertEqual(panel, ["gpt", "gemini", "grok"])
-        self.assertEqual(checked.count("claude"), 1)
-        self.assertEqual([f["model"] for f in ur.FAILURES], ["claude"])
+        panel, checked = self.choose(["gpt", "gemini", "argon"], logged_out=("gpt",))
+        self.assertEqual(panel, ["gemini", "argon", "grok"])
+        self.assertEqual(checked.count("gpt"), 1)
+        self.assertEqual([f["model"] for f in ur.FAILURES], ["gpt"])
+
+    def test_a_mediated_panel_leaves_off_the_mediators_lab(self):
+        panel, checked = self.choose(["claude", "gpt", "gemini"])
+        self.assertEqual(panel, ["gpt", "gemini"])  # Claude Opus mediates, so Claude Sonnet does not review
+        self.assertNotIn("claude", checked)
+        panel, _ = self.choose(["claude:opus", "gpt", "argon"])
+        self.assertEqual(panel, ["gpt", "argon"])
+
+    def test_two_models_in_all_are_refused(self):
+        with self.assertRaises(SystemExit):
+            self.choose(["claude", "gpt"])  # Claude off, GPT alone, plus the mediator: two models
+        self.assertEqual(self.choose(["claude"])[0], ["claude"])  # one model reviews alone
+
+    def test_a_mediated_panel_skips_claude_as_a_stand_in(self):
+        panel, checked = self.choose(["gpt", "argon"], logged_out=("gpt",))
+        self.assertEqual(panel, ["argon", "grok"])
+        self.assertNotIn("claude", checked)
 
     def test_a_stand_in_replaces_a_panelist_whose_cli_is_missing(self):
         panel, _ = self.choose(["gpt"], missing=("gpt",))
         self.assertEqual(panel, ["claude"])
-        panel, _ = self.choose(["claude", "gpt", "gemini"], missing=("gpt",))
-        self.assertEqual(panel, ["claude", "gemini", "grok"])
+        panel, _ = self.choose(["argon", "gpt", "gemini"], missing=("gpt",))
+        self.assertEqual(panel, ["argon", "gemini", "grok"])
 
     def test_no_panel_when_nothing_is_available(self):
         with self.assertRaises(SystemExit):
@@ -921,11 +938,10 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(r["labels"]["claude"], ur.label("claude"))
         self.assertIn(f"Failed: {ur.label('claude')}", md)
 
-    def test_claude_then_grok_stand_in_for_a_failed_voter(self):
-        _, r, _ = self.run_review(["gpt", "gemini"], fails=(("vote", "gpt"),))
-        self.assertEqual(sorted(r["voters"]), ["claude", "gemini"])
-        _, r, _ = self.run_review(["gpt", "gemini"], fails=(("vote", "gpt"), ("vote", "claude")))
-        self.assertEqual(sorted(r["voters"]), ["gemini", "grok"])
+    def test_grok_not_claude_stands_in_for_a_failed_voter(self):
+        prompts, r, _ = self.run_review(["gpt", "gemini"], fails=(("vote", "gpt"),))
+        self.assertEqual(sorted(r["voters"]), ["gemini", "grok"])  # Claude mediates, so it does not vote
+        self.assertNotIn("claude", prompts.get("vote", {}))
 
     def test_one_reviewer_skips_the_vote_and_keeps_its_findings(self):
         prompts, r, md = self.run_review(["argon"])
@@ -2258,7 +2274,7 @@ class TwoLab(unittest.TestCase):
         r = json.loads((out / "results.json").read_text())
         return r, {g["rep"]["title"]: g for g in r["groups"]}
 
-    def test_default_panel_is_two_labs_with_a_claude_mediator(self):
+    def test_default_is_three_models_two_reviewers_and_a_claude_mediator(self):
         self.assertEqual(ur.DEFAULT_PANEL, ["gpt", "argon"])
         self.assertTrue(ur.MEDIATOR.startswith("claude:"))
 
@@ -2292,7 +2308,7 @@ class TwoLab(unittest.TestCase):
         self.assertIn("DISPUTED", prompts["mediate"][ur.MEDIATOR])
         self.assertNotIn("gpt", prompts["mediate"][ur.MEDIATOR].split("<items>")[1].lower())  # reviewers anonymized
 
-    def test_both_raised_but_fixes_differ_shows_both_with_the_mediators_pick_first(self):
+    def test_both_raised_but_fixes_differ_the_mediator_keeps_one(self):
         out, prompts = two_lab_review(
             self.d, {"gpt": SKY(), "argon": SKY("The sky is ~~green~~ 🟢 **gray** today.")},
             {"gpt": {}, "argon": {}},
@@ -2301,24 +2317,41 @@ class TwoLab(unittest.TestCase):
         sky = g["Sky color is wrong"]
         self.assertFalse(sky["disputed"])
         self.assertEqual(sky["fix_issue"], "differ")
-        self.assertEqual([a["label"] for a in sky["alts"]], ["b", "a"])  # letters as the mediator saw them, pick first
+        self.assertEqual([a["label"] for a in sky["alts"]], ["b"])  # one fix, even when the reply names two
+        self.assertIn("the one fix to keep", prompts["mediate"][ur.MEDIATOR])
         was_b = re.search(r"^Fix b \(from [^)]*\):\n(.+)$", prompts["mediate"][ur.MEDIATOR], re.M).group(1)
         self.assertEqual(sky["alts"][0]["fix"], was_b)
         self.assertIn(was_b, sky["rep"]["body"])  # the pick is the one the page applies
         md = (out / "unified.md").read_text()
-        self.assertIn("**Fix a** (from", md)
-        self.assertIn("**Fix b** (from", md)
-        self.assertIn("prefers Fix b: Gray fits the storm.", md)
-        self.assertLess(md.index("**Fix b**"), md.index("**Fix a**"))
+        self.assertNotIn("**Fix a**", md)
+        self.assertIn("Gray fits the storm.", md)
         with mock.patch.object(ur, "summary_state", lambda run: None):  # no background summary call
             st = ur.page_state(self.d / "memo.md", out)["findings"][0]
-        self.assertEqual(st["tag"], "Fixes differ")
-        self.assertEqual(len(st["alts"]), 2)
-        self.assertIn("prefers Fix b", st["ruling"])
-        with contextlib.redirect_stdout(io.StringIO()) as s:
-            ur.show_items("1a", out)
-        self.assertIn("Fix a (apply this one)", s.getvalue())
-        self.assertIn(sky["alts"][1]["fix"], s.getvalue().split("Fix a (apply this one)")[1].split("=====")[0])
+        self.assertEqual(len(st["alts"]), 1)
+
+    def test_with_no_mediator_the_fix_with_fewest_changed_words_is_kept_with_its_problem(self):
+        long_fix = finding_text("Sky color is wrong", "The sky is green today.", "Green skies are rare.",
+                                "The sky is ~~green~~ 🟢 **gray and heavy with rain** today.")
+        out, _ = two_lab_review(self.d, {"gpt": long_fix, "argon": SKY()}, {"gpt": {}, "argon": {}},
+                                fails=(ur.MEDIATOR,))
+        sky = self.groups(out)[1]["Sky color is wrong"]
+        self.assertEqual(len(sky["alts"]), 1)
+        self.assertEqual(sky["alts"][0]["by"], "argon")
+        self.assertEqual(sky["rep"]["problem"], "The sky is blue, so the claim fails.")  # argon's, with its fix
+        self.assertIn("**blue**", sky["rep"]["body"])
+        md = (out / "unified.md").read_text()
+        self.assertNotIn("**Fix a**", md)
+        self.assertIn("fewest changed words", md)
+        self.assertEqual(ur.changed_words("The sky is ~~green~~ 🟢 **blue** today."), 2)
+
+    def test_with_no_mediator_an_accepted_fix_beats_a_shorter_rejected_one(self):
+        long_fix = finding_text("Sky color is wrong", "The sky is green today.", "Green skies are rare.",
+                                "The sky is ~~green~~ 🟢 **gray and heavy with rain** today.")
+        out, _ = two_lab_review(self.d, {"gpt": long_fix, "argon": SKY()},
+                                {"gpt": {"Sky color is wrong": "agree | disagree"}, "argon": {}}, fails=(ur.MEDIATOR,))
+        sky = self.groups(out)[1]["Sky color is wrong"]
+        self.assertEqual(sky["alts"][0]["by"], "gpt")
+        self.assertEqual(sky["rep"]["problem"], "Green skies are rare.")
 
     def test_fixes_with_the_same_effect_keep_one_and_say_nothing(self):
         out, _ = two_lab_review(
@@ -2357,12 +2390,13 @@ class TwoLab(unittest.TestCase):
         self.assertEqual(g["Long one"]["rep"]["problem"], "Water is wet.")
         self.assertEqual(g["Long one"]["rep"]["fix"], "Water is ~~dry~~ 🟢 **wet**.")
 
-    def test_a_failed_mediator_hands_the_ruling_to_a_reviewer(self):
+    def test_a_failed_mediator_is_not_replaced_by_a_reviewer(self):
         out, prompts = two_lab_review(self.d, {"gpt": SKY(), "argon": GRASS},
                                       {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}}, fails=(ur.MEDIATOR,))
         r, g = self.groups(out)
-        self.assertIn(r["mediator"], ("gpt", "argon"))
-        self.assertTrue(g["Sky color is wrong"]["ruling"])
+        self.assertEqual(list(prompts["mediate"]), [ur.MEDIATOR])
+        self.assertIsNone(r["mediator"])
+        self.assertIsNone(g["Sky color is wrong"]["ruling"])
         self.assertTrue(any(f["stage"] == "mediate" and f["model"] == ur.MEDIATOR for f in r["failures"]))
 
     def test_when_no_mediator_answers_disputed_findings_have_no_ruling(self):
@@ -2376,14 +2410,14 @@ class TwoLab(unittest.TestCase):
         self.assertTrue(any(f["stage"] == "mediate" for f in r["failures"]))
         self.assertIsNone(r["mediator"])  # it ruled on nothing, so the review does not name it
 
-    def test_a_logged_out_mediator_is_replaced_by_a_reviewer_without_a_call(self):
+    def test_a_logged_out_mediator_gets_no_call_and_leaves_no_ruling(self):
         with mock.patch.object(ur, "preflight", lambda ms: [m for m in ms if m != ur.MEDIATOR]):
             out, prompts = two_lab_review(self.d, {"gpt": SKY(), "argon": GRASS},
                                           {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}})
         r, g = self.groups(out)
-        self.assertNotIn(ur.MEDIATOR, prompts["mediate"])
-        self.assertEqual(len(prompts["mediate"]), 1)
-        self.assertIn(r["mediator"], ("gpt", "argon"))
+        self.assertNotIn("mediate", prompts)
+        self.assertIsNone(r["mediator"])
+        self.assertIn("No ruling: the mediator did not answer.", (out / "unified.md").read_text())
 
     def test_three_reviewers_need_a_majority_and_still_get_a_mediator(self):
         out, prompts = two_lab_review(
@@ -2415,7 +2449,7 @@ class TwoLab(unittest.TestCase):
                                       {"Sky color is wrong": "ruling: uphold\nfix: c,b\nreason: Both are plausible.\nproblem: same"},
                                       panel=("gpt", "argon", "gemini"))
         sky = self.groups(out)[1]["Sky color is wrong"]
-        self.assertEqual([a["label"] for a in sky["alts"]], ["c", "b"])
+        self.assertEqual([a["label"] for a in sky["alts"]], ["c"])
         self.assertFalse(any(a.get("unreviewed") for a in sky["alts"]))  # c is a reviewer's fix here
         self.assertIn("own is your own fix", prompts["mediate"][ur.MEDIATOR])
         d2 = self.d / "own"
@@ -2428,21 +2462,17 @@ class TwoLab(unittest.TestCase):
         self.assertTrue(sky["alts"][0]["unreviewed"])
         self.assertIn("blue at noon", sky["rep"]["body"])
 
-    def test_items_the_mediator_skips_go_to_a_reviewer(self):
+    def test_items_the_mediator_skips_stay_unruled(self):
         def med(m, title):
-            if m == ur.MEDIATOR:
-                return "ruling: uphold\nfix: a\nreason: Real.\nproblem: same" if title == "Sky color is wrong" else None
-            return "ruling: drop\nfix: a\nreason: Slowly is fine.\nproblem: same"
+            return "ruling: uphold\nfix: a\nreason: Real.\nproblem: same" if title == "Sky color is wrong" else None
         out, prompts = two_lab_review(self.d, {"gpt": SKY() + GRASS, "argon": WATER},
                                       {"argon": {"Sky color is wrong": "disagree | agree",
                                                  "Grass speed unsupported": "disagree | agree"}, "gpt": {}}, med)
         g = self.groups(out)[1]
         self.assertEqual(g["Sky color is wrong"]["ruling"]["by"], ur.MEDIATOR)
-        self.assertTrue(g["Grass speed unsupported"]["dropped"])
-        self.assertNotEqual(g["Grass speed unsupported"]["ruling"]["by"], ur.MEDIATOR)
-        fallback = [m for m in prompts["mediate"] if m != ur.MEDIATOR][0]
-        self.assertIn("Grass speed", prompts["mediate"][fallback])
-        self.assertNotIn("Sky color", prompts["mediate"][fallback])  # only what was left
+        self.assertIsNone(g["Grass speed unsupported"]["ruling"])
+        self.assertFalse(g["Grass speed unsupported"]["rejected"])
+        self.assertEqual(list(prompts["mediate"]), [ur.MEDIATOR])
 
     def test_a_problem_of_two_sentences_is_shortened(self):
         self.assertEqual(ur.sentences("No baseline is given, e.g. last year."), 1)
@@ -2462,12 +2492,12 @@ class TwoLab(unittest.TestCase):
         self.assertTrue(w["alts"][0]["unreviewed"])
         self.assertEqual(w["alts"][0]["fix"], "~~Water is dry.~~")
 
-    def test_a_missing_mediator_cli_hands_off_to_a_reviewer(self):
+    def test_a_missing_mediator_cli_leaves_no_ruling(self):
         out, prompts = two_lab_review(self.d, {"gpt": SKY(), "argon": GRASS},
                                       {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}}, missing=(ur.MEDIATOR,))
         r, g = self.groups(out)
-        self.assertNotIn(ur.MEDIATOR, prompts["mediate"])
-        self.assertIn(g["Sky color is wrong"]["ruling"]["by"], ("gpt", "argon"))
+        self.assertNotIn("mediate", prompts)
+        self.assertIsNone(g["Sky color is wrong"]["ruling"])
         self.assertTrue(any(f["stage"] == "preflight" and f["model"] == ur.MEDIATOR for f in r["failures"]))
 
     def test_a_disputed_finding_says_when_its_fix_is_the_mediators_own(self):

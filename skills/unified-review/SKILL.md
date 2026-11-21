@@ -1,6 +1,6 @@
 ---
 name: unified-review
-description: Review a draft with two models from different labs (GPT and Gemini by default) that vote on each other's findings, with Claude Opus breaking ties, merged into one review in draft order and written to notes/review.md, with an optional web fact-check. One model alone, or a panel of three or more, also works. Use when the user asks for a unified, combined, panel, tri-model, or multi-model review or feedback on a file. Also use when the user asks to address, apply, fix, accept, or skip numbered items (such as 3, 7, or K5) from a unified review or fact-check. Also use when the user asks to iterate (review, apply the changes, and review again) for some number of rounds. Also use for any review of or feedback on a draft, even by one model, since its Reviewer rules set what to flag and the output format.
+description: Review a draft with three models from different labs by default (GPT and Gemini review and vote on each other's findings, Claude Opus breaks ties without reviewing), merged into one review in draft order and written to notes/review.md, with an optional web fact-check. One model alone, or more reviewers, also works. Use when the user asks for a unified, combined, panel, tri-model, or multi-model review or feedback on a file. Also use when the user asks to address, apply, fix, accept, or skip numbered items (such as 3, 7, or K5) from a unified review or fact-check. Also use when the user asks to iterate (review, apply the changes, and review again) for some number of rounds. Also use for any review of or feedback on a draft, even by one model, since its Reviewer rules set what to flag and the output format.
 ---
 
 # Unified review
@@ -44,14 +44,17 @@ layout are untouched. Edits it cannot place (inside an equation, citation, or
 footnote mark, new formatting, new table cells) are listed for the user to make
 by hand. A PDF comes back through make-pdf.
 
-The default is two models from different labs, `gpt` (GPT-5.6 Luna, low
-effort, via codex) and `argon` (Gemini 4 Argon Medium, via cursor-agent), with
-Claude Opus as mediator. `-p` takes any one model or subset: short names
-`argon`, `claude` (Sonnet), `gpt` (GPT-5.6 Luna, low effort), `gemini` (Gemini
-3.8 Flash Low), `grok`, or `harness:model[@effort]`. `-p gpt` reviews with one
-model alone, with no vote and no mediator. `-p claude,gpt,gemini` is a
-three-lab panel, mediated the same way. If a model fails, Claude Sonnet stands in
-automatically, and Grok 4.7 Low Fast if Claude fails too. Pass `-p` only when the user names a model or a panel. Pass `--verify` only when the user asks for a
+The default is three models from three labs: `gpt` (GPT-5.6 Luna, low
+effort, via codex) and `argon` (Gemini 4 Argon Medium, via cursor-agent)
+review, and Claude Opus mediates without reviewing. `-p` names the reviewers:
+short names `argon`, `claude` (Sonnet), `gpt` (GPT-5.6 Luna, low effort),
+`gemini` (Gemini 3.8 Flash Low), `grok`, or `harness:model[@effort]`. `-p gpt`
+reviews with one model alone, with no vote and no mediator. Two or more
+reviewers always get the mediator as one more model, so a review never starts on
+two models. A Claude reviewer is left off such a panel, since Claude mediates:
+`-p claude,gpt,gemini` reviews with GPT and Gemini, and `-p claude,gpt` is
+refused. If a reviewer on a mediated panel fails, Grok 4.7 Low Fast stands in.
+One model alone gets Claude Sonnet, then Grok. Pass `-p` only when the user names a model or a panel. Pass `--verify` only when the user asks for a
 fact-check or claim verification.
 
 How it works: each panelist reviews without web search. Each finding is a
@@ -64,18 +67,20 @@ review says it reviewed alone.
 With two or more reviewers, a finding goes in the main review when a majority
 of the reviewers stand behind its problem: they raised it or voted agree. With
 two, that means both. Partial does not count as agreeing. The rest are
-disputed. Claude Opus then mediates, even when Claude is also a reviewer, and
-raises no findings of its own:
+disputed. Claude Opus then mediates. It did not review, and raises no findings
+of its own:
 - A disputed finding is upheld or dropped. Upheld ones follow the main review
   under Disputed, in the same severity groups and draft order, each with the
   dissenting vote and the ruling. Dropped ones are listed in one line each.
-- Where both accept a problem but the fixes differ, or one rejected the
-  other's fix, the mediator keeps one fix, shows both (Fix a and Fix b, its pick
-  first), or writes its own, marked as not reviewed by the panel.
+- Where the reviewers accept a problem but the fixes differ, or one rejected
+  another's fix, the mediator keeps one fix or writes its own, marked as not
+  reviewed by the panel. The review shows one fix per finding.
 - It shortens a problem over 25 words and leaves the diff as it is.
-If Claude is logged out or fails, one of the reviewers mediates instead, and
-the review names it. If no mediator answers, Disputed lists its findings
-without a ruling, and the review says so.
+No reviewer stands in for the mediator. If it is logged out or fails, Disputed
+lists its findings without a ruling, and the review says so. Where fixes
+differ, the script then keeps one: a fix the other reviewers accepted over one
+they rejected, then the fix that strikes and adds the fewest words, with the
+problem and quote of the finding it came from.
 
 The script groups duplicates and writes `unified.md` in the run folder and the
 notes file (below) in the draft's folder:
@@ -194,7 +199,7 @@ which items are closed and why, and what the review could not assess.
 Give each set of recommendations a letter: A for Major, B for Minor, C for
 Nitpick, X for Disputed. An item's id is its letter and its number within that
 set (A2, B7), and the notes file lists the sets in that order. Where an item
-shows Fix a and Fix b, they are alternatives: A2a and A2b name them. Ids stay fixed and are never
+from an older review shows Fix a and Fix b, they are alternatives: A2a and A2b name them. Ids stay fixed and are never
 reused, leaving gaps, so an id the user said earlier still names the same item.
 A new item takes the next free number in its set. An item whose severity
 changes keeps its id.
@@ -215,8 +220,8 @@ revisions, or reasoning in the chat.
 ## Addressing items
 
 Findings are numbered in `unified.md` (1, 2, 3, ...), straight through the main
-review and Disputed. A finding with alternative fixes names each by letter: 3a,
-3b. `--item 3b` prints that fix as the one to apply. Fact-check claims are
+review and Disputed. A finding from an older review with alternative fixes
+names each by letter: 3a, 3b. `--item 3b` prints that fix as the one to apply. Fact-check claims are
 numbered in `factcheck.md` (K1, K2, ...). This applies whenever the user refers to
 items by number: to address, apply, fix, skip, or just to ask whether one is
 worth doing, for example "address 3", "apply 2, 4, 7", "fix K5", or "is 6
