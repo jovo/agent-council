@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """unified-review: a panel of models from different labs reviews a draft, then
-votes on every finding (one model, the default, reviews alone and skips the
-vote). unified.md opens after the review and gives the findings by severity,
-then in draft order, each with its votes. --page FILE opens a local review page
+votes on every finding. The default is two models (GPT and Gemini) with Claude
+Opus breaking ties. notes/review.md, in the draft's folder, opens after the
+review and gives the findings by severity, then in draft order, each with its
+votes, then the disputed findings with the mediator's rulings. unified.md in
+the run folder holds the same review. --page FILE opens a local review page
 with the draft and each finding in place, where Accept writes a change into the
 file. An optional web fact-check runs in the background and writes
 factcheck.md. A PDF or Word file is reviewed as a Markdown copy, and
@@ -24,8 +26,9 @@ Usage: unified-review [-o OUTDIR] [-n FOCUS] [-p PANEL] [--context FILE]... [--v
   -n FOCUS   extra instructions appended to the reviewer prompt
   --context FILE  supporting material the panel reads but does not review
              (reviewer comments, a call, a source paper). Text or PDF. Repeatable.
-  -p PANEL   one model or a comma-separated panel (default: gpt, GPT-5.6
-             Luna, alone, with Claude then Grok standing in if it fails).
+  -p PANEL   one model or a comma-separated panel (default: gpt,argon, GPT-5.6
+             Luna and Gemini 4 Argon, with Claude Opus as mediator, and Claude
+             then Grok standing in for a model that fails).
              Short names argon, claude, gpt, gemini,
              grok, or harness:model[@effort], such as
              claude:opus or codex:gpt-5.6-luna@medium or cursor:kimi-k3-low
@@ -34,15 +37,18 @@ Usage: unified-review [-o OUTDIR] [-n FOCUS] [-p PANEL] [--context FILE]... [--v
 
 Foreground:
   1. review   each panelist reviews the draft, no web search
-  2. vote     each panelist votes on every finding, reviewers anonymized
-  3. merge    this script groups duplicates, sets aside findings most voters
-              reject, runs mechanical checks, writes unified.md, and opens the
-              review page (one Markdown file) or unified.md.
+  2. vote     each panelist votes on every other finding's problem and fix,
+              reviewers anonymized
+  3. mediate  with two or more reviewers, MEDIATOR (else a reviewer) rules on disputed findings and
+              differing fixes, and shortens long problems
+  4. merge    this script groups duplicates, sets aside findings voters or the
+              mediator reject, runs mechanical checks, writes unified.md and
+              notes/review.md, and opens notes/review.md.
 Background (only with --verify; detached, started first):
-  4. claims   the first panelist lists the draft's checkable claims
-  5. verify   each panelist checks every claim with web search, using
+  5. claims   the first panelist lists the draft's checkable claims
+  6. verify   each panelist checks every claim with web search, using
               stronger models than the review (FACTCHECK_PANELISTS)
-  6. merge    this script keeps the most cautious verdict per claim, writes
+  7. merge    this script keeps the most cautious verdict per claim, writes
               factcheck.md in draft order, and opens it
 
 Env overrides: CLAUDE_BIN, CODEX_BIN, CURSOR_BIN, CLAUDE_MD, UNIFIED_REVIEW_RULES,
@@ -254,7 +260,8 @@ FAILURES = []
 # Login failures, matched only in the end of the log: CLIs echo the prompt into
 # it, and a draft can say "authorized" or "log in" anywhere.
 AUTH_ERROR = re.compile(r"not logged in|logged out|please (?:log ?in|sign in)|log ?in required|"
-                        r"unauthori[sz]ed|invalid api key|authentication (?:failed|required)|\b401\b", re.I)
+                        r"unauthori[sz]ed|invalid api key|authentication (?:failed|required)|failed to authenticate|"
+                        r"session expired|\b401\b", re.I)
 
 
 def fail(stage, name, reason):
@@ -414,7 +421,9 @@ def call_once(name, prompt, out, workdir, web):
         return text, None
     stderr = err.read_text().strip()
     first = (stderr.splitlines() or [""])[0][:120]
-    if AUTH_ERROR.search("\n".join(stderr.splitlines()[-15:])):
+    # The claude CLI prints a failed login to stdout, not stderr.
+    if AUTH_ERROR.search("\n".join(stderr.splitlines()[-15:] + (text.splitlines()[-5:] if r.returncode else []))):
+        first = first or (text.strip().splitlines() or [""])[0][:120]
         return None, f"not logged in ({first})" if first else "not logged in"
     if r.returncode != 0:
         return None, f"exit code {r.returncode}" + (f": {first}" if first else "")
@@ -570,7 +579,8 @@ the house rules to verify or tag claims, and do not cite sources from memory.
 Flag a factual claim only if it needs a source and lacks one, or looks wrong on
 its face, and say why. A separate fact-check pass verifies claims. Otherwise
 follow the Review section of the house rules for each finding's content: state
-the point, then show its inline diff. The 🟢 text is literal text for the
+the problem in one sentence, then show the fix as an inline diff. Be terse:
+cut every word that does not carry the point. The 🟢 text is literal text for the
 draft, never an instruction to the author ("add citations ..."). When the fix
 needs new content that the draft already implies, such as a definition, a metric
 and baseline, or a missing step, propose that content as the 🟢 text, worded as
@@ -583,7 +593,7 @@ for the reading you assumed. Never
 describe what to add in place of either. Only a citation or a measured value cannot be proposed
 truthfully: write it as a slot in double braces where it goes, shaped like the
 final text, such as "RECAP {{{{citation: Author, year}}}}" or
-"{{{{measured success rate}}}}", and say in the point what fills it. Use double
+"{{{{measured success rate}}}}", and say in the problem what fills it. Use double
 braces only for slots. To add new text, such as a sentence or a
 table row, include the text just before it, unchanged, so the change can be
 placed. Ignore the house rules' cap on findings
@@ -608,18 +618,15 @@ quote: <the exact text this finding targets, copied verbatim from the draft or
   the author's focus material. For a finding about one section, its heading
   line. Empty for a finding about the whole draft or its overall structure.>
 ---
-<the point, then the inline diff per the house rules. For a Major or Minor
-finding, the point states the claim or decision affected, the specific
-evidence, premise, or omission, the consequence for validity or
-interpretation, and the smallest adequate remedy, which the diff makes. For a
-Major finding about a claim, the remedy is the missing support or the narrower
-claim the evidence supports. If no claim is affected, state the decision the
-defect could mislead and why.
-For a question, the question and the readings you see, and no diff.
-Do not repeat the quoted text outside the diff, and do not put the diff in a
-code block. For a Nitpick, the point is a
-few words and the diff covers only the words that change.
-No heading and no number.>
+problem: <one sentence, at most {MAX_PROBLEM_WORDS} words: what is wrong or missing and
+  what it costs the claim or the reader. For a Nitpick, a few words. For a
+  question, the question, the readings you see, and the one you assumed.>
+<the fix: the inline diff per the house rules, and nothing else. For a Major
+finding about a claim, the fix adds the missing support or narrows the claim to
+what the evidence supports. For a question, the diff for the reading you
+assumed. For a Nitpick, the diff covers only the words that change. Do not
+restate the problem, do not quote the text outside the diff, and do not put the
+diff in a code block. No heading and no number.>
 
 Severities: Major, a claim of the draft fails or is unsupported until this is
 fixed; Minor, the claims stand without the fix, but it makes the draft clearer,
@@ -646,14 +653,16 @@ below (findings may quote that material instead of the draft). You have no web
 access. Do not judge factual accuracy of the draft's claims; a separate pass
 does that.
 
-For each finding, decide:
-- vote: agree (real problem, the fix improves the draft), partial (real but
-  overstated, narrower, or the fix is flawed), or disagree (not a real problem,
-  the quoted text is in neither the draft nor the focus material, or the fix
-  makes the draft worse). For a question finding: agree if the draft does not
-  answer it and the answer would change the draft, partial if the draft answers
-  it only later or only implicitly, disagree if the draft answers it where the
-  question arises (say where).
+Judge the problem and the fix separately. For each finding, decide:
+- problem: agree (a real problem, as stated), partial (real but overstated or
+  narrower than stated), or disagree (not a real problem, or the quoted text is
+  in neither the draft nor the focus material). For a question finding: agree
+  if the draft does not answer it and the answer would change the draft,
+  partial if the draft answers it only later or only implicitly, disagree if
+  the draft answers it where the question arises (say where).
+- fix: agree (the diff fixes the problem and reads well in the draft) or
+  disagree (the diff is wrong, misses the problem, or makes the draft worse).
+  Judge the fix as if the problem were real, even when you disagree that it is.
 - severity: Major (a claim fails or is unsupported until this is fixed), Minor
   (the claims stand without the fix), or Nitpick (wording, style, typo), as you
   would rate it.
@@ -664,7 +673,7 @@ For each finding, decide:
   point the author declined (D1, D2, ...) if it repeats that point, or none.
 
 Reply with exactly one line per finding, in the order given, and nothing else:
-<id> | <vote> | <severity> | <kind> | same:<id or none> | <one-sentence reason>
+<id> | <problem> | <fix> | <severity> | <kind> | same:<id or none> | <reason, at most 12 words>
 
 <draft>
 {draft}
@@ -724,6 +733,41 @@ def strip_end(body):
 
 
 NO_FINDINGS = re.compile(r"^\s*NO FINDINGS\s*$", re.M)
+MAX_PROBLEM_WORDS = 25  # a finding's problem is one sentence of at most this many words
+PROBLEM = re.compile(r"\A\s*\**problem\**\s*:\**\s*", re.I)
+FIX_LABEL = re.compile(r"\A\s*\**fix\**\s*:\**[ \t]*\n?", re.I)
+
+
+def split_problem(body):
+    """(problem, fix) of a finding's body. The problem is the 'problem:' line, or
+    in an older reply the first paragraph. The fix is the rest: the diff."""
+    m = PROBLEM.match(body)
+    if m:
+        rest = body[m.end():]
+        head, sep, tail = rest.partition("\n")
+        problem, fix = head.strip(), tail
+        # A problem sentence wrapped onto the next line: the line before has no
+        # closing punctuation, and the next line is not the diff.
+        while (fix.strip() and not fix.startswith("\n") and not re.search(r"[.?!:)]\**\s*$", problem)
+               and not re.match(r"\s*\**fix\**\s*:", fix, re.I) and not re.search(r"~~|🟢", fix.partition("\n")[0])):
+            line, _, fix = fix.partition("\n")
+            problem += " " + line.strip()
+    else:
+        problem, _, fix = body.partition("\n\n")
+        problem = problem.strip()
+    return problem, FIX_LABEL.sub("", fix.strip()).strip()
+
+
+def word_count(s):
+    return len(re.findall(r"\S+", s or ""))
+
+
+def sentences(s):
+    """Sentences in a short text: an end mark followed by a capital starts a new one.
+    Abbreviations such as "e.g." are not counted as ends."""
+    s = re.sub(r"\b(?:e\.g|i\.e|et al|vs|cf|Fig|Eq|Ref|Dr|Mr|Ms|No)\.", "", s or "")
+    return 1 + len(re.findall(r"[.?!][\"'”)]*\s+(?=[A-Z0-9“\"(])", s.strip()))
+
 
 
 def parse_findings(text):
@@ -746,7 +790,9 @@ def parse_findings(text):
         f["severity"] = canon_sev(hits[0][1]) if hits else "Minor"
         f["kind"] = next((k for k in KINDS if k in f["kind"].lower()), "")
         f["form"] = "question" if "question" in f["form"].lower() else "edit"
-        f["body"] = strip_end(body)
+        f["problem"], f["fix"] = split_problem(strip_end(body))
+        # The body keeps the old shape, the problem then the fix, which the page and the diff parser read.
+        f["body"] = "\n\n".join(p for p in (f["problem"], f["fix"]) if p)
         if f["body"] or f["title"]:
             out.append(f)
     return out
@@ -754,7 +800,7 @@ def parse_findings(text):
 
 KINDS = ["logic", "evidence", "clarity", "style"]  # logic first: fix the argument before its wording
 VOTE_LINE = re.compile(
-    r"^\W*([A-Z]\d+)\W*\|\s*(agree|partial|disagree)\s*\|\s*(major|minor|nitpick|critical|substantive|polish)\s*\|"
+    r"^\W*([A-Z]\d+)\W*\|\s*(agree|partial|disagree)\s*\|(?:\s*(agree|disagree)\s*\|)?\s*(major|minor|nitpick|critical|substantive|polish)\s*\|"
     r"(?:\s*(logic|evidence|clarity|style)\s*\|)?"
     r"\s*same\s*:?\s*([A-Z]\d+|none)?\s*\|\s*(.*)$", re.I)
 
@@ -791,7 +837,8 @@ def _record_decisions(spec, decision, note, run):
         found = {n: g for n, _, _, g in ordered_findings(r)}
         vers = {v["path"]: v.get("number") for v in r.get("versions") or []}
         for item in [x.strip() for x in spec.split(",") if x.strip()]:
-            g = found.get(int(item)) if item.isdigit() else None
+            im = re.fullmatch(r"(\d+)[A-Ha-h]?", item)  # 3b, one fix of finding 3, records finding 3
+            g = found.get(int(im.group(1))) if im else None
             if not g:
                 print(f"{item}: not found (findings are numbered 1-{len(found)})")
                 continue
@@ -889,8 +936,10 @@ def parse_votes(text):
     for line in (text or "").splitlines():
         m = VOTE_LINE.match(line.strip())
         if m:
-            fid, v, sev, kind, same, reason = m.groups()
-            votes[fid.upper()] = {"vote": v.lower(), "severity": canon_sev(sev.capitalize()), "kind": (kind or "").lower(),
+            fid, v, fix, sev, kind, same, reason = m.groups()
+            # "vote" is the vote on the problem. "fix" is the vote on the diff, empty in older runs.
+            votes[fid.upper()] = {"vote": v.lower(), "fix": (fix or "").lower(),
+                                  "severity": canon_sev(sev.capitalize()), "kind": (kind or "").lower(),
                                   "same": (same or "none").upper(), "reason": reason.strip()}
     return votes
 
@@ -1004,6 +1053,272 @@ def score_group(members, votes, voters, owner):
         "contested": n_agree > 0 and n_dis > 0,
         "pos": min(f["pos"] for f in members),
     }
+
+# ---------------------------------------------------------------- two-lab panel
+# With two reviewers, a finding goes in the main review only when both stand
+# behind its problem: both raised it, or the other agreed with it. A partial or
+# disagree vote puts it under Disputed, where the mediator breaks the tie. The
+# fix is judged apart from the problem: when the two raised different fixes, or
+# the other model disagreed with the fix, the mediator picks one, shows both, or
+# writes its own.
+
+MEDIATOR = "claude:opus"
+
+
+def fix_of(f):
+    """The fix (the diff) of a finding, for findings parsed before the split too."""
+    return f["fix"] if "fix" in f else split_problem(strip_end(f["body"]))[1]
+
+
+def problem_of(f):
+    return f["problem"] if "problem" in f else split_problem(strip_end(f["body"]))[0]
+
+
+def two_lab(groups, flat, votes, owner, ok):
+    """Mark each group agreed or disputed, and note when its fixes differ.
+    For a panel of two or more reviewers. Agreed means a majority of the
+    reviewers stand behind the problem: they raised it or voted agree.
+    With two, that is both."""
+    byid = {f["id"]: f for f in flat}
+    for g in groups:
+        members = [byid[i] for i in g["members"] if i in byid]
+        rep = g["rep"] = {**g["rep"], "problem": problem_of(g["rep"]), "fix": fix_of(g["rep"])}
+        raised = g["raised_by"]
+        cast = list(g["votes"].values())
+        backers = set(raised) | {m for m, v in g["votes"].items() if v["vote"] == "agree"}
+        g["disputed"] = not (len(backers) * 2 > len(ok))
+        g["rejected"] = False  # nothing is dropped before the mediator rules
+        # One fix per model that raised the point, the shown finding's first.
+        alts, seen = [], []
+        for f in sorted(members, key=lambda f: f["id"] != g["rep"]["id"]):
+            m, fix = owner.get(f["id"][0]), fix_of(f)
+            if not fix or m in [a["by"] for a in alts] or norm(fix) in seen:
+                continue
+            seen.append(norm(fix))
+            alts.append({"label": "abcdefgh"[len(alts)], "by": m, "fix": fix})
+        g["alts"] = alts
+        fix_no = [m for m in votes for f in members
+                  if m != owner.get(f["id"][0]) and votes[m].get(f["id"], {}).get("fix") == "disagree"]
+        g["fix_issue"] = "differ" if len(alts) > 1 else "rejected" if fix_no and alts else None
+        g["long"] = word_count(rep["problem"]) > MAX_PROBLEM_WORDS or (
+            g.get("form") != "question" and sentences(rep["problem"]) > 1)
+    return groups
+
+
+MEDIATE = """Reviewers from different labs reviewed the draft below, then each voted
+on the others' findings. Settle what they left open. Do not raise findings of
+your own, and do not judge factual accuracy: a separate pass does that.
+
+Each item is one finding: its problem, its fix or fixes (Fix a, Fix b), and the
+votes, with reviewers anonymized. Its first line says what to settle:
+- DISPUTED: the reviewers split on the problem. Rule uphold if the problem is
+  real and worth the author's time as stated, drop if not.
+- FIXES DIFFER: the fixes differ. One letter keeps that fix (when they do the
+  same thing, the shorter). Several letters, your pick first (such as b,a),
+  show them all, when they reflect different readings or tradeoffs the author
+  should choose between.
+- FIX REJECTED: another reviewer disagreed with the fix. a keeps it.
+- In every case, own is your own fix, only when every fix given is flawed.
+- TOO LONG: the problem runs over {words} words or more than one sentence.
+  Shorten it to one sentence.
+
+Reply with one block per item, in the order given, and nothing else:
+
+=== <item id>
+ruling: uphold | drop
+severity: Major | Minor | Nitpick
+fix: <the letters of the fixes to show, your pick first, such as a or b,a> | own
+reason: <at most 12 words, readable without the fix letters, since the author may
+  see only the fix you keep. When the fixes do the same thing, the word same.>
+problem: <the problem, one sentence of at most {words} words, or the word same>
+---
+<only when fix is own: your fix, an inline diff in the same form as the others>
+
+For an item that is not DISPUTED, ruling is uphold. Severity: Major, a claim of
+the draft fails or is unsupported until this is fixed. Minor, the claims stand
+without the fix. Nitpick, wording, style, or a typo.
+
+<draft>
+{draft}
+</draft>
+{focus}
+<items>
+{items}
+</items>
+"""
+
+MED_BLOCK = re.compile(r"^\s*=+\s*\[?(M\d+)\]?\s*=*\s*$", re.M)
+
+
+def parse_mediation(text):
+    """{item id: {ruling, severity, fix: [labels], reason, problem, own}} from a mediator reply."""
+    out = {}
+    parts = MED_BLOCK.split(text or "")
+    for mid, block in zip(parts[1::2], parts[2::2]):
+        head, _, own = block.partition("\n---")
+        r = {"ruling": "uphold", "severity": "", "fix": [], "reason": "", "problem": "", "own": strip_end(own)}
+        for line in head.strip().splitlines():
+            k, _, v = line.partition(":")
+            k, v = k.strip().lower().strip("*- "), v.strip()
+            if k == "ruling":
+                r["ruling"] = "drop" if "drop" in v.lower() else "uphold"
+            elif k == "severity":
+                r["severity"] = next((s for s in SEVERITIES if s.lower() in v.lower()), "")
+            elif k == "fix":
+                r["fix"] = re.findall(r"\b([a-h])\b", v.lower())
+                r["own_fix"] = bool(re.search(r"\bown\b", v, re.I))
+            elif k in ("reason", "problem"):
+                r[k] = v
+        out[mid.upper()] = r
+    return out
+
+
+def mediation_items(groups):
+    """The groups the mediator settles, each with its item id."""
+    todo = [g for g in groups if g.get("disputed") or g.get("fix_issue") or g.get("long")]
+    return [(f"M{i}", g) for i, g in enumerate(sorted(todo, key=lambda g: g["pos"]), 1)]
+
+
+def mediation_prompt(items, shown, focus, ok):
+    anon = {m: f"Reviewer {i}" for i, m in enumerate(ok, 1)}
+    blocks = []
+    for mid, g in items:
+        what = [w for w, on in (("DISPUTED", g.get("disputed")), ("FIXES DIFFER", g.get("fix_issue") == "differ"),
+                                ("FIX REJECTED", g.get("fix_issue") == "rejected"), ("TOO LONG", g.get("long"))) if on]
+        lines = [f"[{mid}] {', '.join(what)} ({canon_sev(g['severity'])}) {g['rep']['title']}",
+                 f"quote: {g['rep']['quote'] or '(whole draft)'}", f"problem: {g['rep']['problem']}"]
+        for a in g.get("alts") or []:
+            lines.append(f"Fix {a['label']} (from {anon.get(a['by'], 'a reviewer')}):\n{a['fix']}")
+        for m, v in g["votes"].items():
+            lines.append(f"{anon.get(m, 'Another reviewer')} voted problem {v['vote']}"
+                         + (f", fix {v['fix']}" if v.get("fix") else "") + f": {v['reason']}")
+        blocks.append("\n".join(lines))
+    return MEDIATE.format(words=MAX_PROBLEM_WORDS, draft=shown, items="\n\n".join(blocks),
+                          focus=f"\n<author_focus>\n{focus}\n</author_focus>\n" if focus else "")
+
+
+def apply_mediation(items, rulings, mediator):
+    """Apply the mediator's rulings to its groups. A group with no ruling keeps
+    its state, and Disputed shows it without one."""
+    for mid, g in items:
+        r = rulings.get(mid)
+        if not r:
+            continue
+        g["ruling"] = {"by": mediator, "reason": r["reason"], "ruling": r["ruling"]}
+        if g.get("disputed") and r["ruling"] == "drop":
+            g["rejected"], g["dropped"] = True, r["reason"]
+            continue
+        if r["severity"] and g.get("disputed"):
+            g["severity"] = r["severity"]
+        alts = {a["label"]: a for a in g.get("alts") or []}
+        # "own" is the mediator's fix. An older reply used "c", which is the
+        # mediator's only when no reviewer's fix has that letter.
+        own = r.get("own_fix") or ("c" in r["fix"] and "c" not in alts)
+        if own and r["own"] and diff_parts("x\n\n" + r["own"])[0] is not None:  # diff_parts skips a first paragraph
+            chosen = [{"by": mediator, "fix": r["own"], "unreviewed": True}]
+        else:
+            chosen = [alts[x] for x in dict.fromkeys(r["fix"]) if x in alts] or list(alts.values())[:1]
+        if g.get("fix_issue") == "differ" and len(chosen) == 1 and not chosen[0].get("unreviewed"):
+            g["kept"] = True  # fixes differed, and one was kept
+        # Each fix keeps the letter the mediator saw, so its reason and --item 3b
+        # name the same fix. The mediator's pick comes first, and Accept applies it.
+        g["alts"] = [{**a, "label": a.get("label") or "c"} for a in chosen]
+        p = r["problem"]
+        if p and p.lower().strip(". ") != "same" and word_count(p) <= MAX_PROBLEM_WORDS + 5:
+            g["rep"]["problem"] = p
+        if g["alts"]:
+            g["rep"]["fix"] = g["alts"][0]["fix"]
+        g["rep"]["body"] = "\n\n".join(x for x in (g["rep"]["problem"], g["rep"]["fix"]) if x)
+
+
+def mediate(groups, shown, focus, ok, outdir, workdir):
+    """Ask the mediator to settle disputed findings, differing fixes, and long
+    problems. MEDIATOR goes first. If it is logged out or fails, a reviewer
+    mediates instead. Returns the number of items it was given."""
+    items = mediation_items(groups)
+    if not items:
+        return 0
+    rulings, pending = {}, list(items)
+    first = panelist(MEDIATOR)
+    for i, m in enumerate([first] + [r for r in ok if r != first]):
+        if m == first and not available(m):
+            fail("preflight", m, f"{PANELISTS[m][0]} CLI not found")
+            continue
+        if m == first and not preflight([m]):
+            continue  # logged out: hand it to a reviewer without a wasted call
+        runtime.log(f"3/4 mediate {len(pending)} finding{'' if len(pending) == 1 else 's'}: {label(m)}")
+        got = {}
+        for attempt in (1, 2):
+            text = call(m, mediation_prompt(pending, shown, focus, ok),
+                        outdir / ("mediation.txt" if i == 0 else f"mediation-{i + 1}.txt"), workdir, stage="mediate")
+            got = {k: v for k, v in (parse_mediation(text) if text else {}).items() if k in dict(pending)}
+            if got or text is None:
+                break
+            if attempt == 2:
+                fail("mediate", m, "reply had no rulings in the expected format, after one retry")
+        apply_mediation(pending, got, m)
+        rulings.update(got)
+        # Items this mediator skipped go to the next one, so each gets a ruling.
+        pending = [(mid, g) for mid, g in pending if mid not in got]
+        if got and pending:
+            runtime.log(f"  {label(m)} left {len(pending)} unruled, passing them on")
+        if not pending:
+            break
+    for mid, g in items:
+        if mid not in rulings and g.get("disputed"):
+            g["ruling"] = None
+    return len(items)
+
+
+def ruling_line(g, labels):
+    """The line under a finding that says how the panel and the mediator settled it."""
+    name = lambda m: short(m) if m in PANELISTS and ":" not in m else labels.get(m, short(m))
+    out = []
+    if g.get("disputed"):
+        out += [f"{name(m)} voted {v['vote']}: {v['reason'].rstrip('.')}." for m, v in g["votes"].items()
+                if v["vote"] != "agree"]
+        r = g.get("ruling")
+        out.append(f"{name(r['by'])} upholds it: {r['reason'].rstrip('.')}." if r and r.get("reason")
+                   else "No ruling: the mediator did not answer.")
+        alts = g.get("alts") or []
+        if r and alts and alts[0].get("unreviewed"):
+            out.append(f"The fix is {name(r['by'])}'s own, not reviewed by the panel.")
+        elif r and len(alts) > 1:
+            out.append(f"{name(r['by'])} prefers Fix {alts[0]['label']}.")
+    elif g.get("fix_issue"):
+        r = g.get("ruling") or {}
+        why = f": {r['reason'].rstrip('.')}." if r.get("reason") else "."
+        who = name(r["by"]) if r.get("by") else "The mediator"
+        alts = g.get("alts") or []
+        if alts and alts[0].get("unreviewed"):
+            out.append(f"The reviewers' fixes were flawed. {who} wrote this one, not reviewed by the panel{why}")
+        elif len(alts) > 1:
+            out.append(f"The fixes differ. {who} prefers Fix {alts[0]['label']}{why}" if r else "The fixes differ. No ruling.")
+        elif g.get("fix_issue") == "differ":
+            if alts and r.get("reason", "").lower().strip(". ") != "same":  # same effect: nothing to say
+                out.append(f"The fixes differed. {who} kept {name(alts[0]['by'])}'s{why}")
+        else:
+            dis = [f"{name(m)} disagreed with the fix" for m, v in g["votes"].items() if v.get("fix") == "disagree"]
+            out.append((dis[0] if dis else "A reviewer disagreed with the fix") + (f". {who} keeps it{why}" if r else "."))
+    return f"*{' '.join(x for x in out if x)}*" if any(out) else ""
+
+
+def finding_md(g, labels):
+    """A finding's text: its problem, its fix or fixes, and how it was settled."""
+    rep = g["rep"]
+    alts = g.get("alts")
+    if alts is None:  # a run from before the problem and fix were split
+        return strip_end(rep["body"])
+    parts = [problem_of(rep)]
+    if len(alts) > 1 or (alts and alts[0].get("unreviewed")):
+        for a in alts:
+            who = "the mediator's, not reviewed by the panel" if a.get("unreviewed") else f"from {short(a['by'])}"
+            parts.append(f"**Fix {a['label']}** ({who}):\n\n{a['fix']}")
+    elif fix_of(rep):
+        parts.append(fix_of(rep))
+    parts.append(ruling_line(g, labels))
+    return "\n\n".join(p for p in parts if p)
+
 
 
 def majority_kind(voted, raised):
@@ -2022,7 +2337,7 @@ def typo_change(old, new):
 def is_typo(g):
     """A finding in the draft whose diff only fixes a typo, and that no voter
     other than the one that raised it disagreed with."""
-    if g.get("where") != "draft":
+    if g.get("where") != "draft" or g.get("disputed") or g.get("fix_issue"):
         return False
     if any(v["vote"] == "disagree" for m, v in g.get("votes", {}).items() if m != g.get("self_voter")):
         return False
@@ -2048,9 +2363,9 @@ def ordered_findings(r):
             spot, label = (2, g.get("fpos", 0)), "Focus or supporting material"
         sev = "Typo" if is_typo(g) else canon_sev(g["severity"])
         # Findings added later by a review of an edit go last, so earlier numbers stay put.
-        logic = g.get("kind") == "logic" and sev != "Typo"  # logic flaws come first, by severity
-        key = ((len(ORDER), g["added"]) + spot if g.get("added")
-               else (-1, ORDER.index(sev)) + spot if logic else (ORDER.index(sev), 0) + spot)
+        logic = g.get("kind") == "logic" and sev != "Typo" and not g.get("disputed")  # logic flaws first, by severity
+        key = ((2, len(ORDER), g["added"]) + spot if g.get("added")
+               else (int(bool(g.get("disputed"))),) + ((-1, ORDER.index(sev)) + spot if logic else (ORDER.index(sev), 0) + spot))
         out.append((key, sev, label, g))
     out.sort(key=lambda x: x[0])
     return [(n, sev, label, g) for n, (_, sev, label, g) in enumerate(out, 1)]
@@ -2218,33 +2533,51 @@ def render(outdir):
     if r.get("since_last") is not None:
         parts.append(since_block(r))
     # Nitpicks, typos, and the script's checks are one list, after the other findings.
-    current, nits = None, []
+    # Disputed findings follow the main review, in the same order and groups.
+    current, nits, disp, dnits = None, [], [], []
     for n, sev, where_label, g in ordered_findings(r):
-        group = "Logic" if g.get("kind") == "logic" and sev != "Typo" else sev
+        d = bool(g.get("disputed"))
+        group = "Logic" if g.get("kind") == "logic" and sev != "Typo" and not d else sev
         if sev in ("Nitpick", "Typo"):  # one item: where it is, and the change, or the point when it has no diff
-            paras = [p.strip() for p in strip_end(g["rep"]["body"]).split("\n\n") if p.strip()]
-            diff = " ".join(p for p in paras if "~~" in p or "🟢" in p) or " ".join(paras[:1])
+            paras = [p.strip() for p in finding_md(g, labels).split("\n\n") if p.strip()]
+            diff = " ".join(p for p in paras if "~~" in p or "🟢" in p or p.startswith("**Fix")) or " ".join(paras[:1])
+            if g.get("alts") is not None and (rl := ruling_line(g, labels)):
+                diff += " " + rl
             loc = locate(g["rep"]["quote"], r["files"]) if g["rep"]["quote"].strip() and g["where"] != "focus" else None
             at = ", ".join(x for x in (where_label if where_label not in [Path(f).name for f in r["files"]] else "",
                                        f"{loc[2]} {loc[1]}" if loc else "") if x)  # a draft with no headings: just the line
-            nits.append(f"- **{n}.** {g['rep']['title']}{f' (*{at}*)' if at else ''}: {diff}"
-                        f"{' (typo)' if sev == 'Typo' else ''}".replace("\n", " "))
+            (dnits if d else nits).append(f"- **{n}.** {g['rep']['title']}{f' (*{at}*)' if at else ''}: {diff}"
+                                          f"{' (typo)' if sev == 'Typo' else ''}".replace("\n", " "))
             continue
-        if group != current:
-            current = group
-            parts.append({"Logic": "## Logical flaws"}.get(group, f"## {group}"))
+        out = disp if d else parts
+        if (d, group) != current:
+            current = (d, group)
+            out.append(f"## Disputed: {group}" if d else {"Logic": "## Logical flaws"}.get(group, f"## {group}"))
         # Escape headings inside a reviewer's diff so they do not become sections here.
-        body = re.sub(r"^(\s*(?:🟢\s*)?(?:\*\*)?)#", r"\1\\#", strip_end(g["rep"]["body"]), flags=re.M)
+        body = re.sub(r"^(\s*(?:🟢\s*)?(?:\*\*)?)#", r"\1\\#", finding_md(g, labels), flags=re.M)
         tag = ((f" ({sev})" if group == "Logic" else f" ({g['kind']})" if g.get("kind") else "")
                + (" (question)" if g.get("form") == "question" else "")
                + (" (contested)" if g.get("contested") else "")
                )
-        parts.append(f"### {n}. {g['rep']['title']}{tag} {marks(g, voters)}".rstrip() + "\n\n"
-                     f"{quoted(g, r['files'], where_label)}{body}")
+        out.append(f"### {n}. {g['rep']['title']}{tag} {marks(g, voters)}".rstrip() + "\n\n"
+                   f"{quoted(g, r['files'], where_label)}{body}")
     nits += [f"- **{c['id']}.** {c['what']} (*line {c['line']}*), found by the script" for c in r.get("checks") or []]
     if nits:
         parts.append("## Nitpicks\n\nWording-level fixes: the panel's nitpicks, typos no voter disputed, and checks "
                      "the script ran without a model.\n\n" + "\n".join(nits))
+    if disp or dnits:
+        who = labels.get(r.get("mediator") or "")
+        parts.append("*Below: findings the reviewers split on. "
+                     + (f"{who} broke the tie.*" if who else "No mediator ruled on them.*"))
+        parts += disp
+        if dnits:
+            parts.append("## Disputed: Nitpicks\n\n" + "\n".join(dnits))
+    dropped = sorted((g for g in r["groups"] if g.get("dropped")), key=lambda g: g["pos"])
+    if dropped:
+        who = labels.get(r.get("mediator") or "", "The mediator")
+        parts.append(f"## Dropped by {who}\n\nThe reviewers split on these, and the tie-break went against them.\n\n"
+                     + "\n".join(f"- {g['rep']['title']}: {g['dropped'].rstrip('.')}." for g in dropped))
+    rejected = [g for g in rejected if not g.get("dropped")]
     held = [g for g in r["groups"] if g.get("declined") and not g["rejected"]]
     if held:
         parts.append("## Previously declined\n\nHeld back because you declined the same point before. "
@@ -2321,10 +2654,15 @@ def show_items(spec, run):
                     print(f"- {short(m)}: {row[0]}. {row[2]} {row[1] if row[1].startswith('http') else ''}")
             print()
             continue
-        if not item.isdigit() or int(item) not in found:
+        im = re.fullmatch(r"(\d+)([A-H]?)", item)
+        if not im or int(im.group(1)) not in found:
             print(f"== {item}: not found (findings are numbered 1-{len(found)})\n")
             continue
-        sec, g = found[int(item)]
+        sec, g = found[int(im.group(1))]
+        alt = next((a for a in g.get("alts") or [] if a["label"].upper() == im.group(2)), None)
+        if im.group(2) and not alt:
+            print(f"== {item}: finding {im.group(1)} has no Fix {im.group(2).lower()}\n")
+            continue
         loc = locate(g["rep"]["quote"], r["files"]) if g["rep"]["quote"] else None
         print(f"== Finding {item}: {g['rep']['title']} ({canon_sev(g['severity'])})")
         print(f"Section: {sec}")
@@ -2336,7 +2674,10 @@ def show_items(spec, run):
         if d:
             print(f"Already decided: {d['decision']} ({d['id']}, {d.get('date', '')})"
                   + (f". Note: {d['note']}" if d.get("note") else ""))
-        print(f"\n{g['rep']['body']}\n")
+        if alt:  # one fix of several: this is the one to apply
+            print(f"\n{problem_of(g['rep'])}\n\nFix {alt['label']} (apply this one):\n\n{alt['fix']}\n")
+        else:
+            print(f"\n{finding_md(g, r['labels'])}\n")
     # The current text, so whoever acts on these items judges them against it.
     for f in r["files"]:
         p = Path(f)
@@ -2368,7 +2709,8 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         runtime.log(f"carrying {len(prev)} open findings from the last review")
     prompt = review_prompt(shown, focus, rules, decided + open_block(prev), ctx_block)
     (outdir / "prompt.md").write_text(prompt)
-    runtime.log(f"1/3 review (no web): {', '.join(panel)}")
+    steps = 4 if len(panel) >= 2 else 3  # two or more reviewers add a mediation step
+    runtime.log(f"1/{steps} review (no web): {', '.join(panel)}")
 
     def review(m):
         t = time.time()
@@ -2413,7 +2755,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
             flat.append({**f, "id": f"{letters[m]}{i}", "pos": position(dnorm, f["quote"])})
     flat.sort(key=lambda f: (f["pos"], f["id"]))
     fmt = lambda f: f"[{f['id']}] ({f['severity']}{', question' if f.get('form') == 'question' else ''}) {f['title']}\nquote: {f['quote'] or '(none)'}\n{f['body']}"
-    runtime.log(f"2/3 vote on {len(flat)} findings: {', '.join(ok)}")
+    runtime.log(f"2/{steps} vote on {len(flat)} findings: {', '.join(ok)}")
 
     def vote(m):
         """A model votes only on other models' findings. Its own are listed for
@@ -2462,6 +2804,9 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     voters = [m for m in panel if m in votes]
 
     groups = [score_group(g, votes, voters, owner) for g in group_findings(flat, votes)]
+    two = len(ok) >= 2 and bool(flat)  # two or more reviewers: agreed or disputed, and a mediator
+    if two:
+        two_lab(groups, flat, votes, owner, ok)
     material = focus + "\n" + ctx_text  # findings may quote the focus or the supporting material
     fnorm = norm(material)
     for g in groups:
@@ -2476,8 +2821,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
                         and norm(d["quote"]) == norm(g["rep"]["quote"])), None)
         if hit:
             g["declined"] = {"id": hit, "title": ids[hit]["title"]}
-    mech, since = [], carry_over(groups, prev, dnorm)
-    since = since if earlier else None
+    mech = []
     if len(files) == 1 and not is_pdf(files[0]):
         text = files[0].read_text()
         mech = checks(text, files[0], DECK)
@@ -2487,10 +2831,20 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
                 why = churn(g, text, history)
                 if why:
                     g["held"] = why
+    n_med = 0
+    open_groups = [g for g in groups if not g.get("declined") and not g.get("held")]
+    if two:  # mediate() checks the mediator's login only when something needs settling
+        t = time.time()
+        n_med = mediate([g for g in groups if not g.get("declined") and not g.get("held")],
+                        shown, focus, ok, outdir, workdir)
+        if n_med:
+            timings["mediate"] = round(time.time() - t, 1)
+    since = carry_over(groups, prev, dnorm)  # after the mediator, so a finding it dropped is not carried
+    since = since if earlier else None
     n_rej = sum(g["rejected"] for g in groups)
     n_dec = sum(bool(g.get("declined")) for g in groups)
     n_held = sum(bool(g.get("held")) for g in groups)
-    runtime.log(f"3/3 render: {len(flat)} findings in {len(groups)} groups, {n_rej} rejected by vote"
+    runtime.log(f"{steps}/{steps} render: {len(flat)} findings in {len(groups)} groups, {n_rej} rejected by vote"
         + (f", {n_dec} held back as previously declined" if n_dec else "")
         + (f", {n_held} held back to stop churn" if n_held else ""))
 
@@ -2498,7 +2852,9 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         "files": [str(p) for p in files], "versions": versions, "context": ctx_names,
         "started": STARTED,
         "panel": panel, "reviewers_ok": ok, "voters": voters,
-        "labels": {m: label(m) for m in [*panel, *(f["model"] for f in FAILURES)] if m in PANELISTS}, "verify": verify,
+        "mediator": next((g["ruling"]["by"] for g in groups if g.get("ruling")), None),  # whoever ruled
+        "labels": {m: label(m) for m in [*panel, *(f["model"] for f in FAILURES), *([panelist(MEDIATOR)] if n_med else [])]
+                   if m in PANELISTS}, "verify": verify,
         "failures": FAILURES, "agreement": vote_agreement(flat, votes, owner),
         "anonymization": letters, "timings_s": timings, "headings": slide_headings(draft) if DECK else draft_headings(draft), "deck": DECK,
         "findings": flat, "votes": votes, "groups": groups, "checks": mech, "since_last": since}, indent=1, ensure_ascii=False) + "\n")
@@ -2506,6 +2862,297 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     LAST_RUN.parent.mkdir(parents=True, exist_ok=True)
     LAST_RUN.write_text(str(outdir))
     return outdir / "unified.md"
+
+# ---------------------------------------------------------------- notes file
+# notes/review.md, in the draft's own folder, is the review the author reads.
+# The script writes it on the first review and updates it in place after that:
+# a finding raised again keeps its id, its body, and any notes added under it,
+# with its line number refreshed. An item whose change is in the draft is
+# removed and recorded as applied. One declined is removed. One not raised
+# again, with its passage unchanged, stays and is marked. A new finding takes
+# the next free id in its set. Only "## About this review" is rewritten. An
+# item whose heading was edited out of the "### A1. Title" form is left as it is.
+
+NOTE_SETS = {"A": "Major", "B": "Minor", "C": "Nitpicks", "X": "Disputed"}
+NOTE_HEAD = re.compile(r"^### ([ABCX])(\d+)\.\s")
+NOT_RAISED = "*Not raised this round.*"
+ABOUT = "About this review"
+
+
+def notes_map_file():
+    return RUNS_DIR / "notes-ids.json"
+
+
+def notes_path(draft):
+    """notes/review.md in the draft's folder, or notes/review-<name>.md when
+    review.md there belongs to another draft. A file keeps its name once it exists."""
+    src = Path(original_of(draft) or draft)
+    folder = src.parent / "notes"
+    own, plain = folder / f"review-{src.stem}.md", folder / "review.md"
+    if own.exists():
+        return own
+    if plain.exists():
+        m = re.match(r"#\s+Review of (.+?)\s*$", plain.read_text().partition("\n")[0])
+        if m and m.group(1).strip() != src.name:
+            return own
+    return plain
+
+
+def note_set(g, sev):
+    return "X" if g.get("disputed") else {"Major": "A", "Minor": "B"}.get(sev, "C")
+
+
+def note_order(g, sev):
+    """Sort key within a set: whole-draft findings first, then draft order. Disputed go by severity first."""
+    spot = (0, 0) if g["where"] == "overview" else (1, g["pos"])
+    rank = ORDER.index(sev) if sev in ORDER else 1
+    return [rank, *spot] if g.get("disputed") else [*spot]
+
+
+def note_place(g, files, text, deck):
+    """(heading prefix, location line) for a finding as the file stands now."""
+    q = g["rep"]["quote"]
+    loc = locate(q, files) if q.strip() and g["where"] != "focus" else None
+    sec = g.get("section") or ""
+    if g["where"] == "overview":
+        return "", "*Whole draft*"
+    if g["where"] == "focus":
+        return "", "*Focus or supporting material*"
+    if not loc:
+        return "", f"*{sec + ' · ' if sec else ''}quoted text not found in the file*"
+    at = f"{loc[0].name}, {loc[2]} {loc[1]}"
+    if deck and loc[2] == "line":
+        off = sum(len(l) + 1 for l in text.splitlines()[:loc[1] - 1])
+        n = sum(a <= off for a, *_ in slides(text))
+        return f"Slide {n} (line {loc[1]}): ", f"*{sec + ' · ' if sec else ''}slide {n}, {at}*"
+    return "", f"*{sec + ' · ' if sec and sec != loc[0].name else ''}{at}*"
+
+
+def note_item(nid, g, sev, labels, voters, files, text, deck):
+    head, where_line = note_place(g, files, text, deck)
+    tag = (f" ({g['kind']})" if g.get("kind") else "") + (" (question)" if g.get("form") == "question" else "")
+    if g.get("disputed"):
+        tag = f" ({sev})" + tag
+    body = re.sub(r"^(\s*(?:🟢\s*)?(?:\*\*)?)#", r"\1\\#", finding_md(g, labels), flags=re.M)
+    return (f"### {nid}. {head}{g['rep']['title']}{tag} {marks(g, voters)}".rstrip()
+            + f"\n{where_line}\n\n{body}\n\n")
+
+
+def split_notes(text):
+    """The notes file as chunks: [kind, id, text]. kind is pre (the title), h2,
+    item (a "### A1." heading), or other (a ### heading in another form)."""
+    chunks, cur = [], ["pre", None, ""]
+    for line in text.splitlines(keepends=True):
+        if line.startswith("## ") or line.startswith("### "):
+            chunks.append(cur)
+            m = NOTE_HEAD.match(line)
+            cur = (["h2", line[3:].strip(), ""] if line.startswith("## ")
+                   else ["item", m.group(1) + m.group(2), ""] if m else ["other", line.strip(), ""])
+        cur[2] += line
+    chunks.append(cur)
+    return [c for c in chunks if c[2] or c[0] != "pre"]
+
+
+def note_resolved(entry, text):
+    """True when an item's change is in the draft: its struck text is gone, or its added text is there."""
+    old, new = diff_parts("x\n\n" + (entry.get("fix") or ""))
+    if old is None:
+        return False
+    t = norm(text)
+    return (norm(old) not in t) or (norm(new) != norm(old) and norm(new) in t and norm(new) not in norm(old))
+
+
+def match_score(entry, g):
+    """How surely a notes item is this finding: 3 same carry-over key, 2 same
+    title and the quotes do not conflict, 1 overlapping quotes, 0 not it. A title
+    alone is not enough: two findings may both be called "Missing citation"."""
+    if entry.get("key") and entry["key"] == g.get("key"):
+        return 3
+    a, b = entry.get("quote") or "", g["rep"]["quote"] or ""
+    overlap = bool(a and b and quote_overlap(a, b))
+    if norm(entry.get("title", "")) == norm(g["rep"]["title"]) and (overlap or not a or not b):
+        return 2
+    return 1 if overlap else 0
+
+
+def same_finding(entry, g):
+    return match_score(entry, g) > 0
+
+
+
+def write_notes(draft, run, source=None):
+    """Write or update the notes file for one reviewed draft. Returns its path.
+    source is the file the user named (a PDF or Word file the draft was converted
+    from), whose folder holds the notes."""
+    r = json.loads((run / "results.json").read_text())
+    draft = Path(draft)
+    path = notes_path(Path(source) if source else draft)
+    files, labels, voters, deck = r["files"], r["labels"], r["voters"], r.get("deck", False)
+    text = doc_text(draft) if draft.exists() else ""
+    store_file = notes_map_file()
+    store = json.loads(store_file.read_text()) if store_file.exists() else {}
+    old_text = path.read_text() if path.exists() else ""
+    mine = store.get(str(path), {}) if old_text else {}
+    entries, nxt = mine.get("items", {}), dict(mine.get("next", {}))
+    chunks = split_notes(old_text) if old_text else [["pre", None, f"# Review of {Path(source or original_of(draft) or draft).name}\n\n"]]
+    present = {c[1] for c in chunks if c[0] == "item"}
+    m = re.search(r"^- Next free ids: (.+?)\.?$", old_text, re.M)
+    for s, k in re.findall(r"\b([ABCX])(\d+)\b", m.group(1) if m else ""):
+        nxt[s] = max(nxt.get(s, 1), int(k))
+    for nid in present:  # ids are never reused, even ones the map does not know
+        s, k = nid[0], int(nid[1:])
+        nxt[s] = max(nxt.get(s, 1), k + 1)
+    found = [(n, sev, lab, g) for n, sev, lab, g in ordered_findings(r)]
+    for n, sev, lab, g in found:
+        g["section"] = lab if lab not in ("Whole draft", "Focus or supporting material") else ""
+    unmatched = list(found)
+    closed, not_raised, bad = [], [], [c[1] for c in chunks if c[0] == "other"]
+    decisions = load_decisions()
+
+    def item_of(nid):
+        return next(c for c in chunks if c[0] == "item" and c[1] == nid)
+
+    dropped = [g for g in r["groups"] if g.get("dropped")]
+    ids = [c[1] for c in chunks if c[0] == "item"]
+    for nid in ids:
+        if nid not in entries:
+            # No record of this item (the map was lost, or someone else wrote it):
+            # adopt it only when its heading carries the title of exactly one current finding.
+            head = re.sub(r"^### [ABCX]\d+\.\s+(?:Slide \d+ \(line \d+\): )?", "", item_of(nid)[2].partition("\n")[0])
+            hits = [x for x in unmatched if head.startswith(x[3]["rep"]["title"])]
+            if len(hits) == 1:
+                entries[nid] = {"title": hits[0][3]["rep"]["title"], "quote": hits[0][3]["rep"]["quote"]}
+    # Match items to findings all at once, surest pairs first, so an item never takes
+    # a finding that is a better match for another. An item whose change is in the
+    # draft matches only by key or title, not by a quote it shares with another finding.
+    pairs = []
+    for nid in ids:
+        e = entries.get(nid)
+        if e is None:
+            continue
+        floor = 2 if note_resolved(e, text) else 1
+        pairs += [(s, ids.index(nid), nid, i) for i, x in enumerate(unmatched)
+                  if (s := match_score(e, x[3])) >= floor]
+    assign, taken = {}, set()
+    for s, _, nid, i in sorted(pairs, key=lambda p: (-p[0], p[1], p[3])):
+        if nid not in assign and i not in taken:
+            assign[nid] = unmatched[i]
+            taken.add(i)
+    for x in assign.values():
+        unmatched.remove(x)
+    # Items already in the file.
+    for nid in ids:
+        e = entries.get(nid)
+        c = item_of(nid)
+        if e is None:
+            continue  # an item the script did not write: leave it
+        hit = assign.get(nid)
+        if hit:
+            n, sev, lab, g = hit
+            head, where_line = note_place(g, files, text, deck)
+            lines = c[2].split("\n")
+            if len(lines) > 1 and lines[1].startswith("*") and lines[1].endswith("*"):
+                lines[1] = where_line
+            if head:
+                lines[0] = re.sub(r"Slide \d+ \(line \d+\): ", head, lines[0])
+            c[2] = "\n".join(l for l in lines if l != NOT_RAISED)
+            e.update(key=g.get("key"), run=str(run), n=n, title=g["rep"]["title"], quote=g["rep"]["quote"],
+                     fix=fix_of(g["rep"]) if g.get("alts") is None else (g["alts"][0]["fix"] if g["alts"] else ""),
+                     order=note_order(g, sev))
+            continue
+        if any(same_finding(e, g) for g in dropped):  # raised again, and the mediator dropped it
+            chunks.remove(c)
+            closed.append(f"{nid} (dropped by the mediator)")
+            e["closed"] = "dropped"
+            continue
+        declined = any(d.get("decision") == "ignore" and d.get("run") == Path(e.get("run", "")).name
+                       and d["title"] == e.get("title") for ds in decisions.values() for d in ds)
+        if declined or note_resolved(e, text):
+            chunks.remove(c)
+            closed.append(f"{nid} ({'declined' if declined else 'applied'})")
+            e["closed"] = "declined" if declined else "applied"
+            if not declined and Path(e.get("run", "")).exists() and not decision_for(Path(e["run"]).name, e["title"]):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    record_decisions(str(e["n"]), "applied", "the notes file found the change in the draft", Path(e["run"]))
+            continue
+        if NOT_RAISED not in c[2]:
+            lines = c[2].split("\n")
+            at = 2 if len(lines) > 1 and lines[1].startswith("*") else 1
+            c[2] = "\n".join(lines[:at] + [NOT_RAISED] + lines[at:])
+        not_raised.append(nid)
+    # Items the user deleted from the file stay deleted, even when raised again.
+    gone = {nid: e for nid, e in entries.items() if nid not in present and not e.get("closed")}
+    for nid, e in gone.items():
+        e["closed"] = e.get("closed") or "removed by hand"
+    for x in list(unmatched):
+        if any(same_finding(e, x[3]) for e in entries.values() if e.get("closed") == "removed by hand"):
+            unmatched.remove(x)
+
+    # New findings: the next free id in their set, placed by severity and draft order,
+    # so a new file's ids read in order down the page.
+    unmatched.sort(key=lambda x: ("ABCX".index(note_set(x[3], x[1])), note_order(x[3], x[1])))
+    for n, sev, lab, g in unmatched:
+        s = note_set(g, sev)
+        k = nxt.get(s, 1)
+        nxt[s] = k + 1
+        nid = f"{s}{k}"
+        order = note_order(g, sev)
+        entries[nid] = {"key": g.get("key"), "run": str(run), "n": n, "title": g["rep"]["title"],
+                        "quote": g["rep"]["quote"], "order": order,
+                        "fix": fix_of(g["rep"]) if g.get("alts") is None else (g["alts"][0]["fix"] if g["alts"] else "")}
+        chunk = ["item", nid, note_item(nid, g, sev, labels, voters, files, text, deck)]
+        h = next((i for i, c in enumerate(chunks) if c[0] == "h2" and c[1].lower() == NOTE_SETS[s].lower()), None)
+        if h is None:  # a new section, in set order, before About this review
+            later = [i for i, c in enumerate(chunks) if c[0] == "h2" and (
+                c[1] == ABOUT or any(c[1].lower() == NOTE_SETS[t].lower() for t in "ABCX" if t > s))]
+            h = later[0] if later else len(chunks)
+            chunks.insert(h, ["h2", NOTE_SETS[s], f"## {NOTE_SETS[s]}\n\n"])
+        end = next((i for i in range(h + 1, len(chunks)) if chunks[i][0] == "h2"), len(chunks))
+        at = next((i for i in range(h + 1, end) if chunks[i][0] == "item"
+                   and (entries.get(chunks[i][1]) or {}).get("order", [float("inf")]) > order), end)
+        chunks.insert(at, chunk)
+
+    # Drop sections left with no items, then rewrite About this review.
+    keep = []
+    for i, c in enumerate(chunks):
+        if c[0] == "h2" and c[1] == ABOUT:
+            break
+        if c[0] == "h2" and c[1] in NOTE_SETS.values() and not c[2].strip("\n").partition("\n")[2].strip():
+            end = next((j for j in range(i + 1, len(chunks)) if chunks[j][0] == "h2"), len(chunks))
+            if not any(chunks[j][0] in ("item", "other") for j in range(i + 1, end)):
+                continue
+        keep.append(c)
+    body = "".join(c[2] if c[2].endswith("\n\n") else c[2].rstrip("\n") + "\n\n" for c in keep)
+    open_ids = [c[1] for c in keep if c[0] == "item"]
+    count = lambda s: sum(i.startswith(s) for i in open_ids)
+    counts = ", ".join(f"{count(s)} {NOTE_SETS[s] if s != 'C' else 'Nitpick'}" for s in "ABCX" if count(s))
+    who = " and ".join(labels.get(m, m) for m in r["reviewers_ok"])
+    med = labels.get(r.get("mediator") or "")
+    about = [f"- Open items: {counts or 'none'}.",
+             f"- Line numbers refer to {draft.name} as of {time.strftime('%Y-%m-%d %H:%M')}.",
+             f"- Review run: `{run}`. Reviewed by {who}" + (f", ties broken by {med}." if med else "."),
+             "- Ids: A Major, B Minor, C Nitpick, X disputed (the reviewers split, and the mediator ruled). "
+             "Ids stay fixed and are never reused. Fix a and Fix b under one item are alternatives: apply one.",
+             "- Next free ids: " + ", ".join(f"{s}{nxt.get(s, 1)}" for s in "ABCX") + ".",
+             *([f"- Not raised this round, passage unchanged: {', '.join(not_raised)}."] if not_raised else []),
+             *([f"- Closed this round: {', '.join(closed)}."] if closed else []),
+             *([f"- Dropped by {med or 'the mediator'} (the reviewers split): " + ", ".join(
+                 f"{g['rep']['title']} ({g['dropped'].rstrip('.')})" for g in r["groups"] if g.get("dropped")) + "."]
+               if any(g.get("dropped") for g in r["groups"]) else []),
+             *([f"- Left as written, heading not in the \"### A1. Title\" form: {', '.join(bad)}."] if bad else []),
+             *([f"- The script's mechanical checks ({len(r['checks'])}) are in unified.md."] if r.get("checks") else []),
+             *([f"- {not_assessed(r)}"] if not_assessed(r) else []),
+             *(["- " + line.strip("*") for line in participation(r.get("failures"), [], lambda ms: ", ".join(
+                 labels.get(m, m) for m in ms), "")])]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(path, body.rstrip("\n") + f"\n\n## {ABOUT}\n\n" + "\n".join(about) + "\n")
+    store[str(path)] = {"items": entries, "next": nxt}
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    write_atomic(store_file, json.dumps(store, indent=1, ensure_ascii=False) + "\n")
+    for b in bad:
+        runtime.log(f"notes: left as written, heading not in the \"### A1. Title\" form: {b}")
+    return path
+
 
 
 # ---------------------------------------------------------------- background
@@ -2634,8 +3281,8 @@ def auto_applies(f):
     or it is Major or Minor and a majority agreed. Contested, whole-draft, and
     question findings, findings with a blank to fill, and findings whose text is
     no longer in the file are left to the author."""
-    if (f.get("status") or f["form"] == "question" or f["where"] == "overview" or f["tag"] == "Contested"
-            or not f["applicable"] or f["slot"]):
+    if (f.get("status") or f["form"] == "question" or f["where"] == "overview"
+            or f["tag"] in ("Contested", "Disputed", "Fixes differ") or not f["applicable"] or f["slot"]):
         return False
     return f["tag"] == "Unanimous" or (f["severity"] in ("Major", "Minor") and f["tag"] in ("Majority", "Solo"))
 
@@ -2679,7 +3326,7 @@ def iterate(path, rounds, panel, review=review_once):
                 record_decisions(",".join(str(f["n"]) for f in left), "ignore", "auto-loop: skipped", run)
         done.append({"round": i, "version": version, "run": str(run), "applied": [[f["n"], f["title"]] for f in applied], "skipped": len(left),
                      "attention": [[f["n"], f["title"]] for f in left if f["severity"] in ("Major", "Minor")
-                                   and (f["tag"] == "Contested" or f["where"] == "overview")]})
+                                   and (f["tag"] in ("Contested", "Disputed", "Fixes differ") or f["where"] == "overview")]})
         runtime.log(f"iterate: round {i} applied {len(applied)}, skipped {len(left)}")
         if not applied:
             break
@@ -3002,8 +3649,12 @@ def carry_over(groups, prev, dnorm):
     left = list(prev)
     for g in groups:
         t, q = norm(g["rep"]["title"]), g["rep"]["quote"]
-        hit = next((p for p in left if norm(p["title"]) == t), None) or next(
-            (p for p in left if q and p["quote"] and quote_overlap(q, p["quote"])), None)
+        # Same title and overlapping quotes first, then same title where a quote is
+        # missing, then overlapping quotes. Two findings may share a generic title.
+        both = lambda p: bool(q and p["quote"] and quote_overlap(q, p["quote"]))
+        hit = (next((p for p in left if norm(p["title"]) == t and both(p)), None)
+               or next((p for p in left if norm(p["title"]) == t and not (q and p["quote"])), None)
+               or next((p for p in left if both(p)), None))
         if hit:
             left.remove(hit)
             g["key"], g["seen"] = hit["key"], hit["seen"] + 1
@@ -3373,7 +4024,13 @@ def vote_tag(g):
     unanimous, not unvoted."""
     if g.get("solo"):
         return "Solo"
+    if g.get("disputed"):
+        return "Disputed"
+    if g.get("fix_issue"):
+        return "Fixes differ"
     vs = [v["vote"] for m, v in g["votes"].items() if m != g.get("self_voter")]
+    if "disputed" in g:  # sorted by two_lab: in the main review, so a majority stands behind it
+        return "Unanimous" if all(v == "agree" for v in vs) else "Majority"
     vs += ["agree" for m in g.get("raised_by", []) if m != g.get("self_voter") and m not in g["votes"]]
     agree = sum(v == "agree" for v in vs)
     if vs and agree == len(vs):
@@ -3462,6 +4119,9 @@ def page_state(path, run):
         out.append({
             "n": n, "severity": sev, "kind": g.get("kind", ""), "form": g.get("form", "edit"), "section": where_label, "title": rep["title"], "where": g["where"],
             "point": strip_end(rep["body"]).split("\n\n")[0], "body": strip_end(rep["body"]), "quote": rep["quote"],
+            # Accept applies the first fix. The others, and how the mediator ruled, are shown under it.
+            "disputed": bool(g.get("disputed")), "alts": [{**a, "by": labels.get(a["by"], short(a["by"]))} for a in g.get("alts") or []],
+            "ruling": ruling_line(g, labels).strip("*") if g.get("alts") is not None else "",
             "old": old, "new": new if old is not None else None, "reason": reason,
             "span": list(span or quote_span or []) or None, "editable": span is not None,
             "applicable": span is not None, "slot": bool(span) and has_slot(new or ""),
@@ -4135,7 +4795,7 @@ def recommend(path, run, store, keys, about, question, stem):
         save({"status": "failed", "reason": str(e)})
 
 
-DEFAULT_PANEL = ["gpt"]
+DEFAULT_PANEL = ["gpt", "argon"]  # one model from each of two labs, with MEDIATOR breaking ties
 LABS = [("Anthropic", r"claude"), ("OpenAI", r"gpt|o\d|codex"), ("Google", r"gemini|gemma"),
         ("xAI", r"grok|cursor-grok"), ("Moonshot", r"kimi"), ("Z.ai", r"glm"), ("DeepSeek", r"deepseek"),
         ("Alibaba", r"qwen"), ("Meta", r"muse|llama"), ("Cursor", r"composer|auto")]
@@ -4632,9 +5292,10 @@ def job_progress(uid, lines, running):
     for line in lines:
         if line.endswith(": converting to Markdown"):
             stage("convert", "Convert to Markdown")
-        elif m := re.match(r"([123])/3 (review|vote|render)\b(.*)", line):
+        elif m := re.match(r"([1-4])/[34] (review|vote|mediate|render)\b(.*)", line):
             names = [n.strip() for n in m[3].rsplit(":", 1)[-1].split(",")] if m[2] != "render" else []
-            stage(m[2], {"review": "Review", "vote": "Vote on each other's findings", "render": "Merge"}[m[2]], names)
+            stage(m[2], {"review": "Review", "vote": "Vote on each other's findings", "mediate": "Break ties",
+                         "render": "Merge"}[m[2]], names)
         elif stages and (m := re.match(r"\s+(\S+) stands in (?:to vote )?for", line)):
             stages[-1]["models"].append({"name": m[1], "state": "running", "note": "standing in"})
         elif stages and (m := re.match(r"\s+(\S+): (\w+) (done|failed|attempt 1 failed)(.*)", line)):
@@ -5157,6 +5818,7 @@ def main():
             sys.exit(f"error: no such file: {f}")
         files.append(p)
     workdir = files[0].parent
+    named = list(files)  # the files as the user gave them, before any conversion
     # A PDF is converted to Markdown and the Markdown is reviewed, so findings
     # cite lines and the review page can apply them. A Word file always is.
     files = [to_markdown(p) if is_docx(p) else p for p in files]
@@ -5216,10 +5878,19 @@ def main():
     unified = foreground(files, draft, panel, a.focus, rules, outdir, workdir, a.verify, versions, context, shown)
     runtime.log(f"review done in {round(time.time() - t)} s." + (
         " Fact-check still running; factcheck.md opens when it finishes." if a.verify else ""))
-    # The review opens as unified.md. The page opens only when asked for
+    # The review opens as the notes file (unified.md for several files). The page opens only when asked for
     # (unified-review --page FILE). A Re-review from the page sets NO_PAGE.
+    notes = None
+    if len(files) == 1:
+        try:
+            notes = write_notes(files[0], unified.parent, named[0])
+            runtime.log(f"notes: {notes}")
+        except Exception as e:  # the review stands without the notes file
+            runtime.log(f"notes: could not write the notes file ({e})")
     if not os.environ.get("UNIFIED_REVIEW_NO_PAGE"):
-        open_file(unified)
+        open_file(notes or unified)
+    if notes:
+        print(f"Notes: {notes}")
     print(unified)
 
 
