@@ -80,8 +80,8 @@ without a ruling, and the review says so.
 The script groups duplicates and writes `unified.md` in the run folder and the
 notes file (below) in the draft's folder:
 findings grouped by severity (Major, Minor, Nitpick), each group in
-draft order with its section, file, and line, then Disputed, then a short list
-of findings not reported. There is no cap on findings. When the file was reviewed before,
+draft order with its section, file, and line, then Disputed, then a one-line
+list of findings the mediator dropped. There is no cap on findings. When the file was reviewed before,
 `unified.md` opens with a "Since the last review" section: three counts and
 their finding numbers, resolved (an earlier finding whose passage changed and
 that no panelist raised again, numbered as in the last review), persisting,
@@ -294,9 +294,9 @@ so follow them when the user asks you to iterate.
 3. Apply a finding only if it is in the review's main list (not Disputed,
    not rejected) and either:
    - every voter agreed on its problem and its fix, or
-   - with three or more reviewers, it is Major or Minor and a majority of
-     voters agreed (more ✓ than half the votes, ~ counting as not agreeing),
-     and no voter rejected its fix.
+   - with three or more reviewers, it is Major or Minor, it is in the main
+     review (so a majority of reviewers stood behind its problem), and no
+     voter rejected its fix.
    Skip everything else, and always skip disputed findings, findings whose
    fixes differ (even when the mediator picked one), contested findings,
    whole-draft findings, question findings, and findings whose quoted text is

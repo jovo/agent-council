@@ -2171,7 +2171,7 @@ class ReviewPage(unittest.TestCase):
 DRAFT2 = "# Intro\n\nThe sky is green today.\n\nGrass grows slowly.\n\nWater is dry.\n"
 
 
-def two_lab_review(d, replies, votes, mediation=None, draft_text=DRAFT2, fails=(), panel=("gpt", "argon")):
+def two_lab_review(d, replies, votes, mediation=None, draft_text=DRAFT2, fails=(), panel=("gpt", "argon"), missing=()):
     """Run foreground with two reviewers and a scripted mediator. replies: {model: review text}.
     votes: {model: {title: "problem | fix"}}. mediation: {title: block lines} or None.
     Returns (run folder, prompts)."""
@@ -2205,7 +2205,7 @@ def two_lab_review(d, replies, votes, mediation=None, draft_text=DRAFT2, fails=(
     out = d / f"run-{d.name}-{len(list(d.glob('run*')))}"
     out.mkdir()
     ur.FAILURES.clear()
-    with mock.patch.object(ur, "call", fake_call), mock.patch.object(ur, "available", lambda m: True), \
+    with mock.patch.object(ur, "call", fake_call), mock.patch.object(ur, "available", lambda m: m not in missing), \
          mock.patch.object(ur, "LAST_RUN", d / "last-run"), mock.patch.object(ur.runtime, "log", lambda *a: None):
         ur.foreground([f], f"===== memo.md =====\n{f.read_text()}", list(panel), "", "rules", out, d, False, [])
     return out, prompts
@@ -2454,6 +2454,51 @@ class TwoLab(unittest.TestCase):
         self.assertIn("TOO LONG", prompts["mediate"][ur.MEDIATOR])
         self.assertEqual(self.groups(out)[1]["Two sentences"]["rep"]["problem"], "Water is wet, so the claim fails.")
 
+    def test_a_deletion_only_fix_from_the_mediator_is_kept(self):
+        out, _ = two_lab_review(
+            self.d, {"gpt": WATER, "argon": GRASS}, {"argon": {"Water is not dry": "agree | disagree"}, "gpt": {}},
+            {"Water is not dry": "ruling: uphold\nfix: own\nreason: Cut the claim.\nproblem: same\n---\n~~Water is dry.~~"})
+        w = self.groups(out)[1]["Water is not dry"]
+        self.assertTrue(w["alts"][0]["unreviewed"])
+        self.assertEqual(w["alts"][0]["fix"], "~~Water is dry.~~")
+
+    def test_a_missing_mediator_cli_hands_off_to_a_reviewer(self):
+        out, prompts = two_lab_review(self.d, {"gpt": SKY(), "argon": GRASS},
+                                      {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}}, missing=(ur.MEDIATOR,))
+        r, g = self.groups(out)
+        self.assertNotIn(ur.MEDIATOR, prompts["mediate"])
+        self.assertIn(g["Sky color is wrong"]["ruling"]["by"], ("gpt", "argon"))
+        self.assertTrue(any(f["stage"] == "preflight" and f["model"] == ur.MEDIATOR for f in r["failures"]))
+
+    def test_a_disputed_finding_says_when_its_fix_is_the_mediators_own(self):
+        out, _ = two_lab_review(
+            self.d, {"gpt": SKY(), "argon": GRASS}, {"argon": {"Sky color is wrong": "partial | disagree"}, "gpt": {}},
+            {"Sky color is wrong": "ruling: uphold\nfix: own\nreason: Real.\nproblem: same\n---\n"
+                                   "The sky is ~~green~~ 🟢 **gray** today."})
+        self.assertIn("own, not reviewed by the panel", (out / "unified.md").read_text())
+
+    def test_a_disputed_one_word_fix_is_not_a_typo(self):
+        typo = finding_text("Typo", "Water is dry.", "Spelling.", "Water is ~~dry~~ 🟢 **dyr**.", "Nitpick")
+        out, _ = two_lab_review(self.d, {"gpt": typo, "argon": GRASS}, {"argon": {"Typo": "partial | agree"}, "gpt": {}})
+        g = self.groups(out)[1]["Typo"]
+        self.assertTrue(g["disputed"])
+        self.assertFalse(ur.is_typo(g))
+
+    def test_three_reviewer_main_review_findings_are_tagged_majority(self):
+        out, _ = two_lab_review(self.d, {"gpt": GRASS, "argon": WATER, "gemini": SKY()},
+                                {"argon": {"Grass speed unsupported": "agree | agree"},
+                                 "gemini": {"Grass speed unsupported": "partial | agree"}, "gpt": {}},
+                                panel=("gpt", "argon", "gemini"))
+        g = self.groups(out)[1]["Grass speed unsupported"]
+        self.assertFalse(g["disputed"])
+        self.assertEqual(ur.vote_tag(g), "Majority")
+
+    def test_applied_and_ignore_take_a_fix_letter(self):
+        out, _ = two_lab_review(self.d, {"gpt": SKY(), "argon": GRASS}, {"gpt": {}, "argon": {}})
+        with contextlib.redirect_stdout(io.StringIO()) as s:
+            ur.record_decisions("1b", "applied", "test", out)
+        self.assertIn("recorded as applied", s.getvalue())
+
     def test_iterate_skips_disputed_findings_and_differing_fixes(self):
         base = {"status": None, "form": "edit", "where": "draft", "applicable": True, "slot": False, "severity": "Minor"}
         self.assertTrue(ur.auto_applies({**base, "tag": "Unanimous"}))
@@ -2529,6 +2574,33 @@ class NotesFile(unittest.TestCase):
         t = path.read_text()
         self.assertIn("### B3. Grass speed unsupported", t)
         self.assertNotIn("### B1.", t)
+
+    def test_notes_for_a_converted_file_go_beside_the_file_the_user_named(self):
+        _, out = self.review({"gpt": SKY(), "argon": WATER})
+        src = self.d / "elsewhere" / "paper.docx"
+        src.parent.mkdir()
+        src.write_text("x")
+        with mock.patch.object(ur.runtime, "log", lambda *a: None):
+            path = ur.write_notes(self.d / "memo.md", out, src)
+        self.assertEqual(path, src.parent / "notes" / "review.md")
+        self.assertTrue(path.read_text().startswith("# Review of paper.docx\n"))
+
+    def test_an_applied_item_does_not_take_a_finding_on_the_same_sentence(self):
+        f = self.d / "memo.md"
+        f.write_text("# Intro\n\nThe sky is green today, and the clouds over the hills are purple.\n\nGrass grows slowly.\n")
+        s = "The sky is green today, and the clouds over the hills are purple."
+        color = finding_text("Sky color is wrong", s, "The sky is blue.", s.replace("~~", "").replace("green", "~~green~~ 🟢 **blue**"))
+        clouds = lambda q: finding_text("Clouds are not purple", q, "Clouds are white.", q.replace("purple", "~~purple~~ 🟢 **white**"))
+        self.review({"gpt": color, "argon": clouds(s)})
+        t = self.notes.read_text()
+        clouds_id = re.search(r"### (B\d)\. Clouds", t).group(1)
+        f.write_text(f.read_text().replace("green", "blue"))  # the author applies the color fix
+        path, _ = self.review({"gpt": GRASS, "argon": clouds(s.replace("green", "blue"))})
+        t = path.read_text()
+        self.assertNotIn("Sky color is wrong", t.split("## About")[0])
+        self.assertIn(f"### {clouds_id}. Clouds are not purple", t)
+        self.assertNotIn(ur.NOT_RAISED, t.split(f"### {clouds_id}.")[1].split("###")[0])
+        self.assertEqual(t.count("Clouds are not purple"), 1)
 
     def test_dropped_findings_are_listed_in_the_closing_section(self):
         path, _ = self.review({"gpt": SKY(), "argon": WATER}, {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}},

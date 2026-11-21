@@ -46,7 +46,7 @@ To review a PDF, or a file you want left unchanged, run `unified-review --upload
 
 A single model reviewing a draft misses things another model catches. A single model merging several reviews favors its own findings: LLM evaluators recognize their own outputs and rate them higher (Panickssery et al. 2024, [arXiv:2404.13076](https://arxiv.org/abs/2404.13076)). A panel of judges from different model families tracks human judgments more closely than one large judge and shows less intra-model bias (Verga et al. 2024, [arXiv:2404.18796](https://arxiv.org/abs/2404.18796)).
 
-So no single model decides. Each model reviews independently. Every model then votes on the other models' findings, never its own, with reviewers anonymized. The script, not a model, groups duplicates and reports a finding only when two models stand behind it. Andrej Karpathy's [llm-council](https://github.com/karpathy/llm-council) is a precursor.
+So no single model decides. Each model reviews independently. Every model then votes on the other models' findings, never its own, with reviewers anonymized. The script, not a model, groups duplicates and puts a finding in the main review only when a majority of the models stand behind its problem. A mediator rules on the rest, which are listed apart as disputed. Andrej Karpathy's [llm-council](https://github.com/karpathy/llm-council) is a precursor.
 
 That design follows the evidence above, but it has not been tested on its own output yet. No benchmark shows how many real errors the panel catches, or whether majority rejection sets aside real ones.
 
@@ -131,7 +131,7 @@ When the file was reviewed before, `unified.md` opens with **Since the last revi
 - **Checks** and **Typos**, as on the page.
 - **Previously declined:** new findings that match a point you declined.
 - **Held back to stop churn**, with the reason for each.
-- **Not reported**: findings no second model backed, one line each.
+- **Dropped by the mediator**: disputed findings the mediator dropped, one line each, with its reason.
 - **Agreement:** ordinal Krippendorff's alpha over the votes, with a bootstrap 95% confidence interval over findings, leaving out each model's votes on its own findings. Most votes are "agree", and that imbalance pulls alpha down even when raw agreement is high.
 
 After a review of one file, `notes/review.md` opens in Cursor or VS Code if you ran the command there, or in your default Markdown app. A review of several files opens `unified.md`, which every run also writes in its run folder. Inside the Claude or Codex app, the script prints `OPEN IN APP: <path>`. Set `UNIFIED_REVIEW_OPEN_APP` to always use one app. For one Markdown file, `unified-review --page FILE` opens the review page.

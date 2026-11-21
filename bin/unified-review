@@ -837,7 +837,8 @@ def _record_decisions(spec, decision, note, run):
         found = {n: g for n, _, _, g in ordered_findings(r)}
         vers = {v["path"]: v.get("number") for v in r.get("versions") or []}
         for item in [x.strip() for x in spec.split(",") if x.strip()]:
-            g = found.get(int(item)) if item.isdigit() else None
+            im = re.fullmatch(r"(\d+)[A-Ha-h]?", item)  # 3b, one fix of finding 3, records finding 3
+            g = found.get(int(im.group(1))) if im else None
             if not g:
                 print(f"{item}: not found (findings are numbered 1-{len(found)})")
                 continue
@@ -1213,7 +1214,7 @@ def apply_mediation(items, rulings, mediator):
         # "own" is the mediator's fix. An older reply used "c", which is the
         # mediator's only when no reviewer's fix has that letter.
         own = r.get("own_fix") or ("c" in r["fix"] and "c" not in alts)
-        if own and r["own"] and (diff_parts(r["own"])[0] is not None or "🟢" in r["own"]):
+        if own and r["own"] and diff_parts("x\n\n" + r["own"])[0] is not None:  # diff_parts skips a first paragraph
             chosen = [{"by": mediator, "fix": r["own"], "unreviewed": True}]
         else:
             chosen = [alts[x] for x in dict.fromkeys(r["fix"]) if x in alts] or list(alts.values())[:1]
@@ -1240,6 +1241,9 @@ def mediate(groups, shown, focus, ok, outdir, workdir):
     rulings, pending = {}, list(items)
     first = panelist(MEDIATOR)
     for i, m in enumerate([first] + [r for r in ok if r != first]):
+        if m == first and not available(m):
+            fail("preflight", m, f"{PANELISTS[m][0]} CLI not found")
+            continue
         if m == first and not preflight([m]):
             continue  # logged out: hand it to a reviewer without a wasted call
         runtime.log(f"3/4 mediate {len(pending)} finding{'' if len(pending) == 1 else 's'}: {label(m)}")
@@ -1276,13 +1280,18 @@ def ruling_line(g, labels):
         r = g.get("ruling")
         out.append(f"{name(r['by'])} upholds it: {r['reason'].rstrip('.')}." if r and r.get("reason")
                    else "No ruling: the mediator did not answer.")
+        alts = g.get("alts") or []
+        if r and alts and alts[0].get("unreviewed"):
+            out.append(f"The fix is {name(r['by'])}'s own, not reviewed by the panel.")
+        elif r and len(alts) > 1:
+            out.append(f"{name(r['by'])} prefers Fix {alts[0]['label']}.")
     elif g.get("fix_issue"):
         r = g.get("ruling") or {}
         why = f": {r['reason'].rstrip('.')}." if r.get("reason") else "."
         who = name(r["by"]) if r.get("by") else "The mediator"
         alts = g.get("alts") or []
         if alts and alts[0].get("unreviewed"):
-            out.append(f"Both reviewers' fixes were flawed. {who} wrote this one{why}")
+            out.append(f"The reviewers' fixes were flawed. {who} wrote this one, not reviewed by the panel{why}")
         elif len(alts) > 1:
             out.append(f"The fixes differ. {who} prefers Fix {alts[0]['label']}{why}" if r else "The fixes differ. No ruling.")
         elif g.get("fix_issue") == "differ":
@@ -2328,7 +2337,7 @@ def typo_change(old, new):
 def is_typo(g):
     """A finding in the draft whose diff only fixes a typo, and that no voter
     other than the one that raised it disagreed with."""
-    if g.get("where") != "draft":
+    if g.get("where") != "draft" or g.get("disputed") or g.get("fix_issue"):
         return False
     if any(v["vote"] == "disagree" for m, v in g.get("votes", {}).items() if m != g.get("self_voter")):
         return False
@@ -2970,18 +2979,14 @@ def same_finding(entry, g):
     return match_score(entry, g) > 0
 
 
-def best_match(entry, cands):
-    """The candidate (n, sev, label, group) that best matches a notes item, or None."""
-    scored = [(match_score(entry, x[3]), x) for x in cands]
-    top = max((s for s, _ in scored), default=0)
-    return next((x for s, x in scored if s == top), None) if top else None
 
-
-def write_notes(draft, run):
-    """Write or update the notes file for one reviewed draft. Returns its path."""
+def write_notes(draft, run, source=None):
+    """Write or update the notes file for one reviewed draft. Returns its path.
+    source is the file the user named (a PDF or Word file the draft was converted
+    from), whose folder holds the notes."""
     r = json.loads((run / "results.json").read_text())
     draft = Path(draft)
-    path = notes_path(draft)
+    path = notes_path(Path(source) if source else draft)
     files, labels, voters, deck = r["files"], r["labels"], r["voters"], r.get("deck", False)
     text = doc_text(draft) if draft.exists() else ""
     store_file = notes_map_file()
@@ -2989,7 +2994,7 @@ def write_notes(draft, run):
     old_text = path.read_text() if path.exists() else ""
     mine = store.get(str(path), {}) if old_text else {}
     entries, nxt = mine.get("items", {}), dict(mine.get("next", {}))
-    chunks = split_notes(old_text) if old_text else [["pre", None, f"# Review of {Path(original_of(draft) or draft).name}\n\n"]]
+    chunks = split_notes(old_text) if old_text else [["pre", None, f"# Review of {Path(source or original_of(draft) or draft).name}\n\n"]]
     present = {c[1] for c in chunks if c[0] == "item"}
     m = re.search(r"^- Next free ids: (.+?)\.?$", old_text, re.M)
     for s, k in re.findall(r"\b([ABCX])(\d+)\b", m.group(1) if m else ""):
@@ -3008,23 +3013,41 @@ def write_notes(draft, run):
         return next(c for c in chunks if c[0] == "item" and c[1] == nid)
 
     dropped = [g for g in r["groups"] if g.get("dropped")]
+    ids = [c[1] for c in chunks if c[0] == "item"]
+    for nid in ids:
+        if nid not in entries:
+            # No record of this item (the map was lost, or someone else wrote it):
+            # adopt it only when its heading carries the title of exactly one current finding.
+            head = re.sub(r"^### [ABCX]\d+\.\s+(?:Slide \d+ \(line \d+\): )?", "", item_of(nid)[2].partition("\n")[0])
+            hits = [x for x in unmatched if head.startswith(x[3]["rep"]["title"])]
+            if len(hits) == 1:
+                entries[nid] = {"title": hits[0][3]["rep"]["title"], "quote": hits[0][3]["rep"]["quote"]}
+    # Match items to findings all at once, surest pairs first, so an item never takes
+    # a finding that is a better match for another. An item whose change is in the
+    # draft matches only by key or title, not by a quote it shares with another finding.
+    pairs = []
+    for nid in ids:
+        e = entries.get(nid)
+        if e is None:
+            continue
+        floor = 2 if note_resolved(e, text) else 1
+        pairs += [(s, ids.index(nid), nid, i) for i, x in enumerate(unmatched)
+                  if (s := match_score(e, x[3])) >= floor]
+    assign, taken = {}, set()
+    for s, _, nid, i in sorted(pairs, key=lambda p: (-p[0], p[1], p[3])):
+        if nid not in assign and i not in taken:
+            assign[nid] = unmatched[i]
+            taken.add(i)
+    for x in assign.values():
+        unmatched.remove(x)
     # Items already in the file.
-    for nid in [c[1] for c in chunks if c[0] == "item"]:
+    for nid in ids:
         e = entries.get(nid)
         c = item_of(nid)
         if e is None:
-            # No record of this item (the map was lost, or someone else wrote it):
-            # adopt it only when its heading carries a current finding's title.
-            head = re.sub(r"^### [ABCX]\d+\.\s+(?:Slide \d+ \(line \d+\): )?", "", c[2].partition("\n")[0])
-            # Only a title that one current finding carries, so two alike are not confused.
-            hits = [x for x in unmatched if head.startswith(x[3]["rep"]["title"])]
-            x = hits[0] if len(hits) == 1 else None
-            if x is None:
-                continue  # an item the script did not write: leave it
-            e = entries[nid] = {"title": x[3]["rep"]["title"], "quote": x[3]["rep"]["quote"]}
-        hit = best_match(e, unmatched)
+            continue  # an item the script did not write: leave it
+        hit = assign.get(nid)
         if hit:
-            unmatched.remove(hit)
             n, sev, lab, g = hit
             head, where_line = note_place(g, files, text, deck)
             lines = c[2].split("\n")
@@ -4006,6 +4029,8 @@ def vote_tag(g):
     if g.get("fix_issue"):
         return "Fixes differ"
     vs = [v["vote"] for m, v in g["votes"].items() if m != g.get("self_voter")]
+    if "disputed" in g:  # sorted by two_lab: in the main review, so a majority stands behind it
+        return "Unanimous" if all(v == "agree" for v in vs) else "Majority"
     vs += ["agree" for m in g.get("raised_by", []) if m != g.get("self_voter") and m not in g["votes"]]
     agree = sum(v == "agree" for v in vs)
     if vs and agree == len(vs):
@@ -5793,6 +5818,7 @@ def main():
             sys.exit(f"error: no such file: {f}")
         files.append(p)
     workdir = files[0].parent
+    named = list(files)  # the files as the user gave them, before any conversion
     # A PDF is converted to Markdown and the Markdown is reviewed, so findings
     # cite lines and the review page can apply them. A Word file always is.
     files = [to_markdown(p) if is_docx(p) else p for p in files]
@@ -5857,7 +5883,7 @@ def main():
     notes = None
     if len(files) == 1:
         try:
-            notes = write_notes(files[0], unified.parent)
+            notes = write_notes(files[0], unified.parent, named[0])
             runtime.log(f"notes: {notes}")
         except Exception as e:  # the review stands without the notes file
             runtime.log(f"notes: could not write the notes file ({e})")
