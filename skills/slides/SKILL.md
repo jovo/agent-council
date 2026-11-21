@@ -60,7 +60,7 @@ Edit the theme there, not through a copy. A change to the theme changes every de
    reach for any other tag, stop and find the Markdown form, or ask.
 
 2. **`theme/base.css` is finished design. Keep it simple.** Every deck uses
-   it unchanged. It has three sizes, two fonts, one bold, three stack
+   it unchanged. It has three sizes, two fonts (plus monospace for inline code), one bold, three stack
    spacings, and four components (`cols`, `contrast`, `rows-2`, `flow`). When a new
    deck needs something, solve it in this order: existing Markdown form →
    existing component → change the content or the asset (crop the image,
@@ -212,9 +212,11 @@ expression is short.
 Math takes the size and colour of the text around it. Display equations are
 centred at body size. Inline math in an ordinary table or caption is small and grey
 like its text. Colour math with `\color` inside the LaTeX, because
-`***…***` does not reach it: `\color{#f6c343}{…}` for the accent and
-`\color{#f4f7fb}{…}` for white text in a grey table cell (in a deck with
-`class: invert`, `#2189db` and `#111923`). Inline math sets limits beside
+`***…***` does not reach it: `{\color{#f6c343}…}` for the accent and
+`{\color{#f4f7fb}…}` for white text in a grey table cell (in a deck with
+`class: invert`, `#2189db` and `#111923`). `\color` is a switch that colours
+everything after it in its group, so wrap the coloured part and the command
+together in braces, as shown. Inline math sets limits beside
 operators, which keeps a takeaway on one line. Start it with `\displaystyle`
 only when the limits must sit below.
 
@@ -228,10 +230,12 @@ Use ordinary prose for non-mathematical arrows or labels.
 Write an algorithm as Markdown with inline LaTeX, not as a LaTeX figure, so it
 is set at body size in the deck's fonts and can be edited in `deck.md`.
 
-- Steps are a numbered list. A loop's body is a numbered list nested inside
-  it, which the theme letters (a, b, c). Start each step with its role in
-  bold: `**learn:**`, `**infer:**`, `**act:**`, `**warm up:**`. Keep phases
-  as steps in one list, not as separate blocks.
+- Steps are a numbered list (`1.`, `2.`). A loop's body is a numbered list
+  indented under the loop step, also written `1.`, `2.`, which the theme
+  letters (a, b, c). Write a loop step as `**for** $t=1,2,\dots$ **do**` and
+  close it with `**end for**`. Start every other step with its role in bold:
+  `**learn:**`, `**infer:**`, `**act:**`, `**warm up:**`. Keep phases as steps
+  in one list, not as separate blocks.
 - Write the equation each step solves, not a verb for it:
   `$g_i=\arg\min_h\sum_{s\le t}(h(s,x_s)-c_s)^2$`, not "regress". Define a
   quantity on the line that first uses it ("with $c_s=-y_s$"). Give different
@@ -239,11 +243,11 @@ is set at body size in the deck's fonts and can be edited in `deck.md`.
 - Use only notation that earlier slides introduce. Leave out the algorithm's
   name, optimizer details (learning rates, minibatches, epochs), and symbols
   the talk never uses.
-- Comments are inline code, `` `# SL: same step, without s` ``, which the
+- Comments are inline code, `` `# SL: same step, without the time stamp` ``, which the
   theme draws in small grey monospace. Code cannot hold rendered math, so
   write comments in words.
 - Mark what differs from the baseline method in accent: `***word***` for
-  words, `{\color{#f6c343}…}` inside math.
+  words, `{\color{#f6c343}…}` inside math (`#2189db` with `class: invert`).
 
 ## Design schematic: contrasts
 
@@ -297,18 +301,20 @@ never set sizes:
 - body: 28px (body text; bold for `##`/`###` headings, claims, verdicts,
   takeaways; values in a `contrast` table)
 - small: 22px, always grey (labels, captions, ordinary tables, explanations, sources,
-  cover byline)
+  cover byline, inline code)
 
 Text uses one bold weight (`--bold`, 700), no uppercase or letter-spaced
 labels, and two font families from New Computer Modern, the same family as
 the PDF house style: New Computer Modern Sans Bold for headings (`#`, `##`, `###`),
 New Computer Modern Book for everything a viewer reads as text (body, bold phrases, verdicts,
-takeaways, labels, captions, tables, sources). These are the only treatments:
+takeaways, labels, captions, tables, sources), plus the system monospace for
+inline code. These are the only treatments:
 
 - title: white bold
 - body: white regular (including values in a `contrast` table), or white bold
 - small: grey bold (labels, captions, table headers; accent colour on the
-  right of a contrast) or grey regular (explanations, ordinary table cells, sources, byline)
+  right of a contrast), grey regular (explanations, ordinary table cells, sources, byline),
+  or grey monospace (inline code, such as pseudocode comments)
 - italic `*word*` and bold `**word**` in the colour of the surrounding text
 - highlighted words `***word***`: accent colour (yellow on dark, blue on
   light), bold, any size
@@ -336,7 +342,8 @@ and inspect every slide after changing shared typography.
   percent of the allotted time. One point per slide.
 - No more than two consecutive content slides without a figure or image.
 - A plain list carries at most three items. Longer parallel content goes in
-  `cols`.
+  `cols`. Pseudocode is exempt, since its steps are a sequence, not parallel
+  items.
 - End a talk with an acknowledgements slide that shows the people involved,
   with photos.
 - Titles and section dividers use sentence case: capitalize only the first
@@ -405,8 +412,8 @@ and inspect every slide after changing shared typography.
 ## Process
 
 - Before a pseudocode slide is done, check each line against the paper's
-  algorithm and its code: whether the method updates online or retrains from
-  scratch, how the loss is weighted, and any warm-up phase.
+  algorithm and its code, for example whether the method updates online or
+  retrains from scratch, how the loss is weighted, and any warm-up phase.
 - Speaker scripts (for example `companion.md`) change only when the user asks,
   even when slides are reordered or removed.
 - Do not build PDFs (or PNG exports) of a deck unless the user asks. The
