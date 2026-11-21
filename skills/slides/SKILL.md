@@ -223,6 +223,28 @@ Older decks keep equations as SVG files in `assets/equations/`, with the
 `dvisvgm --zoom=2.1`). Leave them as they are unless asked to convert a deck.
 Use ordinary prose for non-mathematical arrows or labels. 
 
+## Pseudocode
+
+Write an algorithm as Markdown with inline LaTeX, not as a LaTeX figure, so it
+is set at body size in the deck's fonts and can be edited in `deck.md`.
+
+- Steps are a numbered list. A loop's body is a numbered list nested inside
+  it, which the theme letters (a, b, c). Start each step with its role in
+  bold: `**learn:**`, `**infer:**`, `**act:**`, `**warm up:**`. Keep phases
+  as steps in one list, not as separate blocks.
+- Write the equation each step solves, not a verb for it:
+  `$g_i=\arg\min_h\sum_{s\le t}(h(s,x_s)-c_s)^2$`, not "regress". Define a
+  quantity on the line that first uses it ("with $c_s=-y_s$"). Give different
+  quantities different symbols.
+- Use only notation that earlier slides introduce. Leave out the algorithm's
+  name, optimizer details (learning rates, minibatches, epochs), and symbols
+  the talk never uses.
+- Comments are inline code, `` `# SL: same step, without s` ``, which the
+  theme draws in small grey monospace. Code cannot hold rendered math, so
+  write comments in words.
+- Mark what differs from the baseline method in accent: `***word***` for
+  words, `{\color{#f6c343}…}` inside math.
+
 ## Design schematic: contrasts
 
 Every slide that establishes a binary contrast uses `<div class="cols
@@ -382,6 +404,9 @@ and inspect every slide after changing shared typography.
 
 ## Process
 
+- Before a pseudocode slide is done, check each line against the paper's
+  algorithm and its code: whether the method updates online or retrains from
+  scratch, how the loss is weighted, and any warm-up phase.
 - Speaker scripts (for example `companion.md`) change only when the user asks,
   even when slides are reordered or removed.
 - Do not build PDFs (or PNG exports) of a deck unless the user asks. The
