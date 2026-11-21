@@ -260,7 +260,8 @@ FAILURES = []
 # Login failures, matched only in the end of the log: CLIs echo the prompt into
 # it, and a draft can say "authorized" or "log in" anywhere.
 AUTH_ERROR = re.compile(r"not logged in|logged out|please (?:log ?in|sign in)|log ?in required|"
-                        r"unauthori[sz]ed|invalid api key|authentication (?:failed|required)|\b401\b", re.I)
+                        r"unauthori[sz]ed|invalid api key|authentication (?:failed|required)|failed to authenticate|"
+                        r"session expired|\b401\b", re.I)
 
 
 def fail(stage, name, reason):
@@ -420,7 +421,9 @@ def call_once(name, prompt, out, workdir, web):
         return text, None
     stderr = err.read_text().strip()
     first = (stderr.splitlines() or [""])[0][:120]
-    if AUTH_ERROR.search("\n".join(stderr.splitlines()[-15:])):
+    # The claude CLI prints a failed login to stdout, not stderr.
+    if AUTH_ERROR.search("\n".join(stderr.splitlines()[-15:] + (text.splitlines()[-5:] if r.returncode else []))):
+        first = first or (text.strip().splitlines() or [""])[0][:120]
         return None, f"not logged in ({first})" if first else "not logged in"
     if r.returncode != 0:
         return None, f"exit code {r.returncode}" + (f": {first}" if first else "")
@@ -1111,7 +1114,8 @@ Reply with one block per item, in the order given, and nothing else:
 ruling: uphold | drop
 severity: Major | Minor | Nitpick
 fix: a | b | a,b | b,a | c
-reason: <at most 12 words>
+reason: <at most 12 words, readable without the fix letters, since the author may
+  see only the fix you keep. When the fixes do the same thing, the word same.>
 problem: <the problem, one sentence of at most {words} words, or the word same>
 ---
 <only when fix is c: your fix, an inline diff in the same form as the others>
@@ -1198,7 +1202,9 @@ def apply_mediation(items, rulings, mediator):
             chosen = [alts[x] for x in dict.fromkeys(r["fix"]) if x in alts] or list(alts.values())[:1]
         if g.get("fix_issue") == "differ" and len(chosen) == 1 and not chosen[0].get("unreviewed"):
             g["kept"] = True  # fixes differed, and one was kept
-        g["alts"] = [{**a, "label": "abcdefgh"[i]} for i, a in enumerate(chosen)]
+        # Each fix keeps the letter the mediator saw, so its reason and --item 3b
+        # name the same fix. The mediator's pick comes first, and Accept applies it.
+        g["alts"] = [{**a, "label": a.get("label") or "c"} for a in chosen]
         p = r["problem"]
         if p and p.lower().strip(". ") != "same" and word_count(p) <= MAX_PROBLEM_WORDS + 5:
             g["rep"]["problem"] = p
@@ -1247,9 +1253,10 @@ def ruling_line(g, labels):
         if alts and alts[0].get("unreviewed"):
             out.append(f"Both reviewers' fixes were flawed. {who} wrote this one{why}")
         elif len(alts) > 1:
-            out.append(f"The fixes differ. {who} prefers Fix a{why}" if r else "The fixes differ. No ruling.")
+            out.append(f"The fixes differ. {who} prefers Fix {alts[0]['label']}{why}" if r else "The fixes differ. No ruling.")
         elif g.get("fix_issue") == "differ":
-            out.append(f"The fixes differed. {who} kept {name(alts[0]['by'])}'s{why}" if alts else "")
+            if alts and r.get("reason", "").lower().strip(". ") != "same":  # same effect: nothing to say
+                out.append(f"The fixes differed. {who} kept {name(alts[0]['by'])}'s{why}")
         else:
             dis = [f"{name(m)} disagreed with the fix" for m, v in g["votes"].items() if v.get("fix") == "disagree"]
             out.append((dis[0] if dis else "A reviewer disagreed with the fix") + (f". {who} keeps it{why}" if r else "."))
@@ -2519,8 +2526,9 @@ def render(outdir):
         parts.append("## Nitpicks\n\nWording-level fixes: the panel's nitpicks, typos no voter disputed, and checks "
                      "the script ran without a model.\n\n" + "\n".join(nits))
     if disp or dnits:
-        who = labels.get(r.get("mediator") or "", "the mediator")
-        parts.append(f"*Below: findings the two reviewers split on. {who} broke the tie.*")
+        who = labels.get(r.get("mediator") or "")
+        parts.append("*Below: findings the two reviewers split on. "
+                     + (f"{who} broke the tie.*" if who else "No mediator ruled on them.*"))
         parts += disp
         if dnits:
             parts.append("## Disputed: Nitpicks\n\n" + "\n".join(dnits))
@@ -2662,6 +2670,8 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     prompt = review_prompt(shown, focus, rules, decided + open_block(prev), ctx_block)
     (outdir / "prompt.md").write_text(prompt)
     steps = 4 if len(panel) == 2 else 3  # two reviewers add a mediation step
+    # Check the mediator's login now, so a logged-out CLI fails fast, not after the review.
+    mediator_ok = steps == 4 and bool(preflight([panelist(MEDIATOR)]))
     runtime.log(f"1/{steps} review (no web): {', '.join(panel)}")
 
     def review(m):
@@ -2784,7 +2794,11 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
                 if why:
                     g["held"] = why
     n_med = 0
-    if two:
+    if two and not mediator_ok:
+        n_med = len(mediation_items([g for g in groups if not g.get("declined") and not g.get("held")]))
+        if n_med:
+            runtime.log(f"3/4 mediate skipped: {label(panelist(MEDIATOR))} is not logged in")
+    elif two:
         t = time.time()
         n_med = mediate([g for g in groups if not g.get("declined") and not g.get("held")],
                         shown, focus, ok, outdir, workdir)
@@ -2803,7 +2817,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         "files": [str(p) for p in files], "versions": versions, "context": ctx_names,
         "started": STARTED,
         "panel": panel, "reviewers_ok": ok, "voters": voters,
-        "mediator": panelist(MEDIATOR) if n_med else None,
+        "mediator": panelist(MEDIATOR) if any(g.get("ruling") for g in groups) else None,  # only when it ruled
         "labels": {m: label(m) for m in [*panel, *(f["model"] for f in FAILURES), *([panelist(MEDIATOR)] if n_med else [])]
                    if m in PANELISTS}, "verify": verify,
         "failures": FAILURES, "agreement": vote_agreement(flat, votes, owner),
@@ -2990,7 +3004,9 @@ def write_notes(draft, run):
         if any(same_finding(e, x[3]) for e in entries.values() if e.get("closed") == "removed by hand"):
             unmatched.remove(x)
 
-    # New findings: the next free id in their set, placed by severity and draft order.
+    # New findings: the next free id in their set, placed by severity and draft order,
+    # so a new file's ids read in order down the page.
+    unmatched.sort(key=lambda x: ("ABCX".index(note_set(x[3], x[1])), note_order(x[3], x[1])))
     for n, sev, lab, g in unmatched:
         s = note_set(g, sev)
         k = nxt.get(s, 1)
@@ -3035,6 +3051,9 @@ def write_notes(draft, run):
              "Ids stay fixed and are never reused. Fix a and Fix b under one item are alternatives: apply one.",
              *([f"- Not raised this round, passage unchanged: {', '.join(not_raised)}."] if not_raised else []),
              *([f"- Closed this round: {', '.join(closed)}."] if closed else []),
+             *([f"- Dropped by {med or 'the mediator'} (the reviewers split): " + ", ".join(
+                 f"{g['rep']['title']} ({g['dropped'].rstrip('.')})" for g in r["groups"] if g.get("dropped")) + "."]
+               if any(g.get("dropped") for g in r["groups"]) else []),
              *([f"- Left as written, heading not in the \"### A1. Title\" form: {', '.join(bad)}."] if bad else []),
              *([f"- The script's mechanical checks ({len(r['checks'])}) are in unified.md."] if r.get("checks") else []),
              *([f"- {not_assessed(r)}"] if not_assessed(r) else []),

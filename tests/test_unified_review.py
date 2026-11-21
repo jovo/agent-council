@@ -2298,23 +2298,32 @@ class TwoLab(unittest.TestCase):
         sky = g["Sky color is wrong"]
         self.assertFalse(sky["disputed"])
         self.assertEqual(sky["fix_issue"], "differ")
-        self.assertEqual([a["label"] for a in sky["alts"]], ["a", "b"])
+        self.assertEqual([a["label"] for a in sky["alts"]], ["b", "a"])  # letters as the mediator saw them, pick first
         was_b = re.search(r"^Fix b \(from [^)]*\):\n(.+)$", prompts["mediate"][ur.MEDIATOR], re.M).group(1)
-        self.assertEqual(sky["alts"][0]["fix"], was_b)  # the mediator's pick is now Fix a
-        self.assertIn(was_b, sky["rep"]["body"])  # and the one the page applies
+        self.assertEqual(sky["alts"][0]["fix"], was_b)
+        self.assertIn(was_b, sky["rep"]["body"])  # the pick is the one the page applies
         md = (out / "unified.md").read_text()
         self.assertIn("**Fix a** (from", md)
         self.assertIn("**Fix b** (from", md)
-        self.assertIn("prefers Fix a: Gray fits the storm.", md)
+        self.assertIn("prefers Fix b: Gray fits the storm.", md)
+        self.assertLess(md.index("**Fix b**"), md.index("**Fix a**"))
         with mock.patch.object(ur, "summary_state", lambda run: None):  # no background summary call
             st = ur.page_state(self.d / "memo.md", out)["findings"][0]
         self.assertEqual(st["tag"], "Fixes differ")
         self.assertEqual(len(st["alts"]), 2)
-        self.assertIn("prefers Fix a", st["ruling"])
+        self.assertIn("prefers Fix b", st["ruling"])
         with contextlib.redirect_stdout(io.StringIO()) as s:
-            ur.show_items("1b", out)
-        self.assertIn("Fix b (apply this one)", s.getvalue())
-        self.assertIn(sky["alts"][1]["fix"], s.getvalue().split("Fix b (apply this one)")[1].split("=====")[0])
+            ur.show_items("1a", out)
+        self.assertIn("Fix a (apply this one)", s.getvalue())
+        self.assertIn(sky["alts"][1]["fix"], s.getvalue().split("Fix a (apply this one)")[1].split("=====")[0])
+
+    def test_fixes_with_the_same_effect_keep_one_and_say_nothing(self):
+        out, _ = two_lab_review(
+            self.d, {"gpt": SKY(), "argon": SKY("The sky is ~~green~~ 🟢 **blue** today!")}, {"gpt": {}, "argon": {}},
+            {"Sky color is wrong": "ruling: uphold\nfix: a\nreason: same\nproblem: same"})
+        r, g = self.groups(out)
+        self.assertEqual(len(g["Sky color is wrong"]["alts"]), 1)
+        self.assertNotIn("The fixes differ", (out / "unified.md").read_text())
 
     def test_same_fix_from_both_is_one_fix(self):
         out, prompts = two_lab_review(self.d, {"gpt": SKY(), "argon": SKY()}, {"gpt": {}, "argon": {}})
@@ -2353,6 +2362,20 @@ class TwoLab(unittest.TestCase):
         self.assertFalse(g["Sky color is wrong"]["rejected"])
         self.assertIn("No ruling: the mediator did not answer.", (out / "unified.md").read_text())
         self.assertTrue(any(f["stage"] == "mediate" for f in r["failures"]))
+        self.assertIsNone(r["mediator"])  # it ruled on nothing, so the review does not name it
+
+    def test_a_logged_out_mediator_is_skipped_before_any_call(self):
+        with mock.patch.object(ur, "preflight", lambda ms: [m for m in ms if m != ur.MEDIATOR]):
+            out, prompts = two_lab_review(self.d, {"gpt": SKY(), "argon": GRASS},
+                                          {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}})
+        r, g = self.groups(out)
+        self.assertNotIn("mediate", prompts)
+        self.assertTrue(g["Sky color is wrong"]["disputed"])
+        self.assertIsNone(r["mediator"])
+        self.assertIn("No mediator ruled on them.", (out / "unified.md").read_text())
+
+    def test_a_login_error_on_stdout_reads_as_not_logged_in(self):
+        self.assertTrue(ur.AUTH_ERROR.search("Failed to authenticate: OAuth session expired and could not be refreshed"))
 
     def test_iterate_skips_disputed_findings_and_differing_fixes(self):
         base = {"status": None, "form": "edit", "where": "draft", "applicable": True, "slot": False, "severity": "Minor"}
@@ -2388,6 +2411,20 @@ class NotesFile(unittest.TestCase):
         self.assertLess(t.index("## Minor"), t.index("## Disputed"))
         self.assertLess(t.index("## Disputed"), t.index("## About this review"))
         self.assertIn("- Open items: 2 Minor, 1 Disputed.", t)
+        self.assertIn("ties broken by Claude Opus", t)  # the scripted mediator ruled on X1
+
+    def test_dropped_findings_are_listed_in_the_closing_section(self):
+        path, _ = self.review({"gpt": SKY(), "argon": WATER}, {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}},
+                              {"Sky color is wrong": "ruling: drop\nfix: a\nreason: The sky is green here.\nproblem: same"})
+        t = path.read_text()
+        self.assertNotIn("### B1. Sky", t)
+        self.assertIn("(the reviewers split): Sky color is wrong (The sky is green here).", t)
+
+    def test_new_ids_read_in_draft_order(self):
+        path, _ = self.review({"gpt": WATER + GRASS, "argon": SKY()})
+        t = path.read_text()
+        self.assertLess(t.index("B1. Sky"), t.index("B2. Grass"))
+        self.assertLess(t.index("B2. Grass"), t.index("B3. Water"))
 
     def test_rereview_keeps_annotations_refreshes_lines_and_closes_applied_items(self):
         self.review({"gpt": SKY(), "argon": WATER})
