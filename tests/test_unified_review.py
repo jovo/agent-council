@@ -2374,6 +2374,13 @@ class TwoLab(unittest.TestCase):
         self.assertIsNone(r["mediator"])
         self.assertIn("No mediator ruled on them.", (out / "unified.md").read_text())
 
+    def test_the_mediator_login_is_not_checked_when_nothing_needs_it(self):
+        checked = []
+        with mock.patch.object(ur, "preflight", lambda ms: checked.extend(ms) or ms):
+            out, _ = two_lab_review(self.d, {"gpt": SKY(), "argon": GRASS}, {"gpt": {}, "argon": {}})
+        self.assertNotIn(ur.MEDIATOR, checked)
+        self.assertFalse(json.loads((out / "results.json").read_text())["failures"])
+
     def test_a_login_error_on_stdout_reads_as_not_logged_in(self):
         self.assertTrue(ur.AUTH_ERROR.search("Failed to authenticate: OAuth session expired and could not be refreshed"))
 
@@ -2412,6 +2419,23 @@ class NotesFile(unittest.TestCase):
         self.assertLess(t.index("## Disputed"), t.index("## About this review"))
         self.assertIn("- Open items: 2 Minor, 1 Disputed.", t)
         self.assertIn("ties broken by Claude Opus", t)  # the scripted mediator ruled on X1
+
+    def test_an_open_item_the_mediator_drops_is_closed(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        path, _ = self.review({"gpt": SKY(), "argon": WATER}, {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}},
+                              {"Sky color is wrong": "ruling: drop\nfix: a\nreason: Green is right here.\nproblem: same"})
+        t = path.read_text()
+        self.assertNotIn("### B1.", t)
+        self.assertIn("B1 (dropped by the mediator)", t)
+
+    def test_a_lost_id_map_does_not_duplicate_items(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        ur.notes_map_file().unlink()
+        path, _ = self.review({"gpt": SKY(), "argon": WATER})
+        t = path.read_text()
+        self.assertEqual(t.count("Sky color is wrong"), 1)
+        self.assertEqual(t.count("Water is not dry"), 1)
+        self.assertNotIn("### B3.", t)
 
     def test_dropped_findings_are_listed_in_the_closing_section(self):
         path, _ = self.review({"gpt": SKY(), "argon": WATER}, {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}},

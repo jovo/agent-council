@@ -2670,8 +2670,6 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     prompt = review_prompt(shown, focus, rules, decided + open_block(prev), ctx_block)
     (outdir / "prompt.md").write_text(prompt)
     steps = 4 if len(panel) == 2 else 3  # two reviewers add a mediation step
-    # Check the mediator's login now, so a logged-out CLI fails fast, not after the review.
-    mediator_ok = steps == 4 and bool(preflight([panelist(MEDIATOR)]))
     runtime.log(f"1/{steps} review (no web): {', '.join(panel)}")
 
     def review(m):
@@ -2794,10 +2792,11 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
                 if why:
                     g["held"] = why
     n_med = 0
-    if two and not mediator_ok:
-        n_med = len(mediation_items([g for g in groups if not g.get("declined") and not g.get("held")]))
-        if n_med:
-            runtime.log(f"3/4 mediate skipped: {label(panelist(MEDIATOR))} is not logged in")
+    open_groups = [g for g in groups if not g.get("declined") and not g.get("held")]
+    # Check the mediator's login only when there is something to settle, so a
+    # review that needs no mediator does not report it as failed.
+    if two and mediation_items(open_groups) and not preflight([panelist(MEDIATOR)]):
+        runtime.log(f"3/4 mediate skipped: {label(panelist(MEDIATOR))} is not logged in")
     elif two:
         t = time.time()
         n_med = mediate([g for g in groups if not g.get("declined") and not g.get("held")],
@@ -2960,13 +2959,20 @@ def write_notes(draft, run):
     def item_of(nid):
         return next(c for c in chunks if c[0] == "item" and c[1] == nid)
 
+    dropped = [g for g in r["groups"] if g.get("dropped")]
     # Items already in the file.
     for nid in [c[1] for c in chunks if c[0] == "item"]:
         e = entries.get(nid)
-        if e is None:
-            continue  # an item the script did not write: leave it
-        hit = next((x for x in unmatched if same_finding(e, x[3])), None)
         c = item_of(nid)
+        if e is None:
+            # No record of this item (the map was lost, or someone else wrote it):
+            # adopt it only when its heading carries a current finding's title.
+            head = re.sub(r"^### [ABCX]\d+\.\s+(?:Slide \d+ \(line \d+\): )?", "", c[2].partition("\n")[0])
+            x = next((x for x in unmatched if head.startswith(x[3]["rep"]["title"])), None)
+            if x is None:
+                continue  # an item the script did not write: leave it
+            e = entries[nid] = {"title": x[3]["rep"]["title"], "quote": x[3]["rep"]["quote"]}
+        hit = next((x for x in unmatched if same_finding(e, x[3])), None)
         if hit:
             unmatched.remove(hit)
             n, sev, lab, g = hit
@@ -2980,6 +2986,11 @@ def write_notes(draft, run):
             e.update(key=g.get("key"), run=str(run), n=n, title=g["rep"]["title"], quote=g["rep"]["quote"],
                      fix=fix_of(g["rep"]) if g.get("alts") is None else (g["alts"][0]["fix"] if g["alts"] else ""),
                      order=note_order(g, sev))
+            continue
+        if any(same_finding(e, g) for g in dropped):  # raised again, and the mediator dropped it
+            chunks.remove(c)
+            closed.append(f"{nid} (dropped by the mediator)")
+            e["closed"] = "dropped"
             continue
         declined = any(d.get("decision") == "ignore" and d.get("run") == Path(e.get("run", "")).name
                        and d["title"] == e.get("title") for ds in decisions.values() for d in ds)
