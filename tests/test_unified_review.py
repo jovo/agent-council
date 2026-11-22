@@ -296,6 +296,7 @@ class Agreement(unittest.TestCase):
 class Calls(unittest.TestCase):
     def setUp(self):
         ur.FAILURES.clear()
+        ur.LEFT_OFF.clear()
         self.tmp = Path(tempfile.mkdtemp())
 
     def tearDown(self):
@@ -356,6 +357,7 @@ class Calls(unittest.TestCase):
                     ur.fail("preflight", m, "not logged in")
             return [m for m in ms if m not in logged_out]
         ur.FAILURES.clear()
+        ur.LEFT_OFF.clear()
         with mock.patch.object(ur, "available", lambda m: m not in missing), \
                 mock.patch.object(ur, "preflight", fake_preflight), mock.patch.object(ur.runtime, "log", lambda *a: None):
             return ur.choose_panel(panel), checked
@@ -372,6 +374,14 @@ class Calls(unittest.TestCase):
         self.assertNotIn("claude", checked)
         panel, _ = self.choose(["claude:opus", "gpt", "argon"])
         self.assertEqual(panel, ["gpt", "argon"])
+        self.assertEqual([x["model"] for x in ur.LEFT_OFF], ["claude:opus"])  # recorded for the review
+
+    def test_the_review_says_which_reviewers_were_left_off(self):
+        ur.LEFT_OFF.clear()
+        r = {"labels": {"claude": "Claude Sonnet"}, "left_off": [{"model": "claude", "mediator": "Claude Opus"}]}
+        self.assertEqual(ur.left_off_line(r), "Left off as a reviewer: Claude Sonnet. Claude Opus mediates, "
+                         "and a lab does not settle disputes over its own findings.")
+        self.assertEqual(ur.left_off_line({"labels": {}}), "")
 
     def test_two_models_in_all_are_refused(self):
         with self.assertRaises(SystemExit):
@@ -845,6 +855,7 @@ class Pipeline(unittest.TestCase):
             out.mkdir()
             draft = f"===== memo.md =====\n{draft_text}"
             ur.FAILURES.clear()
+            ur.LEFT_OFF.clear()
             for m in failed_before:
                 ur.FAILURES.append({"stage": "preflight", "model": m, "reason": "not logged in"})
             with mock.patch.object(ur, "call", fake_call), mock.patch.object(ur, "RUNS_DIR", d), \
@@ -2221,6 +2232,7 @@ def two_lab_review(d, replies, votes, mediation=None, draft_text=DRAFT2, fails=(
     out = d / f"run-{d.name}-{len(list(d.glob('run*')))}"
     out.mkdir()
     ur.FAILURES.clear()
+    ur.LEFT_OFF.clear()
     with mock.patch.object(ur, "call", fake_call), mock.patch.object(ur, "available", lambda m: m not in missing), \
          mock.patch.object(ur, "LAST_RUN", d / "last-run"), mock.patch.object(ur.runtime, "log", lambda *a: None):
         ur.foreground([f], f"===== memo.md =====\n{f.read_text()}", list(panel), "", "rules", out, d, False, [])

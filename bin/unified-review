@@ -261,6 +261,8 @@ def available(name):
 
 # Every failed panelist step, with its reason, for results.json and the reports.
 FAILURES = []
+# Requested reviewers left off because they share the mediator's lab: [{"model", "mediator"}].
+LEFT_OFF = []
 # Login failures, matched only in the end of the log: CLIs echo the prompt into
 # it, and a draft can say "authorized" or "log in" anywhere.
 AUTH_ERROR = re.compile(r"not logged in|logged out|please (?:log ?in|sign in)|log ?in required|"
@@ -467,6 +469,7 @@ def choose_panel(panel, factcheck_only=False):
             runtime.log(f"{', '.join(same)} left off the panel: {label(MEDIATOR)} mediates, "
                         "and a lab does not settle disputes over its own findings")
             panel = [m for m in panel if m not in same]
+            LEFT_OFF.extend({"model": m, "mediator": label(MEDIATOR)} for m in same)
         if len(panel) < 2:
             sys.exit(f"error: a review by more than one model needs two reviewers from labs other than "
                      f"the mediator's ({label(MEDIATOR)}), for three models in all. Pass one model to review alone.")
@@ -1314,6 +1317,16 @@ def mediate(groups, shown, focus, ok, outdir, workdir):
 
 
 SHORTEST = "The fixes differed and no mediator answered, so {who}'s, with the fewest changed words, is kept."
+
+
+def left_off_line(r):
+    """Which requested reviewers were left off, and why, or "" when none were."""
+    left = r.get("left_off") or []
+    if not left:
+        return ""
+    names = " and ".join(r["labels"].get(x["model"], x["model"]) for x in left)
+    return (f"Left off as {'a reviewer' if len(left) == 1 else 'reviewers'}: {names}. "
+            f"{left[0]['mediator']} mediates, and a lab does not settle disputes over its own findings.")
 
 
 def ruling_line(g, labels):
@@ -2578,6 +2591,8 @@ def render(outdir):
     else:
         parts += participation(r.get("failures"), [("reviewed", r["reviewers_ok"]), ("voted", voters)], names,
                                "Agreement, duplicate grouping, and rejection by vote mean little in this run.")
+    if left_off_line(r):
+        parts.append(f"*{left_off_line(r)}*")
     if r["verify"]:
         parts.append("*Fact-check running. Results go to factcheck.md.*")
     if r.get("since_last") is not None:
@@ -2907,8 +2922,9 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         "started": STARTED,
         "panel": panel, "reviewers_ok": ok, "voters": voters,
         "mediator": next((g["ruling"]["by"] for g in groups if g.get("ruling")), None),  # whoever ruled
-        "labels": {m: label(m) for m in [*panel, *(f["model"] for f in FAILURES), *([panelist(MEDIATOR)] if n_med else [])]
-                   if m in PANELISTS}, "verify": verify,
+        "labels": {m: label(m) for m in [*panel, *(f["model"] for f in FAILURES), *([panelist(MEDIATOR)] if n_med else []),
+                                         *(x["model"] for x in LEFT_OFF)]
+                   if m in PANELISTS}, "verify": verify, "left_off": LEFT_OFF,
         "failures": FAILURES, "agreement": vote_agreement(flat, votes, owner),
         "anonymization": letters, "timings_s": timings, "headings": slide_headings(draft) if DECK else draft_headings(draft), "deck": DECK,
         "findings": flat, "votes": votes, "groups": groups, "checks": mech, "since_last": since}, indent=1, ensure_ascii=False) + "\n")
@@ -3196,6 +3212,7 @@ def write_notes(draft, run, source=None):
              *([f"- Left as written, heading not in the \"### A1. Title\" form: {', '.join(bad)}."] if bad else []),
              *([f"- The script's mechanical checks ({len(r['checks'])}) are in unified.md."] if r.get("checks") else []),
              *([f"- {not_assessed(r)}"] if not_assessed(r) else []),
+             *([f"- {left_off_line(r)}"] if left_off_line(r) else []),
              *(["- " + line.strip("*") for line in participation(r.get("failures"), [], lambda ms: ", ".join(
                  labels.get(m, m) for m in ms), "")])]
     path.parent.mkdir(parents=True, exist_ok=True)

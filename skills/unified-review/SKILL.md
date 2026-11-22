@@ -53,7 +53,8 @@ reviews with one model alone, with no vote and no mediator. Two or more
 reviewers always get the mediator as one more model, so a review never starts on
 two models. A Claude reviewer is left off such a panel, since Claude mediates:
 `-p claude,gpt,gemini` reviews with GPT and Gemini, and `-p claude,gpt` is
-refused. If a reviewer on a mediated panel fails, Grok 4.7 Low Fast stands in.
+refused. The review's header and the notes file's closing section name each
+model left off. Pass that line on when you report the review. If a reviewer on a mediated panel fails, Grok 4.7 Low Fast stands in.
 One model alone gets Claude Sonnet, then Grok. Pass `-p` only when the user names a model or a panel. Pass `--verify` only when the user asks for a
 fact-check or claim verification.
 
