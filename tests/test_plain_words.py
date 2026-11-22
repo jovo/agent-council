@@ -127,6 +127,48 @@ class PlainWordsTest(unittest.TestCase):
         self.assertEqual(missing, ["oxford-3000-us.txt", "xkcd-simplewriter.js"])
         self.assertIn("abandon", words)
 
+    def counts(self, text):
+        return [(n, c) for n, c, _ in self.pw.sentences(text)]
+
+    def test_sentences_split_and_count_words(self):
+        text = "One two three. Four five!\nSix seven, eight? \"Nine ten,\" she said."
+        self.assertEqual(self.counts(text), [(1, 3), (1, 2), (2, 3), (2, 4)])
+
+    def test_abbreviations_and_initials_do_not_end_sentences(self):
+        text = "See e.g. the fit in Fig. 2 by Dr. Smith. R. Jacob wrote it, et al. agree."
+        self.assertEqual(self.counts(text), [(1, 10), (1, 7)])
+
+    def test_sentence_wrapped_over_lines_keeps_its_first_line(self):
+        text = "Intro.\n\nThis sentence starts here\nand ends on the next line. Short one."
+        self.assertEqual(self.counts(text), [(1, 1), (3, 10), (4, 2)])
+
+    def test_headings_labels_tables_quotes_and_markup_do_not_count(self):
+        text = ("# A long heading that is not a sentence at all\n\n**2. Subheading**\n\n"
+                "| a | table | row |\n\n> A quoted source sentence here.\n\n"
+                "Math $a + b = c$ and `code here` stay out [@Cohen80].\n")
+        self.assertEqual(self.counts(text), [(9, 6)])  # code and math are one word each
+
+    def test_sentence_that_starts_with_code_is_its_own_sentence(self):
+        text = "The repo has it. `install.sh`\nlinks it here."
+        self.assertEqual([s for _, _, s in self.pw.sentences(text)],
+                         ["The repo has it.", "`install.sh` links it here."])
+
+    def test_list_items_are_separate_and_bold_lead_ins_split(self):
+        text = "- **Lead in.** Then the rest\n  wraps here.\n- Next item with no period\n"
+        self.assertEqual(self.counts(text), [(1, 2), (1, 5), (3, 5)])
+
+    def test_sentences_command_reports_long_sentences_and_mean(self):
+        draft = Path(self.tmp.name) / "draft.md"
+        draft.write_text("Short one here. Word " + " ".join(["word"] * 29) + ".\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(self.pw.main(["sentences", str(draft)]), 1)
+        self.assertIn("2 sentences, mean 16.5 words (target 15 or fewer). 1 over 25 words.",
+                      out.getvalue())
+        self.assertIn("L1 (30 words): Word word", out.getvalue())
+        self.assertEqual(self.main(["sentences", str(draft), "--max", "30", "--mean", "17"]), 0)
+        self.assertEqual(self.main(["sentences", str(draft), "--max", "30"]), 1)  # mean too high
+
 
 if __name__ == "__main__":
     unittest.main()
