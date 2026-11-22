@@ -1,6 +1,6 @@
 ---
 name: plain-words
-description: Rewrite a draft so it uses only common English words. A checker flags every word outside a list of about 3,250 common headwords (NGSL 1.2 plus the American Oxford 3000 and a few everyday words), and you propose numbered replacement edits in the unified-review diff format. Use when the user asks to make a document plainer, simpler, or readable to a general or non-native audience, to use only common or the most frequent English words, to check a text against NGSL or the Oxford 3000, or to apply numbered plain-words edits.
+description: Rewrite a draft so it uses only common English words and short sentences. A checker flags every word outside a list of about 3,250 common headwords (NGSL 1.2 plus the American Oxford 3000 and a few everyday words) and every sentence over 25 words, and you propose numbered edits in the unified-review diff format. Use when the user asks to make a document plainer, simpler, shorter-sentenced, or readable to a general or non-native audience, to use only common or the most frequent English words, to check a text against NGSL or the Oxford 3000, to check sentence length, or to apply numbered plain-words edits.
 ---
 
 # Plain words
@@ -41,12 +41,29 @@ Their inflections pass too. The checker reads that file on every run, and for
 `plain-words check -` it reads the one in the current folder. For a one-off
 run, `--allow neuron,glia` adds words.
 
+## Sentence length
+
+`plain-words sentences FILE` counts the words in each sentence of running prose:
+paragraphs and list items. It skips headings, lines that are all bold, tables,
+and block quotes. Inline code and math count as one word each. Code blocks,
+display math, links, and citations do not count. It prints
+the mean and each sentence over 25 words, with its line. `--max` and `--mean`
+change the limits (defaults 25 and 15). These limits come from CLAUDE.md's
+Prose rules. Those rules also ask for one idea per sentence and for linked
+words kept close. The checker cannot see either, so read each long sentence
+for them.
+
+The split is a heuristic. A sentence ends at `.`, `!`, or `?` before a capital
+letter or digit. Common abbreviations (e.g., Fig., Dr.) and initials do not end one.
+
 ## Proposing edits
 
-1. Run `plain-words check FILE`. If it warns that a downloaded list is missing,
-   run `plain-words fetch` first. The output lists each line with its words that
-   are not on the list, then the words seen only capitalized (names, acronyms,
-   and words that only start sentences).
+1. Run `plain-words check FILE` and `plain-words sentences FILE`. If `check`
+   warns that a downloaded list is missing, run `plain-words fetch` first.
+   `check` lists each line with its words that are not on the list. Then it
+   lists the words seen only capitalized: names, acronyms, and words that only
+   start sentences. For each long sentence, propose a split that puts one idea in
+   each sentence.
 2. Read the whole draft before proposing anything, so each replacement fits its
    context and the draft's terms stay consistent: replace a repeated term the
    same way everywhere.
