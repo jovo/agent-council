@@ -202,7 +202,13 @@ the item.
 The file opens with its title and goes straight to the items. Everything else
 goes in one section at the end, `## About this review`: the counts by
 severity, the date the line numbers refer to, the review run, how ids work,
-which items are closed and why, and what the review could not assess.
+which items are closed and why, and what the review could not assess. Nothing
+else: findings the mediator dropped, the mechanical checks, and the next free
+ids stay out of it (the script keeps the next ids in a hidden comment). An item
+in A, B, or C never says how the panel or the mediator settled it, such as which
+reviewer's fix was kept or who disagreed. Only a Disputed item gives the
+dissent and the ruling, since the dispute is why it is there. `unified.md`
+keeps the full record.
 Give each set of recommendations a letter: A for Major, B for Minor, C for
 Nitpick, X for Disputed. An item's id is its letter and its number within that
 set (A2, B7), and the notes file lists the sets in that order. Where an item
@@ -374,5 +380,6 @@ The inline form needs the surrounding Markdown to render, so anything in the quo
 - **Math carried along as unchanged context**: leave it in whatever form the source uses. Inline math stays `$...$`, display equations stay `$$...$$` on their own lines with blank lines around them, which is what GFM needs to render them at all.
 - **When the edit targets an equation**: show the old and new equations rendered, never as LaTeX source in a code block and never with `~~` or 🟢 inside or around math. Write a 🔴 **Now** line, then the old equation as display math (`$$...$$` on its own line, blank lines around it), then a 🟢 **Proposed** line, then the new equation. Colour the parts that change: red in the old equation and green in the new, with a scoped group, `{\color{red} ...}` and `{\color{green} ...}`, never the bare `\color{red}{...}` switch. Do not insert placeholder symbols to mark something missing. When a change only adds a term, colour the new term green and say what is missing in the 🔴 line, for example "🔴 **Now** (no expectation):". Display form here is a way to show the equations and does not change the source: the item still says where the math sits (inline or display) when that matters.
 - **When a prose edit contains inline math**: never wrap math in `~~` or `**`, and never start a bolded addition with a list marker (write `- 🟢 **text**`, not `🟢 **- text**`). Strikethrough and bold do not render over math delimiters, so show any edit that deletes, replaces, or adds inline math as a 🔴 **Now** and 🟢 **Proposed** pair, as for an equation edit. When an edit changes only the prose around math that stays, leave the math outside the `~~` and `🟢 **` spans as unchanged context, and start every added span with its own `🟢 `.
-- **When the edit targets other markup source** (a `\tag{}`, an anchor, table pipes, a citation key): put that diff in a fenced code block, with the old and new lines one above the other. Rendering it would hide the exact characters being changed, which are the point.
+- **An equation tag is part of the equation**: show an edit that adds or changes a `\tag{}` as a 🔴 **Now** and 🟢 **Proposed** pair of rendered equations, like any equation edit. Never show LaTeX source to the reader. (The script's reviewers may give a math edit as a two-line code block so it can be applied: the script shows it rendered.)
+- **When the edit targets other markup source** (an anchor, table pipes, a citation key): put that diff in a fenced code block, with the old and new lines one above the other. Rendering it would hide the exact characters being changed, which are the point. Math never goes in such a block.
 - When applying an equation change, keep the source's form: never rewrite `$...$` into `$$...$$` in the draft. That changes inline math into a display equation and silently edits the source.

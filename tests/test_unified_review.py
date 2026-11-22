@@ -2688,7 +2688,7 @@ class NotesFile(unittest.TestCase):
         f = self.d / "memo.md"
         f.write_text(f.read_text().replace("The sky is green today.", "The sky is blue today."))
         self.review({"gpt": WATER, "argon": WATER})  # B1 closes as applied
-        self.assertIn("- Next free ids: A1, B3, C1, X1.", self.notes.read_text())
+        self.assertIn("<!-- next ids: A1, B3, C1, X1 -->", self.notes.read_text())
         ur.notes_map_file().unlink()
         path, _ = self.review({"gpt": WATER + GRASS, "argon": WATER})
         t = path.read_text()
@@ -2722,12 +2722,21 @@ class NotesFile(unittest.TestCase):
         self.assertNotIn(ur.NOT_RAISED, t.split(f"### {clouds_id}.")[1].split("###")[0])
         self.assertEqual(t.count("Clouds are not purple"), 1)
 
-    def test_dropped_findings_are_listed_in_the_closing_section(self):
+    def test_dropped_findings_stay_out_of_the_notes_file(self):
         path, _ = self.review({"gpt": SKY(), "argon": WATER}, {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}},
                               {"Sky color is wrong": "ruling: drop\nfix: a\nreason: The sky is green here.\nproblem: same"})
         t = path.read_text()
         self.assertNotIn("### B1. Sky", t)
-        self.assertIn("(the reviewers split): Sky color is wrong (The sky is green here).", t)
+        self.assertNotIn("Sky color is wrong", t)
+        self.assertNotIn("Next free ids", t)
+
+    def test_a_math_code_block_fix_shows_rendered(self):
+        fix = "```markdown\n$$p = 1.$$\n$$p = 1. \\tag{1}$$\n```"
+        out = ur.rendered_fix(fix)
+        self.assertNotIn("```", out)
+        self.assertIn("🔴 **Now**\n\n$$p = 1.$$\n\n🟢 **Proposed**\n\n$$p = 1. \\tag{1}$$", out)
+        anchor = "```markdown\n[x](#a)\n[x](#b)\n```"
+        self.assertEqual(ur.rendered_fix(anchor), anchor)
 
     def test_new_ids_read_in_draft_order(self):
         path, _ = self.review({"gpt": WATER + GRASS, "argon": SKY()})

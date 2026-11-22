@@ -1410,8 +1410,21 @@ def ruling_line(g, labels):
     return f"*{' '.join(x for x in out if x)}*" if any(out) else ""
 
 
-def finding_md(g, labels):
-    """A finding's text: its problem, its fix or fixes, and how it was settled."""
+def rendered_fix(fix):
+    """A fix whose diff is a code block of one old and one new line holding math,
+    shown as the two equations rendered, so the reader never reads LaTeX source.
+    The stored fix keeps the code block, which is what gets applied."""
+    m = re.search(r"```[a-z]*\n(.*?)\n```", fix, re.S)
+    lines = [l.strip() for l in m.group(1).splitlines() if l.strip()] if m else []
+    if len(lines) != 2 or not all("$" in l or "\\" in l for l in lines):
+        return fix
+    show = lambda l: l if l.startswith("$") else f"$${l}$$"
+    pair = f"🔴 **Now**\n\n{show(lines[0])}\n\n🟢 **Proposed**\n\n{show(lines[1])}"
+    return fix.replace(m.group(0), pair)
+
+
+def finding_md(g, labels, ruling=True):
+    """A finding's text: its problem, its fix or fixes, and, with ruling, how it was settled."""
     rep = g["rep"]
     alts = g.get("alts")
     if alts is None:  # a run from before the problem and fix were split
@@ -1420,10 +1433,11 @@ def finding_md(g, labels):
     if len(alts) > 1 or (alts and alts[0].get("unreviewed")):
         for a in alts:
             who = "the mediator's, not reviewed by the panel" if a.get("unreviewed") else f"from {short(a['by'])}"
-            parts.append(f"**Fix {a['label']}** ({who}):\n\n{a['fix']}")
+            parts.append(f"**Fix {a['label']}** ({who}):\n\n{rendered_fix(a['fix'])}")
     elif fix_of(rep):
-        parts.append(fix_of(rep))
-    parts.append(ruling_line(g, labels))
+        parts.append(rendered_fix(fix_of(rep)))
+    if ruling:
+        parts.append(ruling_line(g, labels))
     return "\n\n".join(p for p in parts if p)
 
 
@@ -3056,7 +3070,8 @@ def note_item(nid, g, sev, labels, voters, files, text, deck):
     tag = (f" ({g['kind']})" if g.get("kind") else "") + (" (question)" if g.get("form") == "question" else "")
     if g.get("disputed"):
         tag = f" ({sev})" + tag
-    body = re.sub(r"^(\s*(?:🟢\s*)?(?:\*\*)?)#", r"\1\\#", finding_md(g, labels), flags=re.M)
+    body = re.sub(r"^(\s*(?:🟢\s*)?(?:\*\*)?)#", r"\1\\#", finding_md(g, labels, ruling=bool(g.get("disputed") or g.get("other_of"))),
+                  flags=re.M)
     return (f"### {nid}. {head}{g['rep']['title']}{tag} {marks(g, voters)}".rstrip()
             + f"\n{where_line}\n\n{body}\n\n")
 
@@ -3119,7 +3134,7 @@ def write_notes(draft, run, source=None):
     entries, nxt = mine.get("items", {}), dict(mine.get("next", {}))
     chunks = split_notes(old_text) if old_text else [["pre", None, f"# Review of {Path(source or original_of(draft) or draft).name}\n\n"]]
     present = {c[1] for c in chunks if c[0] == "item"}
-    m = re.search(r"^- Next free ids: (.+?)\.?$", old_text, re.M)
+    m = re.search(r"^(?:- Next free ids: |<!-- next ids: )(.+?)\.?(?: -->)?$", old_text, re.M)
     for s, k in re.findall(r"\b([ABCX])(\d+)\b", m.group(1) if m else ""):
         nxt[s] = max(nxt.get(s, 1), int(k))
     for nid in present:  # ids are never reused, even ones the map does not know
@@ -3254,22 +3269,16 @@ def write_notes(draft, run, source=None):
     about = [f"- Open items: {counts or 'none'}.",
              f"- Line numbers refer to {draft.name} as of {time.strftime('%Y-%m-%d %H:%M')}.",
              f"- Review run: `{run}`. Reviewed by {who}" + (f", ties broken by {med}." if med else "."),
-             "- Ids: A Major, B Minor, C Nitpick, X disputed (the reviewers split, and the mediator ruled). "
-             "Ids stay fixed and are never reused. Fix a and Fix b under one item are alternatives: apply one.",
-             "- Next free ids: " + ", ".join(f"{s}{nxt.get(s, 1)}" for s in "ABCX") + ".",
-             *([f"- Not raised this round, passage unchanged: {', '.join(not_raised)}."] if not_raised else []),
+             "- Ids: A Major, B Minor, C Nitpick, X disputed. Ids stay fixed and are never reused.",
              *([f"- Closed this round: {', '.join(closed)}."] if closed else []),
-             *([f"- Dropped by {med or 'the mediator'} (the reviewers split): " + ", ".join(
-                 f"{g['rep']['title']} ({g['dropped'].rstrip('.')})" for g in r["groups"] if g.get("dropped")) + "."]
-               if any(g.get("dropped") for g in r["groups"]) else []),
              *([f"- Left as written, heading not in the \"### A1. Title\" form: {', '.join(bad)}."] if bad else []),
-             *([f"- The script's mechanical checks ({len(r['checks'])}) are in unified.md."] if r.get("checks") else []),
              *([f"- {not_assessed(r)}"] if not_assessed(r) else []),
              *([f"- {left_off_line(r)}"] if left_off_line(r) else []),
              *(["- " + line.strip("*") for line in participation(r.get("failures"), [], lambda ms: ", ".join(
                  labels.get(m, m) for m in ms), "")])]
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_atomic(path, body.rstrip("\n") + f"\n\n## {ABOUT}\n\n" + "\n".join(about) + "\n")
+    hidden = "<!-- next ids: " + ", ".join(f"{s}{nxt.get(s, 1)}" for s in "ABCX") + " -->"
+    write_atomic(path, body.rstrip("\n") + f"\n\n## {ABOUT}\n\n" + "\n".join(about) + f"\n\n{hidden}\n")
     store[str(path)] = {"items": entries, "next": nxt}
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     write_atomic(store_file, json.dumps(store, indent=1, ensure_ascii=False) + "\n")
