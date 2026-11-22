@@ -77,9 +77,10 @@ of its own:
   another's fix, the mediator keeps one fix or writes its own, marked as not
   reviewed by the panel. The main review shows one fix per finding. Each
   reviewer's fix it passed over goes under Disputed as its own item, titled
-  "Other fix: <title>", with the problem and quote of the finding it came
+  "Other fix from <model>: <title>", with the problem and quote of the finding it came
   from, unless the fixes do the same thing. A fix the mediator wrote adds no
   such item. Iterate skips these items, like everything under Disputed.
+  Declining one affects only that item, never its main finding.
 - It shortens a problem over 25 words and leaves the diff as it is.
 No reviewer stands in for the mediator. If it is logged out or fails, Disputed
 lists its findings without a ruling, and the review says so. Where fixes
