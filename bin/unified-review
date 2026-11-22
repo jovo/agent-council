@@ -1339,10 +1339,14 @@ def other_fix_groups(groups, byid):
     for g in groups:
         if g.get("rejected") or g.get("declined") or g.get("held"):
             continue
-        for a in g.get("others") or []:
+        others = g.get("others") or []
+        shorts = [short(a["by"]) for a in others]
+        for a in others:
             f = byid.get(a.get("id")) or g["rep"]
             # The source model in the title keeps two passed-over fixes apart, since decisions go by title.
-            rep = {**f, "title": f"{OTHER_FIX} from {short(a['by'])}: {g['rep']['title']}", "problem": problem_of(f),
+            # Two models with one short name (one model at two settings) go by their full spec.
+            who = short(a["by"]) if shorts.count(short(a["by"])) == 1 else a["by"]
+            rep = {**f, "title": f"{OTHER_FIX} from {who}: {g['rep']['title']}", "problem": problem_of(f),
                    "fix": a["fix"]}
             rep["body"] = "\n\n".join(x for x in (rep["problem"], a["fix"]) if x)
             out.append({**g, "rep": rep, "alts": [a], "others": [], "disputed": True, "fix_issue": None,

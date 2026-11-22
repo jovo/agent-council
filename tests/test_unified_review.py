@@ -2376,6 +2376,13 @@ class TwoLab(unittest.TestCase):
         self.assertEqual(len(others), 2)
         self.assertEqual(len(set(others)), 2)  # a decision on one does not settle the other
 
+    def test_two_settings_of_one_model_get_distinct_other_fix_titles(self):
+        g = {"rep": {"title": "T", "quote": "q", "body": "p", "problem": "p"}, "others": [
+            {"by": "cursor:foo", "fix": "~~a~~ 🟢 **b**"}, {"by": "cursor:foo@low", "fix": "~~a~~ 🟢 **c**"}]}
+        with mock.patch.dict(ur.PANELISTS, {"cursor:foo": ("cursor", "foo", "Foo"), "cursor:foo@low": ("cursor", "foo", "Foo")}):
+            titles = [x["rep"]["title"] for x in ur.other_fix_groups([g], {})]
+        self.assertEqual(titles, ["Other fix from cursor:foo: T", "Other fix from cursor:foo@low: T"])
+
     def test_declining_an_other_fix_keeps_its_main_finding(self):
         # No mediator, and Argon's fix changes more words, so the same fix is passed over in both reviews.
         replies = {"gpt": SKY(), "argon": SKY("The sky is ~~green~~ 🟢 **gray and heavy with rain** today.")}
