@@ -53,7 +53,8 @@ reviews with one model alone, with no vote and no mediator. Two or more
 reviewers always get the mediator as one more model, so a review never starts on
 two models. A Claude reviewer is left off such a panel, since Claude mediates:
 `-p claude,gpt,gemini` reviews with GPT and Gemini, and `-p claude,gpt` is
-refused. If a reviewer on a mediated panel fails, Grok 4.7 Low Fast stands in.
+refused. The review's header and the notes file's closing section name each
+model left off. Pass that line on when you report the review. If a reviewer on a mediated panel fails, Grok 4.7 Low Fast stands in.
 One model alone gets Claude Sonnet, then Grok. Pass `-p` only when the user names a model or a panel. Pass `--verify` only when the user asks for a
 fact-check or claim verification.
 
@@ -74,13 +75,19 @@ of its own:
   dissenting vote and the ruling. Dropped ones are listed in one line each.
 - Where the reviewers accept a problem but the fixes differ, or one rejected
   another's fix, the mediator keeps one fix or writes its own, marked as not
-  reviewed by the panel. The review shows one fix per finding.
+  reviewed by the panel. The main review shows one fix per finding. Each
+  reviewer's fix it passed over goes under Disputed as its own item, titled
+  "Other fix from <model>: <title>", with the problem and quote of the finding it came
+  from, unless the fixes do the same thing. A fix the mediator wrote adds no
+  such item. Iterate skips these items, like everything under Disputed.
+  Declining one affects only that item, never its main finding.
 - It shortens a problem over 25 words and leaves the diff as it is.
 No reviewer stands in for the mediator. If it is logged out or fails, Disputed
 lists its findings without a ruling, and the review says so. Where fixes
 differ, the script then keeps one: a fix the other reviewers accepted over one
 they rejected, then the fix that strikes and adds the fewest words, with the
-problem and quote of the finding it came from.
+problem and quote of the finding it came from. The others go under Disputed as
+"Other fix" items.
 
 The script groups duplicates and writes `unified.md` in the run folder and the
 notes file (below) in the draft's folder:
