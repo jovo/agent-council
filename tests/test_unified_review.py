@@ -2740,7 +2740,6 @@ class NotesFile(unittest.TestCase):
 
     def test_only_whole_line_equations_render(self):
         for src in ("For $x > 0$, it holds.\nFor $x \\ge 0$, it holds.",  # prose with inline math
-                    "| Tier | $10 \\| mo |\n| Tier | $12 \\| mo |",       # a table row
                     "> $$p = 1.$$\n> $$p = 1. \\tag{1}$$",                # a quoted equation
                     "See \\autoref{a}.\nSee \\autoref{b}."):             # a macro, no math
             block = f"```markdown\n{src}\n```"
@@ -2767,6 +2766,37 @@ class NotesFile(unittest.TestCase):
                 mock.patch.object(ur, "fix_of", lambda r: r["fix"]):
             self.assertIn("```markdown", ur.finding_md(g, {}, ruling=False, render=False))
             self.assertNotIn("```", ur.finding_md(g, {}, ruling=False))
+
+    DRAFT_TABLE = "Intro.\n\n| Name | Value |\n|---|---|\n| Alpha | One two three four. |\n| Beta | a \\| b |\n"
+
+    def test_a_table_row_edit_shows_under_the_draft_header(self):
+        fix = "```markdown\n| Alpha | One two three four. |\n| Alpha | One two {{slot}} four. |\n```"
+        out = ur.rendered_fix(fix, self.DRAFT_TABLE)
+        self.assertNotIn("```", out)
+        self.assertEqual(out, "| Name | Value |\n|---|---|\n| Alpha | One two ~~three~~ 🟢 **{{slot}}** four. |")
+
+    def test_a_table_row_not_in_the_draft_gets_a_blank_header(self):
+        out = ur.rendered_fix("```markdown\n| A | x y z |\n| A | x y w |\n```")
+        self.assertTrue(out.startswith("| | |\n|---|---|\n| A | x y ~~z~~ 🟢 **w** |"))
+
+    def test_an_escaped_pipe_stays_in_its_cell(self):
+        fix = "```markdown\n| Beta | a \\| b |\n| Beta | a \\| c |\n```"
+        self.assertIn("| Beta | a \\| ~~b~~ 🟢 **c** |", ur.rendered_fix(fix, self.DRAFT_TABLE))
+
+    def test_a_rewritten_cell_is_struck_whole(self):
+        self.assertEqual(ur.cell_diff("one two three", "four five six"), "~~one two three~~ 🟢 **four five six**")
+
+    def test_a_table_row_edit_in_a_nitpick_bullet_is_one_line(self):
+        fix = "```markdown\n| Alpha | One two three four. |\n| Alpha | One two {{slot}} four. |\n```"
+        out = ur.rendered_fix(fix, self.DRAFT_TABLE, inline=True)
+        self.assertEqual(out, "*Value*: One two ~~three~~ 🟢 **{{slot}}** four.")
+
+    def test_item_keeps_a_table_row_edit_as_stored(self):
+        g = {"rep": {"title": "T", "quote": "", "body": "", "problem": "P.",
+                     "fix": "```markdown\n| A | x |\n| A | y |\n```"}, "alts": [], "votes": {}}
+        with mock.patch.object(ur, "problem_of", lambda r: r["problem"]), \
+                mock.patch.object(ur, "fix_of", lambda r: r["fix"]):
+            self.assertIn("```markdown\n| A | x |", ur.finding_md(g, {}, ruling=False, render=False))
 
     def test_new_ids_read_in_draft_order(self):
         path, _ = self.review({"gpt": WATER + GRASS, "argon": SKY()})
