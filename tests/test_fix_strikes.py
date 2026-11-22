@@ -41,6 +41,29 @@ class Check(unittest.TestCase):
     def test_code_is_skipped(self):
         self.assertEqual(self.problems("`x~~, y~~`\n\n```\nfoo~~, bar~~\n```\n"), [])
 
+    def test_valid_nested_span_is_kept(self):
+        # GFM matches the inner pair, so only the outer opener is bad.
+        self.assertEqual(self.problems("~~a ~~b~~"), ["unpaired ~~"])
+        self.assertEqual(fs.fix("~~a ~~b~~"), "~~a ~~b~~")
+
+    def test_links_and_urls_are_skipped(self):
+        for text in ["[x](foo~~,bar~~)", "<https://a.b/c~~,d~~>", "see https://a.b/c~~,d~~ now"]:
+            self.assertEqual(fs.fix(text), text)
+        # A word that is part of a link is not widened, only reported.
+        text = "[company~~, so what~~](u)"
+        self.assertEqual(fs.fix(text), text)
+        self.assertEqual(len(fs.check(text)), 1)
+
+    def test_fence_closes_only_on_its_own_marker(self):
+        text = "~~~\ncode\n``` not closing\nmore~~, old~~\n~~~\n"
+        self.assertEqual(self.problems(text), [])
+        self.assertEqual(self.problems("````\nx\n```\nmore~~, old~~\n````\n"), [])
+
+    def test_indented_code_is_skipped(self):
+        self.assertEqual(self.problems("    foo~~, bar~~\n"), [])
+        # A list continuation line is prose.
+        self.assertEqual(len(fs.check("- item\n    foo~~, bar~~")), 1)
+
     def test_line_numbers(self):
         self.assertEqual(fs.check("ok\n\nthe end~~, and x~~.")[0][0], 3)
 

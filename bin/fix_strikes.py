@@ -14,20 +14,27 @@ Repairs follow the unified-review rules. A deletion that opens on punctuation
 glued to the word before it widens to take in that word, and the word goes
 back in the 🟢 addition that follows (or a new one): `company~~, so what~~ 🟢
 **. What**` becomes `~~company, so what~~ 🟢 **company. What**`. A space just
-inside either `~~` moves outside it. Fenced code blocks and inline code are
-skipped, since a diff of markup source is shown there on purpose.
+inside either `~~` moves outside it. Only a `~~` that GFM leaves unmatched
+counts. Code blocks, inline code, link destinations, and URLs are skipped,
+since a diff of markup source is shown there on purpose.
 """
 import re
 import sys
 import unicodedata
 
-FENCE = re.compile(r"^\s*(```|~~~)")
-CODE_SPAN = re.compile(r"(`+).+?\1", re.S)
+FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
+INDENTED = re.compile(r"^(?: {4}|\t)(?![ \t]*(?:[-*+]|\d+[.)])[ \t])")
+# Spans whose tildes are not strikeout delimiters: inline code, link
+# destinations, autolinks, and bare URLs.
+SKIP = re.compile(r"(`+).+?\1"
+                  r"|\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)"
+                  r"|<[A-Za-z][A-Za-z0-9+.-]*:[^<>\s]*>"
+                  r"|(?:https?://|www\.)[^\s<]*", re.S)
 ADDITION = re.compile(r"\A(\s*)🟢 \*\*(.*?)\*\*", re.S)
 
 
 def _punct(c):
-    return unicodedata.category(c)[0] in "PS"
+    return c != "" and unicodedata.category(c)[0] in "PS"
 
 
 def _space(c):
@@ -35,18 +42,36 @@ def _space(c):
 
 
 def _tildes(text):
-    """Positions of each `~~` outside inline code, skipping runs of three or more."""
-    code = [m.span() for m in CODE_SPAN.finditer(text)]
+    """Positions of each `~~` outside skipped spans, skipping runs of one or three or more."""
+    skip = [m.span() for m in SKIP.finditer(text)]
     out = []
     for m in re.finditer(r"~+", text):
-        if len(m.group()) == 2 and not any(a <= m.start() < b for a, b in code):
+        if len(m.group()) == 2 and not any(a <= m.start() < b for a, b in skip):
             out.append(m.start())
     return out
 
 
+def _unmatched(text, pos):
+    """The `~~` in pos that GFM leaves unmatched, by its flanking and pairing rules."""
+    stack, matched = [], set()
+    for p in pos:
+        before = text[p - 1] if p else ""
+        after = text[p + 2] if p + 2 < len(text) else ""
+        opens = not _space(after) and (not _punct(after) or _space(before) or _punct(before))
+        closes = not _space(before) and (not _punct(before) or _space(after) or _punct(after))
+        if closes and stack:
+            matched.update((stack.pop(), p))
+        elif opens:
+            stack.append(p)
+    return [p for p in pos if p not in matched]
+
+
 def _problems(text):
-    """(opener, closer, problem) for each bad span in one paragraph, closer None if unpaired."""
-    pos = _tildes(text)
+    """(opener, closer, problem) for each bad span in one paragraph, closer None if unpaired.
+
+    Only the `~~` that GFM leaves unmatched are bad. They pair in order, as the
+    author most likely meant them."""
+    pos = _unmatched(text, _tildes(text))
     out = []
     for i in range(0, len(pos) - 1, 2):
         s, e = pos[i], pos[i + 1]
@@ -61,6 +86,8 @@ def _problems(text):
             out.append((s, e, "space before closing ~~"))
         elif _punct(last) and not (_space(after) or _punct(after)):
             out.append((s, e, "closing ~~ follows punctuation and is glued to a word"))
+        else:
+            out.append((s, e, "~~ pair does not render"))
     if len(pos) % 2:
         out.append((pos[-1], None, "unpaired ~~"))
     return out
@@ -83,7 +110,7 @@ def _repair(text, s, e, problem):
         while w and not text[w - 1].isspace():
             w -= 1
         word = text[w:s]
-        if "~~" in word or "**" in word or "🟢" in word:
+        if any(t in word for t in ("~~", "**", "🟢", "[", "]", "(", "<", "`")):
             return None
         tail = text[e + 2:]
         m = ADDITION.match(tail)
@@ -98,21 +125,34 @@ def _repair(text, s, e, problem):
 
 
 def _paragraphs(text):
-    """(start, end) of each stretch of prose between blank lines and code fences."""
-    spans, start, fenced, at = [], 0, False, 0
+    """(start, end) of each stretch of prose between blank lines and code blocks.
+
+    A fence closes only on the same marker, at least as long, with nothing after
+    it. A stretch whose first line is indented four spaces, and is not a list
+    item, is taken as indented code and skipped. That also skips a list item's
+    later paragraphs, which is the safe side: a missed repair, never code
+    rewritten."""
+    spans, start, at, fence = [], 0, 0, None
+
+    def close(end):
+        if end > start and not INDENTED.match(text[start:end]):
+            spans.append((start, end))
+
     for line in text.splitlines(keepends=True):
-        if FENCE.match(line):
-            if not fenced and at > start:
-                spans.append((start, at))
-            fenced = not fenced
-            start = at + len(line)
-        elif not fenced and not line.strip():
-            if at > start:
-                spans.append((start, at))
+        m = FENCE.match(line.rstrip("\r\n"))
+        if fence:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1] and not m.group(2).strip():
+                fence = None
+                start = at + len(line)
+        elif m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+            close(at)
+            fence = (m.group(1)[0], len(m.group(1)))
+        elif not line.strip():
+            close(at)
             start = at + len(line)
         at += len(line)
-    if not fenced and at > start:
-        spans.append((start, at))
+    if not fence:
+        close(at)
     return spans
 
 
