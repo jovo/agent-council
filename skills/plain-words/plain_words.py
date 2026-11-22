@@ -177,8 +177,9 @@ def check(text, words):
 # Words that end in a period without ending the sentence. Single letters (initials) too.
 ABBREVIATIONS = {"e.g", "i.e", "etc", "vs", "cf", "al", "fig", "figs", "eq", "eqs", "no", "dr",
                  "mr", "mrs", "ms", "prof", "st", "jr", "sr", "inc", "ltd", "co", "approx", "ref"}
-SENTENCE_END = re.compile(r"""[.!?]["'”’)\]*_]*(?=\s+["'“‘(\[*_]*[A-Z0-9])""")
-COUNTED = re.compile(r"[A-Za-z0-9]+(?:['’.,-][A-Za-z0-9]+)*")
+SENTENCE_END = re.compile(r"""[.!?]["'”’)\]*_]*(?=\s+["'“‘(\[*_]*[A-Z0-9À-ÖØ-Þ])""")
+COUNTED = re.compile(r"[^\W_]+(?:['’.,-][^\W_]+)*")
+INITIALS = re.compile(r"(?:[^\W\d_]\.)*[^\W\d_]")  # R, U.S, e.g before the final period
 LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 
 
@@ -231,8 +232,9 @@ def sentences(text):
         spans, start = [], 0
         for m in SENTENCE_END.finditer(joined):
             if m.group(0)[0] == ".":
-                last = re.search(r"([A-Za-z][A-Za-z.]*)$", joined[start:m.start()])
-                if last and (len(last.group(1)) == 1 or last.group(1).lower() in ABBREVIATIONS):
+                last = re.search(r"([^\W\d_](?:[^\W\d_]|\.)*)$", joined[start:m.start()])
+                if last and (INITIALS.fullmatch(last.group(1))
+                             or last.group(1).lower() in ABBREVIATIONS):
                     continue
             spans.append((start, m.end()))
             start = m.end()

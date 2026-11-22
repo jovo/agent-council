@@ -140,7 +140,7 @@ files, and what each design lets you conclude.
   When the user's own copy uses one of these, point it out and offer a bounded alternative before applying it. Keep literal requirements, direct quotations, and technical names unchanged.
 - **Logic first.** Check that each step of an argument follows before checking style, when drafting and when reviewing. The `logic` skill covers the document's arc, sections, paragraphs, sentences, names, and inferences from data.
 - **Signposts and tense.** Do not signpost ("Next, we...", "In this section..."). Let paragraph order carry the structure. Keep tense consistent within a paragraph, and use past tense only for completed work: results, experiments, prior papers.
-- **Sentence length.** Aim for a mean of about 15 words per sentence, and keep each sentence to 25 words or fewer. Count running prose only, not quotations, citations, code, or math. Split a sentence that runs over 25 words.
+- **Sentence length.** Aim for a mean of about 15 words per sentence, and keep each sentence to 25 words or fewer. Count running prose. Skip block quotes, citations, code blocks, and display math. Count an inline code span or formula as one word. Split a sentence that runs over 25 words.
 - **One idea per sentence.** Do not chain a second or third idea onto a sentence with "and," "so," "while," or "which." Start a new sentence.
 - **Keep linked words close.** Put the subject next to its verb, and the verb next to its object. Do not put a clause or a list between them. Move a long modifier after the main clause or into its own sentence.
 - Do not call work novel or first. Let the comparison to prior work show it.

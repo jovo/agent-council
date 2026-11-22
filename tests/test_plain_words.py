@@ -138,6 +138,10 @@ class PlainWordsTest(unittest.TestCase):
         text = "See e.g. the fit in Fig. 2 by Dr. Smith. R. Jacob wrote it, et al. agree."
         self.assertEqual(self.counts(text), [(1, 10), (1, 7)])
 
+    def test_dotted_initials_decimals_and_accented_capitals(self):
+        text = "U.S. Census data came in. Version 1.2 is out. First one. Über starts here."
+        self.assertEqual(self.counts(text), [(1, 5), (1, 4), (1, 2), (1, 3)])
+
     def test_sentence_wrapped_over_lines_keeps_its_first_line(self):
         text = "Intro.\n\nThis sentence starts here\nand ends on the next line. Short one."
         self.assertEqual(self.counts(text), [(1, 1), (3, 10), (4, 2)])
