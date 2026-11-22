@@ -296,6 +296,7 @@ class Agreement(unittest.TestCase):
 class Calls(unittest.TestCase):
     def setUp(self):
         ur.FAILURES.clear()
+        ur.LEFT_OFF.clear()
         self.tmp = Path(tempfile.mkdtemp())
 
     def tearDown(self):
@@ -356,21 +357,47 @@ class Calls(unittest.TestCase):
                     ur.fail("preflight", m, "not logged in")
             return [m for m in ms if m not in logged_out]
         ur.FAILURES.clear()
+        ur.LEFT_OFF.clear()
         with mock.patch.object(ur, "available", lambda m: m not in missing), \
                 mock.patch.object(ur, "preflight", fake_preflight), mock.patch.object(ur.runtime, "log", lambda *a: None):
             return ur.choose_panel(panel), checked
 
     def test_a_logged_out_panelist_is_not_tried_again_as_its_own_stand_in(self):
-        panel, checked = self.choose(["claude", "gpt", "gemini"], logged_out=("claude",))
-        self.assertEqual(panel, ["gpt", "gemini", "grok"])
-        self.assertEqual(checked.count("claude"), 1)
-        self.assertEqual([f["model"] for f in ur.FAILURES], ["claude"])
+        panel, checked = self.choose(["gpt", "gemini", "argon"], logged_out=("gpt",))
+        self.assertEqual(panel, ["gemini", "argon", "grok"])
+        self.assertEqual(checked.count("gpt"), 1)
+        self.assertEqual([f["model"] for f in ur.FAILURES], ["gpt"])
+
+    def test_a_mediated_panel_leaves_off_the_mediators_lab(self):
+        panel, checked = self.choose(["claude", "gpt", "gemini"])
+        self.assertEqual(panel, ["gpt", "gemini"])  # Claude Opus mediates, so Claude Sonnet does not review
+        self.assertNotIn("claude", checked)
+        panel, _ = self.choose(["claude:opus", "gpt", "argon"])
+        self.assertEqual(panel, ["gpt", "argon"])
+        self.assertEqual([x["model"] for x in ur.LEFT_OFF], ["claude:opus"])  # recorded for the review
+
+    def test_the_review_says_which_reviewers_were_left_off(self):
+        ur.LEFT_OFF.clear()
+        r = {"labels": {"claude": "Claude Sonnet"}, "left_off": [{"model": "claude", "mediator": "Claude Opus"}]}
+        self.assertEqual(ur.left_off_line(r), "Left off as a reviewer: Claude Sonnet. Claude Opus mediates, "
+                         "and a lab does not settle disputes over its own findings.")
+        self.assertEqual(ur.left_off_line({"labels": {}}), "")
+
+    def test_two_models_in_all_are_refused(self):
+        with self.assertRaises(SystemExit):
+            self.choose(["claude", "gpt"])  # Claude off, GPT alone, plus the mediator: two models
+        self.assertEqual(self.choose(["claude"])[0], ["claude"])  # one model reviews alone
+
+    def test_a_mediated_panel_skips_claude_as_a_stand_in(self):
+        panel, checked = self.choose(["gpt", "argon"], logged_out=("gpt",))
+        self.assertEqual(panel, ["argon", "grok"])
+        self.assertNotIn("claude", checked)
 
     def test_a_stand_in_replaces_a_panelist_whose_cli_is_missing(self):
         panel, _ = self.choose(["gpt"], missing=("gpt",))
         self.assertEqual(panel, ["claude"])
-        panel, _ = self.choose(["claude", "gpt", "gemini"], missing=("gpt",))
-        self.assertEqual(panel, ["claude", "gemini", "grok"])
+        panel, _ = self.choose(["argon", "gpt", "gemini"], missing=("gpt",))
+        self.assertEqual(panel, ["argon", "gemini", "grok"])
 
     def test_no_panel_when_nothing_is_available(self):
         with self.assertRaises(SystemExit):
@@ -828,6 +855,7 @@ class Pipeline(unittest.TestCase):
             out.mkdir()
             draft = f"===== memo.md =====\n{draft_text}"
             ur.FAILURES.clear()
+            ur.LEFT_OFF.clear()
             for m in failed_before:
                 ur.FAILURES.append({"stage": "preflight", "model": m, "reason": "not logged in"})
             with mock.patch.object(ur, "call", fake_call), mock.patch.object(ur, "RUNS_DIR", d), \
@@ -902,8 +930,7 @@ class Pipeline(unittest.TestCase):
             self.assertEqual(status["added"], 1)
             self.assertNotIn("edit vote", stages)
 
-    def test_default_panel_is_gpt_alone(self):
-        self.assertEqual(ur.DEFAULT_PANEL, ["gpt"])
+    def test_stand_ins_are_claude_then_grok(self):
         self.assertEqual(ur.STANDINS, ["claude", "grok"])
 
     def test_claude_then_grok_stand_in_for_a_failed_solo_reviewer(self):
@@ -922,11 +949,10 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(r["labels"]["claude"], ur.label("claude"))
         self.assertIn(f"Failed: {ur.label('claude')}", md)
 
-    def test_claude_then_grok_stand_in_for_a_failed_voter(self):
-        _, r, _ = self.run_review(["gpt", "gemini"], fails=(("vote", "gpt"),))
-        self.assertEqual(sorted(r["voters"]), ["claude", "gemini"])
-        _, r, _ = self.run_review(["gpt", "gemini"], fails=(("vote", "gpt"), ("vote", "claude")))
-        self.assertEqual(sorted(r["voters"]), ["gemini", "grok"])
+    def test_grok_not_claude_stands_in_for_a_failed_voter(self):
+        prompts, r, _ = self.run_review(["gpt", "gemini"], fails=(("vote", "gpt"),))
+        self.assertEqual(sorted(r["voters"]), ["gemini", "grok"])  # Claude mediates, so it does not vote
+        self.assertNotIn("claude", prompts.get("vote", {}))
 
     def test_one_reviewer_skips_the_vote_and_keeps_its_findings(self):
         prompts, r, md = self.run_review(["argon"])
@@ -1301,13 +1327,13 @@ class ClaimRules(unittest.TestCase):
     def test_claim_map_and_finding_rule_reach_the_panel(self):
         rules = ur.reviewer_rules()
         self.assertIn("identify up to three central claims", rules)
-        self.assertIn("smallest adequate remedy", rules)
+        self.assertIn("one sentence of at most 25 words", rules)
         self.assertIn("Keep Nitpicks terse", rules)
         # The prompt carries the rule itself, so custom --rules cannot drop it.
         prompt = ur.review_prompt("draft", "", "custom rules only")
         self.assertIn("up to three central claims", prompt)
-        self.assertIn("smallest adequate remedy", prompt)
-        self.assertIn("state the decision the\ndefect could mislead", prompt)
+        self.assertIn("problem: <one sentence, at most 25 words", prompt)
+        self.assertIn("narrows the claim to\nwhat the evidence supports", prompt)
 
 
 class SinceLast(unittest.TestCase):
@@ -2161,6 +2187,600 @@ class ReviewPage(unittest.TestCase):
             self.assertEqual([m["state"] for m in st[1]["models"]], ["done", "done", "failed"])
             self.assertEqual([m["state"] for m in st[2]["models"]], ["done", "done"])  # finished, though not logged
             self.assertEqual(st[1]["secs"], 200)  # the slowest model's time
+            two = ["1/4 review (no web): gpt, argon", "2/4 vote on 9 findings: gpt, argon",
+                   "3/4 mediate 2 findings: Claude Opus", "4/4 render: 9 findings in 8 groups, 1 rejected by vote"]
+            st = ur.job_progress("k", two, False)
+            self.assertEqual([s["label"] for s in st], ["Review", "Vote on each other's findings", "Break ties", "Merge"])
+            self.assertEqual([m["name"] for m in st[2]["models"]], ["Claude Opus"])
+
+# ---------------------------------------------------------------- two-lab panel and notes file
+
+DRAFT2 = "# Intro\n\nThe sky is green today.\n\nGrass grows slowly.\n\nWater is dry.\n"
+
+
+def two_lab_review(d, replies, votes, mediation=None, draft_text=DRAFT2, fails=(), panel=("gpt", "argon"), missing=()):
+    """Run foreground with two reviewers and a scripted mediator. replies: {model: review text}.
+    votes: {model: {title: "problem | fix"}}. mediation: {title: block lines} or None.
+    Returns (run folder, prompts)."""
+    prompts = {}
+
+    def fake_call(m, prompt, out, workdir, web=False, stage=""):
+        prompts.setdefault(stage, {})[m] = prompt
+        if m in fails or (stage, m) in fails:
+            ur.fail(stage, m, "fake failure")
+            return None
+        if stage == "review":
+            return replies[m]
+        if stage == "vote":
+            listed, _, own = prompt.partition("<your_own_findings>")
+            rows = re.findall(r"^\[([A-H]\d+)\] \([^)]*\) (.+)$", listed, re.M)
+            mine = dict((t, i) for i, t in re.findall(r"^\[([A-H]\d+)\] (.+)$", own.split("</your_own_findings>")[0], re.M))
+            # Like a careful voter, name its own finding with the same title as the same point.
+            return "\n".join(f"{i} | {votes[m].get(t, 'agree | agree')} | Minor | logic | same:{mine.get(t, 'none')} | why not"
+                             for i, t in rows)
+        if stage == "mediate":
+            items = re.findall(r"^\[(M\d+)\] [^(]*\(\w+\) (.+)$", prompt, re.M)
+            default = "ruling: uphold\nfix: a\nreason: fine\nproblem: same"
+            # mediation may be a function of (model, title) that returns None to skip an item.
+            pick = mediation if callable(mediation) else lambda m, t: (mediation or {}).get(t, default)
+            return "\n\n".join(f"=== {i}\n" + b for i, t in items if (b := pick(m, t)) is not None)
+        return ""
+    f = d / "memo.md"
+    if not f.exists():
+        f.write_text(draft_text)
+    # Unique run names: decisions are looked up by run name across every test's folders.
+    out = d / f"run-{d.name}-{len(list(d.glob('run*')))}"
+    out.mkdir()
+    ur.FAILURES.clear()
+    ur.LEFT_OFF.clear()
+    with mock.patch.object(ur, "call", fake_call), mock.patch.object(ur, "available", lambda m: m not in missing), \
+         mock.patch.object(ur, "LAST_RUN", d / "last-run"), mock.patch.object(ur.runtime, "log", lambda *a: None):
+        ur.foreground([f], f"===== memo.md =====\n{f.read_text()}", list(panel), "", "rules", out, d, False, [])
+    return out, prompts
+
+
+def finding_text(title, quote, problem, fix, severity="Minor"):
+    return (f"=== FINDING\nseverity: {severity}\nkind: logic\nform: edit\ntitle: {title}\nquote: {quote}\n---\n"
+            f"problem: {problem}\n{fix}\n")
+
+
+SKY = lambda fix="The sky is ~~green~~ 🟢 **blue** today.", who="": finding_text(
+    "Sky color is wrong" + who, "The sky is green today.", "The sky is blue, so the claim fails.", fix)
+WATER = finding_text("Water is not dry", "Water is dry.", "Water is wet.", "Water is ~~dry~~ 🟢 **wet**.")
+GRASS = finding_text("Grass speed unsupported", "Grass grows slowly.", "No rate or baseline is given.",
+                     "Grass grows ~~slowly~~ 🟢 **1 cm a week**.")
+
+
+class ProblemAndFix(unittest.TestCase):
+    def test_problem_line_splits_from_the_fix(self):
+        f = ur.parse_findings(SKY())[0]
+        self.assertEqual(f["problem"], "The sky is blue, so the claim fails.")
+        self.assertEqual(f["fix"], "The sky is ~~green~~ 🟢 **blue** today.")
+        self.assertEqual(ur.diff_parts(f["body"]), ("The sky is green today.", "The sky is blue today."))
+
+    def test_older_replies_split_at_the_first_paragraph(self):
+        self.assertEqual(ur.split_problem("Wrong date.\n\n~~1066~~ 🟢 **753 BC**"), ("Wrong date.", "~~1066~~ 🟢 **753 BC**"))
+        self.assertEqual(ur.split_problem("problem: Runs\nonto two lines.\n\nfix: ~~a~~ 🟢 **b**"),
+                         ("Runs onto two lines.", "~~a~~ 🟢 **b**"))
+
+    def test_votes_carry_a_fix_vote_and_old_lines_still_parse(self):
+        v = ur.parse_votes("A1 | agree | disagree | Major | logic | same:none | Fix misses it.\n"
+                           "B1 | partial | Minor | same:none | Old format.")
+        self.assertEqual((v["A1"]["vote"], v["A1"]["fix"]), ("agree", "disagree"))
+        self.assertEqual((v["B1"]["vote"], v["B1"]["fix"]), ("partial", ""))
+
+    def test_vote_prompt_asks_for_problem_and_fix_separately(self):
+        self.assertIn("Judge the problem and the fix separately", ur.VOTE)
+        self.assertIn("<problem> | <fix>", ur.VOTE)
+
+
+class TwoLab(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def groups(self, out):
+        r = json.loads((out / "results.json").read_text())
+        return r, {g["rep"]["title"]: g for g in r["groups"]}
+
+    def test_default_is_three_models_two_reviewers_and_a_claude_mediator(self):
+        self.assertEqual(ur.DEFAULT_PANEL, ["gpt", "argon"])
+        self.assertTrue(ur.MEDIATOR.startswith("claude:"))
+
+    def test_agreed_problem_goes_in_the_main_review_and_needs_no_mediator(self):
+        out, prompts = two_lab_review(self.d, {"gpt": SKY(), "argon": GRASS},
+                                      {"gpt": {}, "argon": {}})
+        r, g = self.groups(out)
+        self.assertFalse(any(x["disputed"] for x in g.values()))
+        self.assertNotIn("mediate", prompts)
+        self.assertNotIn("Disputed", (out / "unified.md").read_text())
+
+    def test_partial_or_disagree_on_the_problem_is_disputed_and_the_mediator_rules(self):
+        out, prompts = two_lab_review(
+            self.d, {"gpt": SKY() + GRASS, "argon": WATER},
+            {"argon": {"Sky color is wrong": "partial | agree", "Grass speed unsupported": "disagree | agree"}, "gpt": {}},
+            {"Sky color is wrong": "ruling: uphold\nseverity: Major\nfix: a\nreason: The claim is false.\nproblem: same",
+             "Grass speed unsupported": "ruling: drop\nseverity: Minor\nfix: a\nreason: Slowly is fine here.\nproblem: same"})
+        r, g = self.groups(out)
+        self.assertTrue(g["Sky color is wrong"]["disputed"])
+        self.assertEqual(g["Sky color is wrong"]["severity"], "Major")
+        self.assertTrue(g["Grass speed unsupported"]["rejected"])
+        self.assertFalse(g["Water is not dry"]["disputed"])
+        md = (out / "unified.md").read_text()
+        # The main review first, then Disputed, numbered straight through, then what the mediator dropped.
+        self.assertLess(md.index("Water is not dry"), md.index("## Disputed: Major"))
+        self.assertIn("### 2. Sky color is wrong", md)
+        self.assertIn("upholds it: The claim is false.", md)
+        self.assertIn("## Dropped by", md)
+        self.assertIn("Grass speed unsupported: Slowly is fine here.", md)
+        self.assertEqual(r["mediator"], ur.MEDIATOR)
+        self.assertIn("DISPUTED", prompts["mediate"][ur.MEDIATOR])
+        self.assertNotIn("gpt", prompts["mediate"][ur.MEDIATOR].split("<items>")[1].lower())  # reviewers anonymized
+
+    def test_both_raised_but_fixes_differ_the_mediator_keeps_one(self):
+        out, prompts = two_lab_review(
+            self.d, {"gpt": SKY(), "argon": SKY("The sky is ~~green~~ 🟢 **gray** today.")},
+            {"gpt": {}, "argon": {}},
+            {"Sky color is wrong": "ruling: uphold\nfix: b,a\nreason: Gray fits the storm.\nproblem: same"})
+        r, g = self.groups(out)
+        sky = g["Sky color is wrong"]
+        self.assertFalse(sky["disputed"])
+        self.assertEqual(sky["fix_issue"], "differ")
+        self.assertEqual([a["label"] for a in sky["alts"]], ["b"])  # one fix, even when the reply names two
+        self.assertIn("the one fix to keep", prompts["mediate"][ur.MEDIATOR])
+        was_b = re.search(r"^Fix b \(from [^)]*\):\n(.+)$", prompts["mediate"][ur.MEDIATOR], re.M).group(1)
+        self.assertEqual(sky["alts"][0]["fix"], was_b)
+        self.assertIn(was_b, sky["rep"]["body"])  # the pick is the one the page applies
+        md = (out / "unified.md").read_text()
+        self.assertNotIn("**Fix a**", md)
+        self.assertIn("Gray fits the storm.", md)
+        with mock.patch.object(ur, "summary_state", lambda run: None):  # no background summary call
+            st = ur.page_state(self.d / "memo.md", out)["findings"][0]
+        self.assertEqual(len(st["alts"]), 1)
+
+    def test_the_fix_the_mediator_passes_over_goes_under_disputed(self):
+        out, prompts = two_lab_review(
+            self.d, {"gpt": SKY(), "argon": SKY("The sky is ~~green~~ 🟢 **gray** today.")},
+            {"gpt": {}, "argon": {}},
+            {"Sky color is wrong": "ruling: uphold\nfix: b\nreason: Gray fits the storm.\nproblem: same"})
+        r, g = self.groups(out)
+        kept = g["Sky color is wrong"]["alts"][0]["fix"]
+        other = next(v for k, v in g.items() if k.startswith("Other fix from ") and k.endswith(": Sky color is wrong"))
+        self.assertTrue(other["disputed"])
+        self.assertNotEqual(other["alts"][0]["fix"], kept)
+        self.assertIn(other["alts"][0]["fix"], other["rep"]["body"])  # the page applies the other fix
+        md = (out / "unified.md").read_text()
+        main, _, disputed = md.partition("## Disputed")
+        self.assertIn(kept, main)
+        self.assertNotIn(other["alts"][0]["fix"], main)
+        self.assertIn(other["rep"]["title"], disputed)
+        self.assertIn("Another fix for “Sky color is wrong”. Claude Opus kept the other fix: Gray fits the storm.", disputed)
+        with mock.patch.object(ur, "summary_state", lambda run: None):  # no background summary call
+            st = {f["title"]: f for f in ur.page_state(self.d / "memo.md", out)["findings"]}
+        self.assertEqual(st[other["rep"]["title"]]["tag"], "Disputed")  # iterate skips it
+        with mock.patch.object(ur.runtime, "log", lambda *a: None):
+            notes = ur.write_notes(self.d / "memo.md", out).read_text()
+        self.assertIn(f"### X1. {other['rep']['title']}", notes)
+
+    def test_each_passed_over_fix_gets_its_own_title(self):
+        out, _ = two_lab_review(
+            self.d, {"gpt": SKY(), "argon": SKY("The sky is ~~green~~ 🟢 **gray** today."),
+                     "grok": SKY("The sky is ~~green~~ 🟢 **white** today.")},
+            {"gpt": {}, "argon": {}, "grok": {}},
+            {"Sky color is wrong": "ruling: uphold\nfix: a\nreason: Blue is right.\nproblem: same"},
+            panel=("gpt", "argon", "grok"))
+        others = [k for k in self.groups(out)[1] if k.startswith("Other fix")]
+        self.assertEqual(len(others), 2)
+        self.assertEqual(len(set(others)), 2)  # a decision on one does not settle the other
+
+    def test_two_settings_of_one_model_get_distinct_other_fix_titles(self):
+        g = {"rep": {"title": "T", "quote": "q", "body": "p", "problem": "p"}, "others": [
+            {"by": "cursor:foo", "fix": "~~a~~ 🟢 **b**"}, {"by": "cursor:foo@low", "fix": "~~a~~ 🟢 **c**"}]}
+        with mock.patch.dict(ur.PANELISTS, {"cursor:foo": ("cursor", "foo", "Foo"), "cursor:foo@low": ("cursor", "foo", "Foo")}):
+            titles = [x["rep"]["title"] for x in ur.other_fix_groups([g], {})]
+        self.assertEqual(titles, ["Other fix from cursor:foo: T", "Other fix from cursor:foo@low: T"])
+
+    def test_declining_an_other_fix_keeps_its_main_finding(self):
+        # No mediator, and Argon's fix changes more words, so the same fix is passed over in both reviews.
+        replies = {"gpt": SKY(), "argon": SKY("The sky is ~~green~~ 🟢 **gray and heavy with rain** today.")}
+        ruling = None
+        out, _ = two_lab_review(self.d, replies, {"gpt": {}, "argon": {}}, ruling, fails=(ur.MEDIATOR,))
+        r = json.loads((out / "results.json").read_text())
+        n = next(n for n, _, _, g in ur.ordered_findings(r) if g["rep"]["title"].startswith("Other fix"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            ur.record_decisions(str(n), "ignore", "not this one", out)
+        out, prompts = two_lab_review(self.d, replies, {"gpt": {}, "argon": {}}, ruling, fails=(ur.MEDIATOR,))
+        r, g = self.groups(out)
+        self.assertNotIn("declined", g["Sky color is wrong"])  # the main finding stays
+        self.assertTrue(next(v for k, v in g.items() if k.startswith("Other fix")).get("declined"))
+        self.assertNotIn("Other fix", prompts["review"]["gpt"])  # not passed to the panel as a declined point
+
+    def test_the_page_refuses_a_panel_the_review_would_refuse(self):
+        self.assertIn("two reviewers from labs other than the mediator's", ur.too_few_reviewers(["claude", "gpt"]))
+        self.assertEqual(ur.too_few_reviewers(["claude", "gpt", "gemini"]), "")
+        self.assertEqual(ur.too_few_reviewers(["claude"]), "")
+
+    def test_fixes_that_do_the_same_thing_add_no_disputed_entry(self):
+        out, _ = two_lab_review(
+            self.d, {"gpt": SKY(), "argon": SKY("The sky is ~~green~~ 🟢 **blue** today!")}, {"gpt": {}, "argon": {}},
+            {"Sky color is wrong": "ruling: uphold\nfix: a\nreason: same\nproblem: same"})
+        self.assertFalse([k for k in self.groups(out)[1] if k.startswith("Other fix")])
+
+    def test_with_no_mediator_the_longer_fix_goes_under_disputed(self):
+        long_fix = finding_text("Sky color is wrong", "The sky is green today.", "Green skies are rare.",
+                                "The sky is ~~green~~ 🟢 **gray and heavy with rain** today.")
+        out, _ = two_lab_review(self.d, {"gpt": long_fix, "argon": SKY()}, {"gpt": {}, "argon": {}},
+                                fails=(ur.MEDIATOR,))
+        other = self.groups(out)[1]["Other fix from GPT: Sky color is wrong"]  # gpt's longer fix was passed over
+        self.assertIn("heavy with rain", other["rep"]["body"])
+        self.assertEqual(other["rep"]["problem"], "Green skies are rare.")  # gpt's problem, with gpt's fix
+        self.assertIn("fewest changed words, since no mediator answered", (out / "unified.md").read_text())
+
+    def test_with_no_mediator_the_fix_with_fewest_changed_words_is_kept_with_its_problem(self):
+        long_fix = finding_text("Sky color is wrong", "The sky is green today.", "Green skies are rare.",
+                                "The sky is ~~green~~ 🟢 **gray and heavy with rain** today.")
+        out, _ = two_lab_review(self.d, {"gpt": long_fix, "argon": SKY()}, {"gpt": {}, "argon": {}},
+                                fails=(ur.MEDIATOR,))
+        sky = self.groups(out)[1]["Sky color is wrong"]
+        self.assertEqual(len(sky["alts"]), 1)
+        self.assertEqual(sky["alts"][0]["by"], "argon")
+        self.assertEqual(sky["rep"]["problem"], "The sky is blue, so the claim fails.")  # argon's, with its fix
+        self.assertIn("**blue**", sky["rep"]["body"])
+        md = (out / "unified.md").read_text()
+        self.assertNotIn("**Fix a**", md)
+        self.assertIn("fewest changed words", md)
+        self.assertEqual(ur.changed_words("The sky is ~~green~~ 🟢 **blue** today."), 2)
+
+    def test_with_no_mediator_an_accepted_fix_beats_a_shorter_rejected_one(self):
+        long_fix = finding_text("Sky color is wrong", "The sky is green today.", "Green skies are rare.",
+                                "The sky is ~~green~~ 🟢 **gray and heavy with rain** today.")
+        out, _ = two_lab_review(self.d, {"gpt": long_fix, "argon": SKY()},
+                                {"gpt": {"Sky color is wrong": "agree | disagree"}, "argon": {}}, fails=(ur.MEDIATOR,))
+        sky = self.groups(out)[1]["Sky color is wrong"]
+        self.assertEqual(sky["alts"][0]["by"], "gpt")
+        self.assertEqual(sky["rep"]["problem"], "Green skies are rare.")
+
+    def test_fixes_with_the_same_effect_keep_one_and_say_nothing(self):
+        out, _ = two_lab_review(
+            self.d, {"gpt": SKY(), "argon": SKY("The sky is ~~green~~ 🟢 **blue** today!")}, {"gpt": {}, "argon": {}},
+            {"Sky color is wrong": "ruling: uphold\nfix: a\nreason: same\nproblem: same"})
+        r, g = self.groups(out)
+        self.assertEqual(len(g["Sky color is wrong"]["alts"]), 1)
+        self.assertNotIn("The fixes differ", (out / "unified.md").read_text())
+
+    def test_same_fix_from_both_is_one_fix(self):
+        out, prompts = two_lab_review(self.d, {"gpt": SKY(), "argon": SKY()}, {"gpt": {}, "argon": {}})
+        r, g = self.groups(out)
+        self.assertEqual(len(g["Sky color is wrong"]["alts"]), 1)
+        self.assertIsNone(g["Sky color is wrong"]["fix_issue"])
+        self.assertNotIn("mediate", prompts)
+
+    def test_a_rejected_fix_can_be_replaced_by_the_mediators_own(self):
+        out, _ = two_lab_review(
+            self.d, {"gpt": WATER, "argon": GRASS}, {"argon": {"Water is not dry": "agree | disagree"}, "gpt": {}},
+            {"Water is not dry": "ruling: uphold\nfix: c\nreason: Wet is too loose.\nproblem: same\n---\n"
+                                 "Water is ~~dry~~ 🟢 **liquid at room temperature**."})
+        r, g = self.groups(out)
+        w = g["Water is not dry"]
+        self.assertFalse(w["disputed"])
+        self.assertTrue(w["alts"][0]["unreviewed"])
+        self.assertIn("not reviewed by the panel", (out / "unified.md").read_text())
+        self.assertIn("liquid", w["rep"]["body"])
+
+    def test_a_long_problem_is_shortened_and_the_diff_kept(self):
+        long = " ".join(["word"] * 40) + "."
+        out, prompts = two_lab_review(
+            self.d, {"gpt": finding_text("Long one", "Water is dry.", long, "Water is ~~dry~~ 🟢 **wet**."), "argon": GRASS},
+            {"gpt": {}, "argon": {}}, {"Long one": "ruling: uphold\nfix: a\nreason: ok\nproblem: Water is wet."})
+        r, g = self.groups(out)
+        self.assertIn("TOO LONG", prompts["mediate"][ur.MEDIATOR])
+        self.assertEqual(g["Long one"]["rep"]["problem"], "Water is wet.")
+        self.assertEqual(g["Long one"]["rep"]["fix"], "Water is ~~dry~~ 🟢 **wet**.")
+
+    def test_a_failed_mediator_is_not_replaced_by_a_reviewer(self):
+        out, prompts = two_lab_review(self.d, {"gpt": SKY(), "argon": GRASS},
+                                      {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}}, fails=(ur.MEDIATOR,))
+        r, g = self.groups(out)
+        self.assertEqual(list(prompts["mediate"]), [ur.MEDIATOR])
+        self.assertIsNone(r["mediator"])
+        self.assertIsNone(g["Sky color is wrong"]["ruling"])
+        self.assertTrue(any(f["stage"] == "mediate" and f["model"] == ur.MEDIATOR for f in r["failures"]))
+
+    def test_when_no_mediator_answers_disputed_findings_have_no_ruling(self):
+        out, _ = two_lab_review(self.d, {"gpt": SKY(), "argon": GRASS},
+                                {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}},
+                                fails=(ur.MEDIATOR, ("mediate", "gpt"), ("mediate", "argon")))
+        r, g = self.groups(out)
+        self.assertTrue(g["Sky color is wrong"]["disputed"])
+        self.assertFalse(g["Sky color is wrong"]["rejected"])
+        self.assertIn("No ruling: the mediator did not answer.", (out / "unified.md").read_text())
+        self.assertTrue(any(f["stage"] == "mediate" for f in r["failures"]))
+        self.assertIsNone(r["mediator"])  # it ruled on nothing, so the review does not name it
+
+    def test_a_logged_out_mediator_gets_no_call_and_leaves_no_ruling(self):
+        with mock.patch.object(ur, "preflight", lambda ms: [m for m in ms if m != ur.MEDIATOR]):
+            out, prompts = two_lab_review(self.d, {"gpt": SKY(), "argon": GRASS},
+                                          {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}})
+        r, g = self.groups(out)
+        self.assertNotIn("mediate", prompts)
+        self.assertIsNone(r["mediator"])
+        self.assertIn("No ruling: the mediator did not answer.", (out / "unified.md").read_text())
+
+    def test_three_reviewers_need_a_majority_and_still_get_a_mediator(self):
+        out, prompts = two_lab_review(
+            self.d, {"gpt": SKY() + GRASS, "argon": WATER, "gemini": "NO FINDINGS"},
+            {"argon": {"Sky color is wrong": "agree | agree", "Grass speed unsupported": "partial | agree"},
+             "gemini": {"Sky color is wrong": "disagree | agree", "Grass speed unsupported": "agree | agree",
+                        "Water is not dry": "partial | agree"},
+             "gpt": {"Water is not dry": "disagree | agree"}}, panel=("gpt", "argon", "gemini"))
+        r, g = self.groups(out)
+        self.assertFalse(g["Sky color is wrong"]["disputed"])  # gpt raised, argon agreed: 2 of 3
+        self.assertFalse(g["Grass speed unsupported"]["disputed"])  # gpt raised, gemini agreed: 2 of 3
+        self.assertTrue(g["Water is not dry"]["disputed"])  # argon raised it, partial and disagree: 1 of 3
+        self.assertIn("mediate", prompts)
+
+    def test_the_mediator_login_is_not_checked_when_nothing_needs_it(self):
+        checked = []
+        with mock.patch.object(ur, "preflight", lambda ms: checked.extend(ms) or ms):
+            out, _ = two_lab_review(self.d, {"gpt": SKY(), "argon": GRASS}, {"gpt": {}, "argon": {}})
+        self.assertNotIn(ur.MEDIATOR, checked)
+        self.assertFalse(json.loads((out / "results.json").read_text())["failures"])
+
+    def test_a_login_error_on_stdout_reads_as_not_logged_in(self):
+        self.assertTrue(ur.AUTH_ERROR.search("Failed to authenticate: OAuth session expired and could not be refreshed"))
+
+    def test_three_fixes_keep_their_letters_and_own_is_the_mediators(self):
+        replies = {"gpt": SKY(), "argon": SKY("The sky is ~~green~~ 🟢 **gray** today."),
+                   "gemini": SKY("The sky is ~~green~~ 🟢 **azure** today.")}
+        out, prompts = two_lab_review(self.d, replies, {"gpt": {}, "argon": {}, "gemini": {}},
+                                      {"Sky color is wrong": "ruling: uphold\nfix: c,b\nreason: Both are plausible.\nproblem: same"},
+                                      panel=("gpt", "argon", "gemini"))
+        sky = self.groups(out)[1]["Sky color is wrong"]
+        self.assertEqual([a["label"] for a in sky["alts"]], ["c"])
+        self.assertFalse(any(a.get("unreviewed") for a in sky["alts"]))  # c is a reviewer's fix here
+        self.assertIn("own is your own fix", prompts["mediate"][ur.MEDIATOR])
+        d2 = self.d / "own"
+        d2.mkdir()
+        out, _ = two_lab_review(d2, replies, {"gpt": {}, "argon": {}, "gemini": {}},
+                                {"Sky color is wrong": "ruling: uphold\nfix: own\nreason: All three miss it.\nproblem: same\n---\n"
+                                                       "The sky is ~~green~~ 🟢 **blue at noon** today."},
+                                panel=("gpt", "argon", "gemini"))
+        sky = self.groups(out)[1]["Sky color is wrong"]
+        self.assertTrue(sky["alts"][0]["unreviewed"])
+        self.assertIn("blue at noon", sky["rep"]["body"])
+
+    def test_items_the_mediator_skips_stay_unruled(self):
+        def med(m, title):
+            return "ruling: uphold\nfix: a\nreason: Real.\nproblem: same" if title == "Sky color is wrong" else None
+        out, prompts = two_lab_review(self.d, {"gpt": SKY() + GRASS, "argon": WATER},
+                                      {"argon": {"Sky color is wrong": "disagree | agree",
+                                                 "Grass speed unsupported": "disagree | agree"}, "gpt": {}}, med)
+        g = self.groups(out)[1]
+        self.assertEqual(g["Sky color is wrong"]["ruling"]["by"], ur.MEDIATOR)
+        self.assertIsNone(g["Grass speed unsupported"]["ruling"])
+        self.assertFalse(g["Grass speed unsupported"]["rejected"])
+        self.assertEqual(list(prompts["mediate"]), [ur.MEDIATOR])
+
+    def test_a_problem_of_two_sentences_is_shortened(self):
+        self.assertEqual(ur.sentences("No baseline is given, e.g. last year."), 1)
+        self.assertEqual(ur.sentences("No baseline. The claim fails."), 2)
+        out, prompts = two_lab_review(
+            self.d, {"gpt": finding_text("Two sentences", "Water is dry.", "Water is wet. The claim fails.",
+                                         "Water is ~~dry~~ 🟢 **wet**."), "argon": GRASS},
+            {"gpt": {}, "argon": {}}, {"Two sentences": "ruling: uphold\nfix: a\nreason: ok\nproblem: Water is wet, so the claim fails."})
+        self.assertIn("TOO LONG", prompts["mediate"][ur.MEDIATOR])
+        self.assertEqual(self.groups(out)[1]["Two sentences"]["rep"]["problem"], "Water is wet, so the claim fails.")
+
+    def test_a_deletion_only_fix_from_the_mediator_is_kept(self):
+        out, _ = two_lab_review(
+            self.d, {"gpt": WATER, "argon": GRASS}, {"argon": {"Water is not dry": "agree | disagree"}, "gpt": {}},
+            {"Water is not dry": "ruling: uphold\nfix: own\nreason: Cut the claim.\nproblem: same\n---\n~~Water is dry.~~"})
+        w = self.groups(out)[1]["Water is not dry"]
+        self.assertTrue(w["alts"][0]["unreviewed"])
+        self.assertEqual(w["alts"][0]["fix"], "~~Water is dry.~~")
+
+    def test_a_missing_mediator_cli_leaves_no_ruling(self):
+        out, prompts = two_lab_review(self.d, {"gpt": SKY(), "argon": GRASS},
+                                      {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}}, missing=(ur.MEDIATOR,))
+        r, g = self.groups(out)
+        self.assertNotIn("mediate", prompts)
+        self.assertIsNone(g["Sky color is wrong"]["ruling"])
+        self.assertTrue(any(f["stage"] == "preflight" and f["model"] == ur.MEDIATOR for f in r["failures"]))
+
+    def test_a_disputed_finding_says_when_its_fix_is_the_mediators_own(self):
+        out, _ = two_lab_review(
+            self.d, {"gpt": SKY(), "argon": GRASS}, {"argon": {"Sky color is wrong": "partial | disagree"}, "gpt": {}},
+            {"Sky color is wrong": "ruling: uphold\nfix: own\nreason: Real.\nproblem: same\n---\n"
+                                   "The sky is ~~green~~ 🟢 **gray** today."})
+        self.assertIn("own, not reviewed by the panel", (out / "unified.md").read_text())
+
+    def test_a_disputed_one_word_fix_is_not_a_typo(self):
+        typo = finding_text("Typo", "Water is dry.", "Spelling.", "Water is ~~dry~~ 🟢 **dyr**.", "Nitpick")
+        out, _ = two_lab_review(self.d, {"gpt": typo, "argon": GRASS}, {"argon": {"Typo": "partial | agree"}, "gpt": {}})
+        g = self.groups(out)[1]["Typo"]
+        self.assertTrue(g["disputed"])
+        self.assertFalse(ur.is_typo(g))
+
+    def test_three_reviewer_main_review_findings_are_tagged_majority(self):
+        out, _ = two_lab_review(self.d, {"gpt": GRASS, "argon": WATER, "gemini": SKY()},
+                                {"argon": {"Grass speed unsupported": "agree | agree"},
+                                 "gemini": {"Grass speed unsupported": "partial | agree"}, "gpt": {}},
+                                panel=("gpt", "argon", "gemini"))
+        g = self.groups(out)[1]["Grass speed unsupported"]
+        self.assertFalse(g["disputed"])
+        self.assertEqual(ur.vote_tag(g), "Majority")
+
+    def test_applied_and_ignore_take_a_fix_letter(self):
+        out, _ = two_lab_review(self.d, {"gpt": SKY(), "argon": GRASS}, {"gpt": {}, "argon": {}})
+        with contextlib.redirect_stdout(io.StringIO()) as s:
+            ur.record_decisions("1b", "applied", "test", out)
+        self.assertIn("recorded as applied", s.getvalue())
+
+    def test_iterate_skips_disputed_findings_and_differing_fixes(self):
+        base = {"status": None, "form": "edit", "where": "draft", "applicable": True, "slot": False, "severity": "Minor"}
+        self.assertTrue(ur.auto_applies({**base, "tag": "Unanimous"}))
+        self.assertFalse(ur.auto_applies({**base, "tag": "Disputed"}))
+        self.assertFalse(ur.auto_applies({**base, "tag": "Fixes differ"}))
+
+
+class NotesFile(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+        self.notes = self.d / "notes" / "review.md"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def review(self, replies, votes=None, mediation=None):
+        out, _ = two_lab_review(self.d, replies, votes or {"gpt": {}, "argon": {}}, mediation)
+        with mock.patch.object(ur.runtime, "log", lambda *a: None):
+            return ur.write_notes(self.d / "memo.md", out), out
+
+    def test_first_review_writes_sets_in_order_and_an_about_section(self):
+        path, _ = self.review({"gpt": SKY() + GRASS, "argon": WATER},
+                              {"argon": {"Grass speed unsupported": "partial | agree"}, "gpt": {}})
+        self.assertEqual(path, self.notes)
+        t = path.read_text()
+        self.assertTrue(t.startswith("# Review of memo.md\n"))
+        self.assertIn("### B1. Sky color is wrong", t)
+        self.assertIn("### B2. Water is not dry", t)
+        self.assertIn("### X1. Grass speed unsupported (Minor)", t)
+        self.assertIn("*Intro · memo.md, line 3*", t)
+        self.assertLess(t.index("## Minor"), t.index("## Disputed"))
+        self.assertLess(t.index("## Disputed"), t.index("## About this review"))
+        self.assertIn("- Open items: 2 Minor, 1 Disputed.", t)
+        self.assertIn("ties broken by Claude Opus", t)  # the scripted mediator ruled on X1
+
+    def test_an_open_item_the_mediator_drops_is_closed(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        path, _ = self.review({"gpt": SKY(), "argon": WATER}, {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}},
+                              {"Sky color is wrong": "ruling: drop\nfix: a\nreason: Green is right here.\nproblem: same"})
+        t = path.read_text()
+        self.assertNotIn("### B1.", t)
+        self.assertIn("B1 (dropped by the mediator)", t)
+
+    def test_a_lost_id_map_does_not_duplicate_items(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        ur.notes_map_file().unlink()
+        path, _ = self.review({"gpt": SKY(), "argon": WATER})
+        t = path.read_text()
+        self.assertEqual(t.count("Sky color is wrong"), 1)
+        self.assertEqual(t.count("Water is not dry"), 1)
+        self.assertNotIn("### B3.", t)
+
+    def test_two_findings_with_one_title_keep_their_own_items(self):
+        cite = lambda q: finding_text("Missing citation", q, "No source is given.", f"{q[:-1]} 🟢 **{{{{citation: Author, year}}}}**.")
+        self.review({"gpt": cite("The sky is green today.") + cite("Water is dry."), "argon": GRASS})
+        t = self.notes.read_text()
+        sky_id = re.search(r"### (B\d)\. Missing citation.*\n\*Intro · memo.md, line 3\*", t).group(1)
+        water_id = re.search(r"### (B\d)\. Missing citation.*\n\*Intro · memo.md, line 7\*", t).group(1)
+        path, _ = self.review({"gpt": cite("Water is dry."), "argon": GRASS})
+        t = path.read_text()
+        self.assertIn(ur.NOT_RAISED, t.split(f"### {sky_id}.")[1].split("###")[0])
+        self.assertNotIn(ur.NOT_RAISED, t.split(f"### {water_id}.")[1].split("###")[0])
+
+    def test_a_lost_id_map_after_a_close_does_not_reuse_the_id(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        f = self.d / "memo.md"
+        f.write_text(f.read_text().replace("The sky is green today.", "The sky is blue today."))
+        self.review({"gpt": WATER, "argon": WATER})  # B1 closes as applied
+        self.assertIn("- Next free ids: A1, B3, C1, X1.", self.notes.read_text())
+        ur.notes_map_file().unlink()
+        path, _ = self.review({"gpt": WATER + GRASS, "argon": WATER})
+        t = path.read_text()
+        self.assertIn("### B3. Grass speed unsupported", t)
+        self.assertNotIn("### B1.", t)
+
+    def test_notes_for_a_converted_file_go_beside_the_file_the_user_named(self):
+        _, out = self.review({"gpt": SKY(), "argon": WATER})
+        src = self.d / "elsewhere" / "paper.docx"
+        src.parent.mkdir()
+        src.write_text("x")
+        with mock.patch.object(ur.runtime, "log", lambda *a: None):
+            path = ur.write_notes(self.d / "memo.md", out, src)
+        self.assertEqual(path, src.parent / "notes" / "review.md")
+        self.assertTrue(path.read_text().startswith("# Review of paper.docx\n"))
+
+    def test_an_applied_item_does_not_take_a_finding_on_the_same_sentence(self):
+        f = self.d / "memo.md"
+        f.write_text("# Intro\n\nThe sky is green today, and the clouds over the hills are purple.\n\nGrass grows slowly.\n")
+        s = "The sky is green today, and the clouds over the hills are purple."
+        color = finding_text("Sky color is wrong", s, "The sky is blue.", s.replace("~~", "").replace("green", "~~green~~ 🟢 **blue**"))
+        clouds = lambda q: finding_text("Clouds are not purple", q, "Clouds are white.", q.replace("purple", "~~purple~~ 🟢 **white**"))
+        self.review({"gpt": color, "argon": clouds(s)})
+        t = self.notes.read_text()
+        clouds_id = re.search(r"### (B\d)\. Clouds", t).group(1)
+        f.write_text(f.read_text().replace("green", "blue"))  # the author applies the color fix
+        path, _ = self.review({"gpt": GRASS, "argon": clouds(s.replace("green", "blue"))})
+        t = path.read_text()
+        self.assertNotIn("Sky color is wrong", t.split("## About")[0])
+        self.assertIn(f"### {clouds_id}. Clouds are not purple", t)
+        self.assertNotIn(ur.NOT_RAISED, t.split(f"### {clouds_id}.")[1].split("###")[0])
+        self.assertEqual(t.count("Clouds are not purple"), 1)
+
+    def test_dropped_findings_are_listed_in_the_closing_section(self):
+        path, _ = self.review({"gpt": SKY(), "argon": WATER}, {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}},
+                              {"Sky color is wrong": "ruling: drop\nfix: a\nreason: The sky is green here.\nproblem: same"})
+        t = path.read_text()
+        self.assertNotIn("### B1. Sky", t)
+        self.assertIn("(the reviewers split): Sky color is wrong (The sky is green here).", t)
+
+    def test_new_ids_read_in_draft_order(self):
+        path, _ = self.review({"gpt": WATER + GRASS, "argon": SKY()})
+        t = path.read_text()
+        self.assertLess(t.index("B1. Sky"), t.index("B2. Grass"))
+        self.assertLess(t.index("B2. Grass"), t.index("B3. Water"))
+
+    def test_rereview_keeps_annotations_refreshes_lines_and_closes_applied_items(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        t = self.notes.read_text()
+        t = t.replace("Water is ~~dry~~ 🟢 **wet**.\n", "Water is ~~dry~~ 🟢 **wet**.\n\nAuthor: check the source first.\n")
+        self.notes.write_text(t)
+        f = self.d / "memo.md"
+        # The author applies the sky fix and adds two lines at the top, so Water moves down.
+        f.write_text("# Intro\n\nNew line.\n\nThe sky is blue today.\n\nGrass grows slowly.\n\nWater is dry.\n")
+        path, _ = self.review({"gpt": WATER, "argon": GRASS})
+        t = path.read_text()
+        self.assertNotIn("Sky color is wrong", t.split("## About")[0])
+        self.assertIn("Author: check the source first.", t)
+        self.assertIn("### B2. Water is not dry", t)
+        self.assertIn("memo.md, line 9*", t)
+        self.assertIn("### B3. Grass speed unsupported", t)  # next free id, never B1 again
+        self.assertLess(t.index("B3. Grass"), t.index("B2. Water"))  # draft order
+        self.assertIn("Closed this round: B1 (applied)", t)
+        self.assertTrue(any(d["decision"] == "applied" and d["title"] == "Sky color is wrong"
+                            for d in ur.load_decisions().get(str(f), [])))
+
+    def test_an_item_not_raised_again_stays_and_is_marked(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        path, _ = self.review({"gpt": WATER, "argon": GRASS})
+        t = path.read_text()
+        self.assertIn("### B1. Sky color is wrong", t)
+        self.assertIn(ur.NOT_RAISED, t.split("### B1.")[1].split("###")[0])
+        path, _ = self.review({"gpt": SKY(), "argon": WATER})  # raised again: the mark goes
+        self.assertNotIn(ur.NOT_RAISED, path.read_text().split("### B1.")[1].split("###")[0])
+
+    def test_a_hand_edited_heading_is_left_as_written(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        t = self.notes.read_text().replace("### B2. Water is not dry", "### Water, my note")
+        self.notes.write_text(t)
+        path, _ = self.review({"gpt": SKY(), "argon": WATER})
+        t = path.read_text()
+        self.assertIn("### Water, my note", t)
+        self.assertEqual(t.count("Water is not dry"), 0)  # not re-added under a new id either
+        self.assertIn("heading not in the", t)
+
+    def test_notes_for_a_second_draft_in_the_folder_get_their_own_file(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        other = self.d / "other.md"
+        other.write_text("x")
+        self.assertEqual(ur.notes_path(other), self.d / "notes" / "review-other.md")
+        self.assertEqual(ur.notes_path(self.d / "memo.md"), self.notes)
+
 
 if __name__ == "__main__":
     unittest.main()
