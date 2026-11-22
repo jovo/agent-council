@@ -1252,6 +1252,9 @@ def apply_mediation(items, rulings, mediator):
             chosen = ([alts[x] for x in r["fix"] if x in alts] or list(alts.values()))[:1]
         if g.get("fix_issue") == "differ" and len(chosen) == 1 and not chosen[0].get("unreviewed"):
             g["kept"] = True  # fixes differed, and one was kept
+            # The reviewers' fixes it passed over go under Disputed, unless they do the same thing.
+            if r["reason"].lower().strip(". ") != "same":
+                g["others"] = [a for a in alts.values() if a is not chosen[0]]
         # Each fix keeps the letter the mediator saw, so its reason and --item 3b
         # name the same fix. The mediator's pick comes first, and Accept applies it.
         g["alts"] = [{**a, "label": a.get("label") or "c"} for a in chosen]
@@ -1287,6 +1290,7 @@ def keep_shortest_fix(g, byid):
     g["rep"] = {**f, "problem": problem_of(f), "fix": pick["fix"]}
     g["rep"]["body"] = "\n\n".join(x for x in (g["rep"]["problem"], pick["fix"]) if x)
     g["alts"], g["shortest"] = [pick], True
+    g["others"] = [a for a in alts if a is not pick]  # shown under Disputed
 
 
 def mediate(groups, shown, focus, ok, outdir, workdir):
@@ -1316,6 +1320,24 @@ def mediate(groups, shown, focus, ok, outdir, workdir):
     return len(items)
 
 
+def other_fix_groups(groups, byid):
+    """One Disputed entry for each reviewed fix the main review passed over. It
+    keeps the problem and quote of the finding it came from, so it applies to
+    the text it quotes, and is titled after the main finding."""
+    out = []
+    for g in groups:
+        if g.get("rejected") or g.get("declined") or g.get("held"):
+            continue
+        for a in g.get("others") or []:
+            f = byid.get(a.get("id")) or g["rep"]
+            rep = {**f, "title": f"Other fix: {g['rep']['title']}", "problem": problem_of(f), "fix": a["fix"]}
+            rep["body"] = "\n\n".join(x for x in (rep["problem"], a["fix"]) if x)
+            out.append({**g, "rep": rep, "alts": [a], "others": [], "disputed": True, "fix_issue": None,
+                        "long": False, "kept": False, "raised_by": [a["by"]], "votes": {}, "self_voter": a["by"],
+                        "other_of": g["rep"]["title"], "shortest": False, "members": [a.get("id") or f.get("id")]})
+    return out
+
+
 SHORTEST = "The fixes differed and no mediator answered, so {who}'s, with the fewest changed words, is kept."
 
 
@@ -1333,6 +1355,11 @@ def ruling_line(g, labels):
     """The line under a finding that says how the panel and the mediator settled it."""
     name = lambda m: short(m) if m in PANELISTS and ":" not in m else labels.get(m, short(m))
     out = []
+    if g.get("other_of"):  # a fix the main review passed over
+        r = g.get("ruling") or {}
+        kept = (f"{name(r['by'])} kept the other fix: {r['reason'].rstrip('.')}." if r.get("reason")
+                else "That finding keeps the fix with the fewest changed words, since no mediator answered.")
+        return f"*Another fix for “{g['other_of']}”. {kept}*"
     if g.get("disputed"):
         out += [f"{name(m)} voted {v['vote']}: {v['reason'].rstrip('.')}." for m, v in g["votes"].items()
                 if v["vote"] != "agree"]
@@ -2908,6 +2935,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         for g in groups:
             if not g.get("ruling"):
                 keep_shortest_fix(g, byid)
+        groups += other_fix_groups(groups, byid)
     since = carry_over(groups, prev, dnorm)  # after the mediator, so a finding it dropped is not carried
     since = since if earlier else None
     n_rej = sum(g["rejected"] for g in groups)

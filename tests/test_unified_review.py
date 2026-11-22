@@ -2341,6 +2341,46 @@ class TwoLab(unittest.TestCase):
             st = ur.page_state(self.d / "memo.md", out)["findings"][0]
         self.assertEqual(len(st["alts"]), 1)
 
+    def test_the_fix_the_mediator_passes_over_goes_under_disputed(self):
+        out, prompts = two_lab_review(
+            self.d, {"gpt": SKY(), "argon": SKY("The sky is ~~green~~ 🟢 **gray** today.")},
+            {"gpt": {}, "argon": {}},
+            {"Sky color is wrong": "ruling: uphold\nfix: b\nreason: Gray fits the storm.\nproblem: same"})
+        r, g = self.groups(out)
+        kept = g["Sky color is wrong"]["alts"][0]["fix"]
+        other = g["Other fix: Sky color is wrong"]
+        self.assertTrue(other["disputed"])
+        self.assertNotEqual(other["alts"][0]["fix"], kept)
+        self.assertIn(other["alts"][0]["fix"], other["rep"]["body"])  # the page applies the other fix
+        md = (out / "unified.md").read_text()
+        main, _, disputed = md.partition("## Disputed")
+        self.assertIn(kept, main)
+        self.assertNotIn(other["alts"][0]["fix"], main)
+        self.assertIn("Other fix: Sky color is wrong", disputed)
+        self.assertIn("Another fix for “Sky color is wrong”. Claude Opus kept the other fix: Gray fits the storm.", disputed)
+        with mock.patch.object(ur, "summary_state", lambda run: None):  # no background summary call
+            st = {f["title"]: f for f in ur.page_state(self.d / "memo.md", out)["findings"]}
+        self.assertEqual(st["Other fix: Sky color is wrong"]["tag"], "Disputed")  # iterate skips it
+        with mock.patch.object(ur.runtime, "log", lambda *a: None):
+            notes = ur.write_notes(self.d / "memo.md", out).read_text()
+        self.assertIn("### X1. Other fix: Sky color is wrong", notes)
+
+    def test_fixes_that_do_the_same_thing_add_no_disputed_entry(self):
+        out, _ = two_lab_review(
+            self.d, {"gpt": SKY(), "argon": SKY("The sky is ~~green~~ 🟢 **blue** today!")}, {"gpt": {}, "argon": {}},
+            {"Sky color is wrong": "ruling: uphold\nfix: a\nreason: same\nproblem: same"})
+        self.assertNotIn("Other fix: Sky color is wrong", self.groups(out)[1])
+
+    def test_with_no_mediator_the_longer_fix_goes_under_disputed(self):
+        long_fix = finding_text("Sky color is wrong", "The sky is green today.", "Green skies are rare.",
+                                "The sky is ~~green~~ 🟢 **gray and heavy with rain** today.")
+        out, _ = two_lab_review(self.d, {"gpt": long_fix, "argon": SKY()}, {"gpt": {}, "argon": {}},
+                                fails=(ur.MEDIATOR,))
+        other = self.groups(out)[1]["Other fix: Sky color is wrong"]
+        self.assertIn("heavy with rain", other["rep"]["body"])
+        self.assertEqual(other["rep"]["problem"], "Green skies are rare.")  # gpt's problem, with gpt's fix
+        self.assertIn("fewest changed words, since no mediator answered", (out / "unified.md").read_text())
+
     def test_with_no_mediator_the_fix_with_fewest_changed_words_is_kept_with_its_problem(self):
         long_fix = finding_text("Sky color is wrong", "The sky is green today.", "Green skies are rare.",
                                 "The sky is ~~green~~ 🟢 **gray and heavy with rain** today.")
