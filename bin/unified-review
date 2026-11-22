@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """unified-review: a panel of models from different labs reviews a draft, then
-votes on every finding. The default is two models (GPT and Gemini) with Claude
-Opus breaking ties. notes/review.md, in the draft's folder, opens after the
+votes on every finding. The default is three models: GPT and Gemini review,
+and Claude Opus, which does not review, breaks ties. notes/review.md, in the draft's folder, opens after the
 review and gives the findings by severity, then in draft order, each with its
 votes, then the disputed findings with the mediator's rulings. unified.md in
 the run folder holds the same review. --page FILE opens a local review page
@@ -26,9 +26,11 @@ Usage: unified-review [-o OUTDIR] [-n FOCUS] [-p PANEL] [--context FILE]... [--v
   -n FOCUS   extra instructions appended to the reviewer prompt
   --context FILE  supporting material the panel reads but does not review
              (reviewer comments, a call, a source paper). Text or PDF. Repeatable.
-  -p PANEL   one model or a comma-separated panel (default: gpt,argon, GPT-5.6
-             Luna and Gemini 4 Argon, with Claude Opus as mediator, and Claude
-             then Grok standing in for a model that fails).
+  -p PANEL   the reviewers: one model, which reviews alone, or two or more,
+             which Claude Opus mediates as one more model (default: gpt,argon,
+             GPT-5.6 Luna and Gemini 4 Argon). With two or more, a Claude
+             reviewer is left off, since Claude mediates, and Grok stands in
+             for a model that fails. One model alone gets Claude, then Grok.
              Short names argon, claude, gpt, gemini,
              grok, or harness:model[@effort], such as
              claude:opus or codex:gpt-5.6-luna@medium or cursor:kimi-k3-low
@@ -39,8 +41,10 @@ Foreground:
   1. review   each panelist reviews the draft, no web search
   2. vote     each panelist votes on every other finding's problem and fix,
               reviewers anonymized
-  3. mediate  with two or more reviewers, MEDIATOR (else a reviewer) rules on disputed findings and
-              differing fixes, and shortens long problems
+  3. mediate  with two or more reviewers, MEDIATOR, which did not review, rules on disputed
+              findings, keeps one of differing fixes, and shortens long problems.
+              No reviewer stands in for it. Without a ruling, disputed findings
+              stay unruled and the fix with the fewest changed words is kept.
   4. merge    this script groups duplicates, sets aside findings voters or the
               mediator reject, runs mechanical checks, writes unified.md and
               notes/review.md, and opens notes/review.md.
@@ -257,6 +261,8 @@ def available(name):
 
 # Every failed panelist step, with its reason, for results.json and the reports.
 FAILURES = []
+# Requested reviewers left off because they share the mediator's lab: [{"model", "mediator"}].
+LEFT_OFF = []
 # Login failures, matched only in the end of the log: CLIs echo the prompt into
 # it, and a draft can say "authorized" or "log in" anywhere.
 AUTH_ERROR = re.compile(r"not logged in|logged out|please (?:log ?in|sign in)|log ?in required|"
@@ -436,10 +442,45 @@ def usable_standin(s):
     return available(s) and all(f["model"] != s for f in FAILURES)
 
 
+def lab_of(m):
+    """The lab behind a panelist: Anthropic for claude or claude:opus, OpenAI for codex."""
+    harness, model, _ = PANELISTS[panelist(m)]
+    if harness in ("claude", "codex"):
+        return {"claude": "Anthropic", "codex": "OpenAI"}[harness]
+    return next((n for n, pat in LABS if re.match(pat, model or "")), "Other")
+
+
+def mediator_lab(m, reviewers):
+    """True when m comes from the mediator's lab on a panel the mediator settles
+    (two or more reviewers). Such a model neither reviews nor stands in, so no
+    model settles disputes over its own lab's findings."""
+    return reviewers >= 2 and lab_of(m) == lab_of(MEDIATOR)
+
+
+def too_few_reviewers(panel=None):
+    """Why a panel cannot run, or "" when it can: two or more models need two
+    reviewers from labs other than the mediator's. With panel None, just the reason."""
+    if panel is not None and (len(panel) < 2 or sum(not mediator_lab(m, len(panel)) for m in panel) >= 2):
+        return ""
+    return (f"a review by more than one model needs two reviewers from labs other than the mediator's "
+            f"({label(MEDIATOR)}), for three models in all. Pass one model to review alone.")
+
+
 def choose_panel(panel, factcheck_only=False):
     """Drop requested panelists whose CLI is missing or logged out, and fill
     their places from STANDINS. A stand-in never replaces itself, and the
-    requested panel size counts the panelists dropped for a missing CLI."""
+    requested panel size counts the panelists dropped for a missing CLI.
+    A panel of two or more reviewers is settled by MEDIATOR, a third model, so
+    reviewers from the mediator's lab are left off and stand-ins skip it."""
+    if not factcheck_only and len(panel) >= 2:
+        same = [m for m in panel if mediator_lab(m, len(panel))]
+        if same:
+            runtime.log(f"{', '.join(same)} left off the panel: {label(MEDIATOR)} mediates, "
+                        "and a lab does not settle disputes over its own findings")
+            panel = [m for m in panel if m not in same]
+            LEFT_OFF.extend({"model": m, "mediator": label(MEDIATOR)} for m in same)
+        if len(panel) < 2:
+            sys.exit(f"error: {too_few_reviewers()}")
     wanted, tried = len(panel), set(panel)
     for m in [m for m in panel if not available(m)]:
         fail("preflight", m, f"{PANELISTS[m][0]} command not found. Set {PANELISTS[m][0].upper()}_BIN to its path")
@@ -449,7 +490,7 @@ def choose_panel(panel, factcheck_only=False):
             sys.exit("error: no panelist CLIs found")
         return panel
     panel = preflight(panel)
-    for s in [s for s in STANDINS if s not in tried]:
+    for s in [s for s in STANDINS if s not in tried and not mediator_lab(s, wanted)]:
         if len(panel) >= wanted:
             break
         if available(s) and preflight([s]):
@@ -1054,13 +1095,13 @@ def score_group(members, votes, voters, owner):
         "pos": min(f["pos"] for f in members),
     }
 
-# ---------------------------------------------------------------- two-lab panel
-# With two reviewers, a finding goes in the main review only when both stand
-# behind its problem: both raised it, or the other agreed with it. A partial or
-# disagree vote puts it under Disputed, where the mediator breaks the tie. The
-# fix is judged apart from the problem: when the two raised different fixes, or
-# the other model disagreed with the fix, the mediator picks one, shows both, or
-# writes its own.
+# ---------------------------------------------------------------- mediated panel
+# Two or more reviewers, plus MEDIATOR, a model from another lab that does not
+# review. A finding goes in the main review only when a majority of reviewers
+# stand behind its problem: they raised it, or agreed with it. Otherwise it goes
+# under Disputed, where the mediator breaks the tie. The fix is judged apart
+# from the problem: when the reviewers raised different fixes, or one disagreed
+# with a fix, the mediator keeps one or writes its own.
 
 MEDIATOR = "claude:opus"
 
@@ -1095,7 +1136,8 @@ def two_lab(groups, flat, votes, owner, ok):
             if not fix or m in [a["by"] for a in alts] or norm(fix) in seen:
                 continue
             seen.append(norm(fix))
-            alts.append({"label": "abcdefgh"[len(alts)], "by": m, "fix": fix})
+            rejected = any(votes[v].get(f["id"], {}).get("fix") == "disagree" for v in votes if v != m)
+            alts.append({"label": "abcdefgh"[len(alts)], "by": m, "fix": fix, "id": f["id"], "rejected": rejected})
         g["alts"] = alts
         fix_no = [m for m in votes for f in members
                   if m != owner.get(f["id"][0]) and votes[m].get(f["id"], {}).get("fix") == "disagree"]
@@ -1113,10 +1155,8 @@ Each item is one finding: its problem, its fix or fixes (Fix a, Fix b), and the
 votes, with reviewers anonymized. Its first line says what to settle:
 - DISPUTED: the reviewers split on the problem. Rule uphold if the problem is
   real and worth the author's time as stated, drop if not.
-- FIXES DIFFER: the fixes differ. One letter keeps that fix (when they do the
-  same thing, the shorter). Several letters, your pick first (such as b,a),
-  show them all, when they reflect different readings or tradeoffs the author
-  should choose between.
+- FIXES DIFFER: the fixes differ. Give the letter of the one fix to keep (when
+  they do the same thing, the shorter). The author sees only that fix.
 - FIX REJECTED: another reviewer disagreed with the fix. a keeps it.
 - In every case, own is your own fix, only when every fix given is flawed.
 - TOO LONG: the problem runs over {words} words or more than one sentence.
@@ -1127,7 +1167,7 @@ Reply with one block per item, in the order given, and nothing else:
 === <item id>
 ruling: uphold | drop
 severity: Major | Minor | Nitpick
-fix: <the letters of the fixes to show, your pick first, such as a or b,a> | own
+fix: <the letter of the one fix to keep, such as a or b> | own
 reason: <at most 12 words, readable without the fix letters, since the author may
   see only the fix you keep. When the fixes do the same thing, the word same.>
 problem: <the problem, one sentence of at most {words} words, or the word same>
@@ -1217,9 +1257,12 @@ def apply_mediation(items, rulings, mediator):
         if own and r["own"] and diff_parts("x\n\n" + r["own"])[0] is not None:  # diff_parts skips a first paragraph
             chosen = [{"by": mediator, "fix": r["own"], "unreviewed": True}]
         else:
-            chosen = [alts[x] for x in dict.fromkeys(r["fix"]) if x in alts] or list(alts.values())[:1]
+            chosen = ([alts[x] for x in r["fix"] if x in alts] or list(alts.values()))[:1]
         if g.get("fix_issue") == "differ" and len(chosen) == 1 and not chosen[0].get("unreviewed"):
             g["kept"] = True  # fixes differed, and one was kept
+            # The reviewers' fixes it passed over go under Disputed, unless they do the same thing.
+            if r["reason"].lower().strip(". ") != "same":
+                g["others"] = [a for a in alts.values() if a is not chosen[0]]
         # Each fix keeps the letter the mediator saw, so its reason and --item 3b
         # name the same fix. The mediator's pick comes first, and Accept applies it.
         g["alts"] = [{**a, "label": a.get("label") or "c"} for a in chosen]
@@ -1231,55 +1274,117 @@ def apply_mediation(items, rulings, mediator):
         g["rep"]["body"] = "\n\n".join(x for x in (g["rep"]["problem"], g["rep"]["fix"]) if x)
 
 
+def changed_words(fix):
+    """Words a diff strikes plus words it adds."""
+    old, new = diff_parts("x\n\n" + (fix or ""))  # diff_parts skips a first paragraph
+    if old is None:
+        return word_count(fix)
+    a, b = old.split(), new.split()
+    return sum((i2 - i1) + (j2 - j1) for op, i1, i2, j1, j2 in
+               difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes() if op != "equal")
+
+
+def keep_shortest_fix(g, byid):
+    """With no mediator ruling, keep one fix: one the other reviewers accepted
+    over one they rejected, then the fewest changed words, then the shorter
+    problem, then the earlier quote. The finding that fix came from supplies
+    the problem, title, and quote."""
+    alts = [a for a in g.get("alts") or [] if a.get("id") in byid]
+    if len(alts) < 2:
+        return
+    pick = min(alts, key=lambda a: (a.get("rejected", False), changed_words(a["fix"]),
+                                    word_count(problem_of(byid[a["id"]])), byid[a["id"]]["pos"]))
+    f = byid[pick["id"]]
+    g["rep"] = {**f, "problem": problem_of(f), "fix": pick["fix"]}
+    g["rep"]["body"] = "\n\n".join(x for x in (g["rep"]["problem"], pick["fix"]) if x)
+    g["alts"], g["shortest"] = [pick], True
+    g["others"] = [a for a in alts if a is not pick]  # shown under Disputed
+
+
 def mediate(groups, shown, focus, ok, outdir, workdir):
-    """Ask the mediator to settle disputed findings, differing fixes, and long
-    problems. MEDIATOR goes first. If it is logged out or fails, a reviewer
-    mediates instead. Returns the number of items it was given."""
+    """Ask MEDIATOR, a model that did not review, to settle disputed findings,
+    differing fixes, and long problems. No reviewer stands in for it: if it is
+    logged out or fails, disputed findings keep no ruling. Returns the number of
+    items it was given."""
     items = mediation_items(groups)
     if not items:
         return 0
-    rulings, pending = {}, list(items)
-    first = panelist(MEDIATOR)
-    for i, m in enumerate([first] + [r for r in ok if r != first]):
-        if m == first and not available(m):
-            fail("preflight", m, f"{PANELISTS[m][0]} CLI not found")
-            continue
-        if m == first and not preflight([m]):
-            continue  # logged out: hand it to a reviewer without a wasted call
-        runtime.log(f"3/4 mediate {len(pending)} finding{'' if len(pending) == 1 else 's'}: {label(m)}")
-        got = {}
+    m, got = panelist(MEDIATOR), {}
+    if not available(m):
+        fail("preflight", m, f"{PANELISTS[m][0]} CLI not found")
+    elif preflight([m]):
+        runtime.log(f"3/4 mediate {len(items)} finding{'' if len(items) == 1 else 's'}: {label(m)}")
         for attempt in (1, 2):
-            text = call(m, mediation_prompt(pending, shown, focus, ok),
-                        outdir / ("mediation.txt" if i == 0 else f"mediation-{i + 1}.txt"), workdir, stage="mediate")
-            got = {k: v for k, v in (parse_mediation(text) if text else {}).items() if k in dict(pending)}
+            text = call(m, mediation_prompt(items, shown, focus, ok), outdir / "mediation.txt", workdir, stage="mediate")
+            got = {k: v for k, v in (parse_mediation(text) if text else {}).items() if k in dict(items)}
             if got or text is None:
                 break
             if attempt == 2:
                 fail("mediate", m, "reply had no rulings in the expected format, after one retry")
-        apply_mediation(pending, got, m)
-        rulings.update(got)
-        # Items this mediator skipped go to the next one, so each gets a ruling.
-        pending = [(mid, g) for mid, g in pending if mid not in got]
-        if got and pending:
-            runtime.log(f"  {label(m)} left {len(pending)} unruled, passing them on")
-        if not pending:
-            break
+        apply_mediation(items, got, m)
     for mid, g in items:
-        if mid not in rulings and g.get("disputed"):
+        if mid not in got and g.get("disputed"):
             g["ruling"] = None
     return len(items)
+
+
+OTHER_FIX = "Other fix"
+
+
+def other_fix_groups(groups, byid):
+    """One Disputed entry for each reviewed fix the main review passed over. It
+    keeps the problem and quote of the finding it came from, so it applies to
+    the text it quotes, and is titled after the main finding."""
+    out = []
+    for g in groups:
+        if g.get("rejected") or g.get("declined") or g.get("held"):
+            continue
+        others = g.get("others") or []
+        shorts = [short(a["by"]) for a in others]
+        for a in others:
+            f = byid.get(a.get("id")) or g["rep"]
+            # The source model in the title keeps two passed-over fixes apart, since decisions go by title.
+            # Two models with one short name (one model at two settings) go by their full spec.
+            who = short(a["by"]) if shorts.count(short(a["by"])) == 1 else a["by"]
+            rep = {**f, "title": f"{OTHER_FIX} from {who}: {g['rep']['title']}", "problem": problem_of(f),
+                   "fix": a["fix"]}
+            rep["body"] = "\n\n".join(x for x in (rep["problem"], a["fix"]) if x)
+            out.append({**g, "rep": rep, "alts": [a], "others": [], "disputed": True, "fix_issue": None,
+                        "long": False, "kept": False, "raised_by": [a["by"]], "votes": {}, "self_voter": a["by"],
+                        "other_of": g["rep"]["title"], "shortest": False, "members": [a.get("id") or f.get("id")]})
+    return out
+
+
+SHORTEST = "The fixes differed and no mediator answered, so {who}'s, with the fewest changed words, is kept."
+
+
+def left_off_line(r):
+    """Which requested reviewers were left off, and why, or "" when none were."""
+    left = r.get("left_off") or []
+    if not left:
+        return ""
+    names = " and ".join(r["labels"].get(x["model"], x["model"]) for x in left)
+    return (f"Left off as {'a reviewer' if len(left) == 1 else 'reviewers'}: {names}. "
+            f"{left[0]['mediator']} mediates, and a lab does not settle disputes over its own findings.")
 
 
 def ruling_line(g, labels):
     """The line under a finding that says how the panel and the mediator settled it."""
     name = lambda m: short(m) if m in PANELISTS and ":" not in m else labels.get(m, short(m))
     out = []
+    if g.get("other_of"):  # a fix the main review passed over
+        r = g.get("ruling") or {}
+        kept = (f"{name(r['by'])} kept the other fix: {r['reason'].rstrip('.')}." if r.get("reason")
+                else "That finding keeps the fix with the fewest changed words, since no mediator answered.")
+        return f"*Another fix for “{g['other_of']}”. {kept}*"
     if g.get("disputed"):
         out += [f"{name(m)} voted {v['vote']}: {v['reason'].rstrip('.')}." for m, v in g["votes"].items()
                 if v["vote"] != "agree"]
         r = g.get("ruling")
         out.append(f"{name(r['by'])} upholds it: {r['reason'].rstrip('.')}." if r and r.get("reason")
                    else "No ruling: the mediator did not answer.")
+        if g.get("shortest"):
+            out.append(SHORTEST.format(who=name(g["alts"][0]["by"])))
         alts = g.get("alts") or []
         if r and alts and alts[0].get("unreviewed"):
             out.append(f"The fix is {name(r['by'])}'s own, not reviewed by the panel.")
@@ -1290,7 +1395,9 @@ def ruling_line(g, labels):
         why = f": {r['reason'].rstrip('.')}." if r.get("reason") else "."
         who = name(r["by"]) if r.get("by") else "The mediator"
         alts = g.get("alts") or []
-        if alts and alts[0].get("unreviewed"):
+        if g.get("shortest"):
+            out.append(SHORTEST.format(who=name(alts[0]["by"])))
+        elif alts and alts[0].get("unreviewed"):
             out.append(f"The reviewers' fixes were flawed. {who} wrote this one, not reviewed by the panel{why}")
         elif len(alts) > 1:
             out.append(f"The fixes differ. {who} prefers Fix {alts[0]['label']}{why}" if r else "The fixes differ. No ruling.")
@@ -2528,6 +2635,8 @@ def render(outdir):
     else:
         parts += participation(r.get("failures"), [("reviewed", r["reviewers_ok"]), ("voted", voters)], names,
                                "Agreement, duplicate grouping, and rejection by vote mean little in this run.")
+    if left_off_line(r):
+        parts.append(f"*{left_off_line(r)}*")
     if r["verify"]:
         parts.append("*Fact-check running. Results go to factcheck.md.*")
     if r.get("since_last") is not None:
@@ -2696,6 +2805,10 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     shown = shown or draft  # what the panel is given: the text, or a PDF's path
     timings = {}
     declines, applied = active_decisions(files, norm(draft))
+    # A declined "Other fix" quotes its main finding's text. It must not hold that
+    # finding back or reach the panel as a declined point: it applies to itself only.
+    other_declines = [d for d in declines if d["title"].startswith(OTHER_FIX + " ")]
+    declines = [d for d in declines if d not in other_declines]
     decided = (DECK_NOTE if DECK else "") + decisions_block(declines, applied)
     if declines or applied:
         runtime.log(f"using {len(declines)} declined and {len(applied)} applied points from past rounds")
@@ -2733,7 +2846,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         return fs
     found = {m: fs for m, fs in parallel(review, panel).items() if fs is not None}
     wanted = len(panel)
-    for s in [s for s in STANDINS if s not in panel and usable_standin(s)]:
+    for s in [s for s in STANDINS if s not in panel and usable_standin(s) and not mediator_lab(s, wanted)]:
         if len(found) >= wanted:
             break
         runtime.log(f"  {s} stands in for {', '.join(m for m in panel if m not in found)}")
@@ -2791,7 +2904,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         votes = {m: {} for m in ok}
     else:
         votes = {m: v for m, v in parallel(vote, ok).items() if v}
-    for s in [s for s in STANDINS if s not in panel and usable_standin(s)]:
+    for s in [s for s in STANDINS if s not in panel and usable_standin(s) and not mediator_lab(s, len(ok))]:
         if len(votes) >= len(ok):
             break
         runtime.log(f"  {s} stands in to vote for {', '.join(m for m in ok if m not in votes)}")
@@ -2839,6 +2952,15 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
                         shown, focus, ok, outdir, workdir)
         if n_med:
             timings["mediate"] = round(time.time() - t, 1)
+        byid = {f["id"]: f for f in flat}
+        for g in groups:
+            if not g.get("ruling"):
+                keep_shortest_fix(g, byid)
+        for og in other_fix_groups(groups, byid):
+            d = next((d for d in other_declines if d["title"] == og["rep"]["title"]), None)
+            if d:
+                og["declined"] = {"id": d["id"], "title": d["title"]}
+            groups.append(og)
     since = carry_over(groups, prev, dnorm)  # after the mediator, so a finding it dropped is not carried
     since = since if earlier else None
     n_rej = sum(g["rejected"] for g in groups)
@@ -2853,8 +2975,9 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         "started": STARTED,
         "panel": panel, "reviewers_ok": ok, "voters": voters,
         "mediator": next((g["ruling"]["by"] for g in groups if g.get("ruling")), None),  # whoever ruled
-        "labels": {m: label(m) for m in [*panel, *(f["model"] for f in FAILURES), *([panelist(MEDIATOR)] if n_med else [])]
-                   if m in PANELISTS}, "verify": verify,
+        "labels": {m: label(m) for m in [*panel, *(f["model"] for f in FAILURES), *([panelist(MEDIATOR)] if n_med else []),
+                                         *(x["model"] for x in LEFT_OFF)]
+                   if m in PANELISTS}, "verify": verify, "left_off": LEFT_OFF,
         "failures": FAILURES, "agreement": vote_agreement(flat, votes, owner),
         "anonymization": letters, "timings_s": timings, "headings": slide_headings(draft) if DECK else draft_headings(draft), "deck": DECK,
         "findings": flat, "votes": votes, "groups": groups, "checks": mech, "since_last": since}, indent=1, ensure_ascii=False) + "\n")
@@ -3142,6 +3265,7 @@ def write_notes(draft, run, source=None):
              *([f"- Left as written, heading not in the \"### A1. Title\" form: {', '.join(bad)}."] if bad else []),
              *([f"- The script's mechanical checks ({len(r['checks'])}) are in unified.md."] if r.get("checks") else []),
              *([f"- {not_assessed(r)}"] if not_assessed(r) else []),
+             *([f"- {left_off_line(r)}"] if left_off_line(r) else []),
              *(["- " + line.strip("*") for line in participation(r.get("failures"), [], lambda ms: ", ".join(
                  labels.get(m, m) for m in ms), "")])]
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -4795,7 +4919,7 @@ def recommend(path, run, store, keys, about, question, stem):
         save({"status": "failed", "reason": str(e)})
 
 
-DEFAULT_PANEL = ["gpt", "argon"]  # one model from each of two labs, with MEDIATOR breaking ties
+DEFAULT_PANEL = ["gpt", "argon"]  # two reviewers from two labs, plus MEDIATOR from a third: three models
 LABS = [("Anthropic", r"claude"), ("OpenAI", r"gpt|o\d|codex"), ("Google", r"gemini|gemma"),
         ("xAI", r"grok|cursor-grok"), ("Moonshot", r"kimi"), ("Z.ai", r"glm"), ("DeepSeek", r"deepseek"),
         ("Alibaba", r"qwen"), ("Meta", r"muse|llama"), ("Cursor", r"composer|auto")]
@@ -5076,6 +5200,8 @@ class PageServer:
                 chosen = [panelist(m) for m in body.get("panel", [])] or list(DEFAULT_PANEL)
             except ValueError as e:
                 return 400, "application/json", json.dumps({"error": str(e)})
+            if too_few_reviewers(chosen):  # the review would refuse it, so do not save it
+                return 400, "application/json", json.dumps({"error": too_few_reviewers(chosen)})
             f = RUNS_DIR / "page-panels.json"
             pages = json.loads(f.read_text()) if f.exists() else {}
             pages[str(self.path)] = chosen

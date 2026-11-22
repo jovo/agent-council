@@ -166,6 +166,8 @@ mark { padding: 0; background: none; color: var(--accent); font-weight: var(--bo
 ul, ol { padding-left: 1.1em; }
 li + li { margin-top: var(--stack-list); }
 /* Nested numbered lists letter like a word processor: 1, then a, then i. */
+/* A nested list sits one list step below its parent item, like any other item. */
+li > :is(ul, ol) { margin-top: var(--stack-list); }
 ol ol { list-style-type: lower-alpha; }
 ol ol ol { list-style-type: lower-roman; }
 /* Inline code (`text`): a quiet aside such as a pseudocode comment, in grey
