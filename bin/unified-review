@@ -667,7 +667,10 @@ finding about a claim, the fix adds the missing support or narrows the claim to
 what the evidence supports. For a question, the diff for the reading you
 assumed. For a Nitpick, the diff covers only the words that change. Do not
 restate the problem, do not quote the text outside the diff, and do not put the
-diff in a code block. No heading and no number.>
+diff in a code block, with one exception: an edit to an equation that is alone
+on its line ($$...$$ or $...$, an equation tag edit included) is a code block of two
+lines, the old line copied verbatim and then the new line. This script shows it
+rendered. No heading and no number.>
 
 Severities: Major, a claim of the draft fails or is unsupported until this is
 fixed; Minor, the claims stand without the fix, but it makes the draft clearer,
@@ -1414,28 +1417,42 @@ def rendered_fix(fix):
     """A fix whose diff is a code block of one old and one new line holding math,
     shown as the two equations rendered, so the reader never reads LaTeX source.
     The stored fix keeps the code block, which is what gets applied."""
-    m = re.search(r"```[a-z]*\n(.*?)\n```", fix, re.S)
-    lines = [l.strip() for l in m.group(1).splitlines() if l.strip()] if m else []
-    if len(lines) != 2 or not all("$" in l or "\\" in l for l in lines):
-        return fix
-    show = lambda l: l if l.startswith("$") else f"$${l}$$"
-    pair = f"🔴 **Now**\n\n{show(lines[0])}\n\n🟢 **Proposed**\n\n{show(lines[1])}"
-    return fix.replace(m.group(0), pair)
+    def one(m):
+        lines = [l.strip() for l in m.group(1).splitlines() if l.strip()]
+        eqs = [WHOLE_EQ.fullmatch(l) for l in lines]
+        if len(lines) != 2 or not all(eqs):
+            return m.group(0)  # prose, a table row, or other markup: show the source
+        show = [f"$${e.group(1) or e.group(2)}$$" for e in eqs]
+        return f"🔴 **Now**\n\n{show[0]}\n\n🟢 **Proposed**\n\n{show[1]}"
+    return re.sub(r"```[a-z]*\n(.*?)\n```", one, fix, flags=re.S)
 
 
-def finding_md(g, labels, ruling=True):
-    """A finding's text: its problem, its fix or fixes, and, with ruling, how it was settled."""
+# A line that is one equation and nothing else: $$...$$ or $...$, with no
+# delimiter inside, so "For $x$, ..." and "| $10 | ..." do not match.
+WHOLE_EQ = re.compile(r"\$\$([^$]+)\$\$|\$([^$]+)\$")
+
+
+def is_rendered_pair(body):
+    """A fix written as a rendered Now and Proposed pair, which no step can apply as written."""
+    return "🔴 **Now**" in body and "🟢 **Proposed**" in body
+
+
+def finding_md(g, labels, ruling=True, render=True):
+    """A finding's text: its problem, its fix or fixes, and, with ruling, how it
+    was settled. With render, a math code block shows as rendered equations;
+    without, the fix is as stored, for whoever applies it."""
     rep = g["rep"]
     alts = g.get("alts")
     if alts is None:  # a run from before the problem and fix were split
         return strip_end(rep["body"])
+    show = rendered_fix if render else (lambda f: f)
     parts = [problem_of(rep)]
     if len(alts) > 1 or (alts and alts[0].get("unreviewed")):
         for a in alts:
             who = "the mediator's, not reviewed by the panel" if a.get("unreviewed") else f"from {short(a['by'])}"
-            parts.append(f"**Fix {a['label']}** ({who}):\n\n{rendered_fix(a['fix'])}")
+            parts.append(f"**Fix {a['label']}** ({who}):\n\n{show(a['fix'])}")
     elif fix_of(rep):
-        parts.append(rendered_fix(fix_of(rep)))
+        parts.append(show(fix_of(rep)))
     if ruling:
         parts.append(ruling_line(g, labels))
     return "\n\n".join(p for p in parts if p)
@@ -2663,7 +2680,8 @@ def render(outdir):
         group = "Logic" if g.get("kind") == "logic" and sev != "Typo" and not d else sev
         if sev in ("Nitpick", "Typo"):  # one item: where it is, and the change, or the point when it has no diff
             paras = [p.strip() for p in finding_md(g, labels).split("\n\n") if p.strip()]
-            diff = " ".join(p for p in paras if "~~" in p or "🟢" in p or p.startswith("**Fix")) or " ".join(paras[:1])
+            diff = " ".join(p for p in paras if "~~" in p or "🟢" in p or "🔴" in p or p.startswith(("**Fix", "$$"))) \
+                or " ".join(paras[:1])
             if g.get("alts") is not None and (rl := ruling_line(g, labels)):
                 diff += " " + rl
             loc = locate(g["rep"]["quote"], r["files"]) if g["rep"]["quote"].strip() and g["where"] != "focus" else None
@@ -2800,7 +2818,7 @@ def show_items(spec, run):
         if alt:  # one fix of several: this is the one to apply
             print(f"\n{problem_of(g['rep'])}\n\nFix {alt['label']} (apply this one):\n\n{alt['fix']}\n")
         else:
-            print(f"\n{finding_md(g, r['labels'])}\n")
+            print(f"\n{finding_md(g, r['labels'], render=False)}\n")
     # The current text, so whoever acts on these items judges them against it.
     for f in r["files"]:
         p = Path(f)
@@ -3913,6 +3931,8 @@ def diff_parts(body, slots=False):
         if len(lines) == 2:
             return lines[0], lines[1]
         return None, "the diff is a code block that is not one old and one new line"
+    if is_rendered_pair(body):
+        return None, "the fix shows the equations rendered: apply it by hand"
     text = "\n\n".join(x for x in paras if "~~" in x or "🟢" in x).strip()
     if not text:
         return None, "the finding has no diff"

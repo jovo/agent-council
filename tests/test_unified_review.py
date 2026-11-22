@@ -2738,6 +2738,36 @@ class NotesFile(unittest.TestCase):
         anchor = "```markdown\n[x](#a)\n[x](#b)\n```"
         self.assertEqual(ur.rendered_fix(anchor), anchor)
 
+    def test_only_whole_line_equations_render(self):
+        for src in ("For $x > 0$, it holds.\nFor $x \\ge 0$, it holds.",  # prose with inline math
+                    "| Tier | $10 \\| mo |\n| Tier | $12 \\| mo |",       # a table row
+                    "> $$p = 1.$$\n> $$p = 1. \\tag{1}$$",                # a quoted equation
+                    "See \\autoref{a}.\nSee \\autoref{b}."):             # a macro, no math
+            block = f"```markdown\n{src}\n```"
+            self.assertEqual(ur.rendered_fix(block), block)
+        self.assertIn("$$p = 1. \\tag{1}$$", ur.rendered_fix("```markdown\n$p = 1.$\n$p = 1. \\tag{1}$\n```"))
+
+    def test_every_math_block_in_a_fix_renders(self):
+        two = "```markdown\n$$a.$$\n$$a. \\tag{1}$$\n```\n\n```markdown\n$$b.$$\n$$b. \\tag{2}$$\n```"
+        out = ur.rendered_fix(two)
+        self.assertNotIn("```", out)
+        self.assertEqual(out.count("🔴 **Now**"), 2)
+
+    def test_a_rendered_pair_is_not_read_as_a_diff(self):
+        body = "problem: Number it.\n\n🔴 **Now**\n\n$$p = 1.$$\n\n🟢 **Proposed**\n\n$$p = 1. \\tag{1}$$"
+        old, why = ur.diff_parts(body)
+        self.assertIsNone(old)
+        self.assertIn("by hand", why)
+        self.assertFalse(ur.note_resolved({"fix": body.partition("\n\n")[2]}, "The proposed rule."))
+
+    def test_item_prints_the_stored_code_block_and_the_notes_show_it_rendered(self):
+        g = {"rep": {"title": "T", "quote": "", "body": "", "problem": "Number it.",
+                     "fix": "```markdown\n$$p.$$\n$$p. \\tag{1}$$\n```"}, "alts": [], "votes": {}}
+        with mock.patch.object(ur, "problem_of", lambda r: r["problem"]), \
+                mock.patch.object(ur, "fix_of", lambda r: r["fix"]):
+            self.assertIn("```markdown", ur.finding_md(g, {}, ruling=False, render=False))
+            self.assertNotIn("```", ur.finding_md(g, {}, ruling=False))
+
     def test_new_ids_read_in_draft_order(self):
         path, _ = self.review({"gpt": WATER + GRASS, "argon": SKY()})
         t = path.read_text()
