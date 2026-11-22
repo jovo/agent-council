@@ -63,6 +63,18 @@ class Check(unittest.TestCase):
         self.assertEqual(self.problems("    foo~~, bar~~\n"), [])
         # A list continuation line is prose.
         self.assertEqual(len(fs.check("- item\n    foo~~, bar~~")), 1)
+        self.assertEqual(self.problems("    - item\n    foo~~, bar~~\n"), [])
+
+    def test_fence_indented_four_spaces_does_not_close(self):
+        self.assertEqual(self.problems("```\ncode\n    ```\nafter~~, old~~\n```\n"), [])
+
+    def test_url_inside_a_valid_strike(self):
+        self.assertEqual(self.problems("~~https://example.com~~"), [])
+
+    def test_no_pairing_across_a_valid_span(self):
+        text = "company~~, so ~~what~~ end~~"
+        self.assertEqual(fs.fix(text), text)
+        self.assertEqual(self.problems(text), ["unpaired ~~", "unpaired ~~"])
 
     def test_line_numbers(self):
         self.assertEqual(fs.check("ok\n\nthe end~~, and x~~.")[0][0], 3)

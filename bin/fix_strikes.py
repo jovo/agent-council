@@ -22,14 +22,14 @@ import re
 import sys
 import unicodedata
 
-FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
-INDENTED = re.compile(r"^(?: {4}|\t)(?![ \t]*(?:[-*+]|\d+[.)])[ \t])")
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+INDENTED = re.compile(r"^ {0,3}\t| {4}")
 # Spans whose tildes are not strikeout delimiters: inline code, link
 # destinations, autolinks, and bare URLs.
 SKIP = re.compile(r"(`+).+?\1"
                   r"|\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)"
                   r"|<[A-Za-z][A-Za-z0-9+.-]*:[^<>\s]*>"
-                  r"|(?:https?://|www\.)[^\s<]*", re.S)
+                  r"|(?:https?://|www\.)(?:[^\s<~]|~(?!~))*", re.S)
 ADDITION = re.compile(r"\A(\s*)🟢 \*\*(.*?)\*\*", re.S)
 
 
@@ -71,10 +71,14 @@ def _problems(text):
 
     Only the `~~` that GFM leaves unmatched are bad. They pair in order, as the
     author most likely meant them."""
-    pos = _unmatched(text, _tildes(text))
+    every = _tildes(text)
+    pos = _unmatched(text, every)
     out = []
     for i in range(0, len(pos) - 1, 2):
         s, e = pos[i], pos[i + 1]
+        if any(s < p < e for p in every):  # a valid span sits between: too ambiguous to repair
+            out += [(s, None, "unpaired ~~"), (e, None, "unpaired ~~")]
+            continue
         before = text[s - 1] if s else ""
         first, last = text[s + 2], text[e - 1]
         after = text[e + 2] if e + 2 < len(text) else ""
@@ -110,7 +114,7 @@ def _repair(text, s, e, problem):
         while w and not text[w - 1].isspace():
             w -= 1
         word = text[w:s]
-        if any(t in word for t in ("~~", "**", "🟢", "[", "]", "(", "<", "`")):
+        if any(t in word for t in ("~~", "**", "🟢", "[", "]", "(", "<", "`", "://", "www.")):
             return None
         tail = text[e + 2:]
         m = ADDITION.match(tail)
@@ -128,9 +132,9 @@ def _paragraphs(text):
     """(start, end) of each stretch of prose between blank lines and code blocks.
 
     A fence closes only on the same marker, at least as long, with nothing after
-    it. A stretch whose first line is indented four spaces, and is not a list
-    item, is taken as indented code and skipped. That also skips a list item's
-    later paragraphs, which is the safe side: a missed repair, never code
+    it. A fence is indented at most three spaces. A stretch whose first line is
+    indented four spaces is taken as indented code and skipped. That also skips
+    a nested list item or a list item's later paragraph after a blank line, which is the safe side: a missed repair, never code
     rewritten."""
     spans, start, at, fence = [], 0, 0, None
 
