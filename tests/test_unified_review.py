@@ -122,6 +122,29 @@ def vote(v, same="NONE", severity="Minor"):
     return {"vote": v, "severity": severity, "same": same, "reason": v}
 
 
+class PlainWords(unittest.TestCase):
+    def test_reference_section_lines_are_found(self):
+        text = "# Paper\n\nBody.\n\n## References\n\n[1] Zhao, Q. Title.\n\n## Appendix\n\nMore."
+        self.assertEqual(ur.reference_lines(text), {6, 7, 8})
+
+    def test_the_block_lists_flagged_words_and_long_sentences_but_not_references(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "memo.md"
+            long = " ".join(["the dog ran to the house"] * 5) + "."
+            f.write_text(f"# Memo\n\nThe photosynthesis rate rose.\n\n{long}\n\n## References\n\n[1] Xylophonist, Q. Ornithology.\n")
+            b = ur.plain_words_block([f])
+        self.assertIn("L3: photosynthesis", b)
+        self.assertIn("L5 (30 words)", b)
+        self.assertNotIn("ornithology", b.lower())
+        self.assertIn("propose a split", b)
+
+    def test_no_block_for_a_plain_short_draft(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "memo.md"
+            f.write_text("The dog ran to the house.\n")
+            self.assertEqual(ur.plain_words_block([f]), "")
+
+
 class Parsing(unittest.TestCase):
     def test_request_bodies_have_route_specific_limits(self):
         self.assertEqual(ur.read_request_body({"Content-Length": "2"}, io.BytesIO(b"{}"), "POST", "/api/update"), b"{}")

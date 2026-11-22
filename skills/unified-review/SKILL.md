@@ -58,6 +58,15 @@ model left off. Pass that line on when you report the review. If a reviewer on a
 One model alone gets Claude Sonnet, then Grok. Pass `-p` only when the user names a model or a panel. Pass `--verify` only when the user asks for a
 fact-check or claim verification.
 
+Before every review, the script runs the `plain-words` checker on each draft it
+can read as text (a PDF or Word file through its Markdown copy). The checker's
+flagged words and its sentences over 25 words go to the panel, outside a
+References or Bibliography section. Reviewers propose a split for each long
+sentence and a common word for each flagged word that has one, and leave field
+terms, names, and defined terms alone. These come back as Nitpicks unless the
+wording hides a logic or clarity problem. A `plain-words-allow.txt` beside the
+reviewed text adds words that pass.
+
 How it works: each panelist reviews without web search. Each finding is a
 problem (one sentence, at most 25 words) and a fix (the inline diff). With two
 or more, every panelist then votes on the other models' findings, never its
