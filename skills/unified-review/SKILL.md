@@ -208,6 +208,12 @@ gone from the draft, or whose added text is in it, is applied. When the draft
 changed the passage some other way, re-check the point and revise or delete
 the item.
 
+`fix-strikes` finds `~~` spans that would show as bare tildes, such as one that
+opens on a comma glued to the word before it. The script repairs its own output
+with it. After you write or edit a notes file, run `fix-strikes FILE`, and
+`fix-strikes --fix FILE` when it reports a span. In Claude Code a hook runs the
+check after each Markdown edit.
+
 The file opens with its title and goes straight to the items. Everything else
 goes in one section at the end, `## About this review`: the counts by
 severity, the date the line numbers refer to, the review run, how ids work,
