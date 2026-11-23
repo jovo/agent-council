@@ -1414,8 +1414,11 @@ def ruling_line(g, labels):
 
 
 # A ruling line an older version of this script wrote under A, B, and C items.
-OLD_RULING = re.compile(r"\*(.* disagreed with the fix\b.*|The fixes differ.*|The reviewers' fixes were flawed.*"
-                        r"|The fixes differed.*)\*")
+OLD_RULING = re.compile(
+    r"\*(?:[\w .'-]+ disagreed with the fix\.(?: [\w .'-]+ keeps it\b.*)?"
+    r"|The fixes differ\. (?:No ruling\.|[\w .'-]+ prefers Fix [a-z]\b.*)"
+    r"|The reviewers' fixes were flawed\. [\w .'-]+ wrote this one, not reviewed by the panel\b.*"
+    r"|The fixes differed(?:\. [\w .'-]+ kept [\w .'-]+'s\b.*| and no mediator answered, so .*))\*")
 
 
 def rendered_fix(fix, text="", inline=False):
@@ -1508,7 +1511,8 @@ WHOLE_EQ = re.compile(r"\$\$([^$]+)\$\$|\$([^$]+)\$")
 
 def is_rendered_pair(body):
     """A fix written as a rendered Now and Proposed pair, which no step can apply as written."""
-    return "🔴 **Now**" in body and "🟢 **Proposed**" in body
+    fix = body.partition("\n\n")[2] or body  # the problem comes first and may name the labels
+    return "🔴 **Now**" in fix and "🟢 **Proposed**" in fix.partition("🔴 **Now**")[2]
 
 
 def finding_md(g, labels, ruling=True, render=True, text="", inline=False):
@@ -3278,6 +3282,8 @@ def write_notes(draft, run, source=None):
         c = item_of(nid)
         if e is None:
             continue  # an item the script did not write: leave it
+        if nid[0] in "ABC":  # A, B, C items carry no ruling: drop one an older version wrote
+            c[2] = "\n".join(l for l in c[2].split("\n") if not OLD_RULING.fullmatch(l))
         hit = assign.get(nid)
         if hit:
             n, sev, lab, g = hit
@@ -3287,8 +3293,7 @@ def write_notes(draft, run, source=None):
                 lines[1] = where_line
             if head:
                 lines[0] = re.sub(r"Slide \d+ \(line \d+\): ", head, lines[0])
-            settled = not (g.get("disputed") or g.get("other_of"))  # A, B, C items carry no ruling
-            c[2] = "\n".join(l for l in lines if l != NOT_RAISED and not (settled and OLD_RULING.fullmatch(l)))
+            c[2] = "\n".join(l for l in lines if l != NOT_RAISED)
             e.update(key=g.get("key"), run=str(run), n=n, title=g["rep"]["title"], quote=g["rep"]["quote"],
                      fix=fix_of(g["rep"]) if g.get("alts") is None else (g["alts"][0]["fix"] if g["alts"] else ""),
                      order=note_order(g, sev))

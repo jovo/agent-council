@@ -2836,7 +2836,7 @@ class NotesFile(unittest.TestCase):
     def test_an_old_ruling_line_goes_when_the_item_is_raised_again(self):
         self.review({"gpt": SKY(), "argon": WATER})
         old = "*Argon disagreed with the fix. Claude Opus keeps it: The sky is blue.*"
-        mine = "*My own note.*"
+        mine = "*The fixes differ in wording, but keep the original.*"
         t = self.notes.read_text()
         head = t.index("### B1.")
         end = t.index("\n### ", head + 1)
@@ -2845,6 +2845,21 @@ class NotesFile(unittest.TestCase):
         item = path.read_text().split("### B1.")[1].split("###")[0]
         self.assertNotIn(old, item)
         self.assertIn(mine, item)
+
+    def test_an_old_ruling_line_goes_from_an_item_not_raised_again(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        old = "*The fixes differ. Claude Opus prefers Fix a: shorter.*"
+        t = self.notes.read_text()
+        end = t.index("\n### ", t.index("### B1.") + 1)
+        self.notes.write_text(t[:end] + f"\n\n{old}" + t[end:])
+        path, _ = self.review({"gpt": WATER, "argon": GRASS})
+        item = path.read_text().split("### B1.")[1].split("###")[0]
+        self.assertIn(ur.NOT_RAISED, item)
+        self.assertNotIn(old, item)
+
+    def test_a_problem_that_names_the_labels_still_applies(self):
+        body = "problem: Use 🔴 **Now** and 🟢 **Proposed** labels.\n\nThe sky is ~~green~~ 🟢 **blue**."
+        self.assertEqual(ur.diff_parts(body), ("The sky is green.", "The sky is blue."))
 
     def test_a_hand_edited_heading_is_left_as_written(self):
         self.review({"gpt": SKY(), "argon": WATER})
