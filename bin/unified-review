@@ -579,23 +579,34 @@ outside a list of about 3,250 common English headwords, and each sentence over
 def reference_lines(text):
     """Line numbers (1-based) inside a References or Bibliography section, which
     holds names and titles, not the draft's prose. The section runs to the next
-    heading of the same or a higher level."""
+    heading of the same or a higher level. Headings may be ATX (## References,
+    with closing hashes or a {#id} attribute) or setext (underlined with = or -)."""
+    lines = text.splitlines()
     out, level = set(), None
-    for i, line in enumerate(text.splitlines(), 1):
+    for i, line in enumerate(lines, 1):
         h = re.match(r"(#+)\s+(.*)", line)
+        under = lines[i] if i < len(lines) else ""
         if h:
-            if level and len(h.group(1)) <= level:
-                level = None
-            if re.match(r"(references|bibliography|works cited)\s*$", h.group(2).strip(), re.I):
-                level = len(h.group(1))
-        elif level:
-            out.add(i)
+            depth, title = len(h.group(1)), h.group(2)
+        elif line.strip() and re.fullmatch(r"=+\s*|-+\s*", under):
+            depth, title = (1 if under.startswith("=") else 2), line
+        else:
+            if level and not (i > 1 and re.fullmatch(r"=+\s*|-+\s*", line) and lines[i - 2].strip()):
+                out.add(i)
+            continue
+        if level and depth <= level:
+            level = None
+        title = re.sub(r"\s*\{[^}]*\}\s*$", "", title.strip())
+        title = re.sub(r"\s+#+$", "", title)
+        if re.fullmatch(r"(references|bibliography|works cited)", title.strip(), re.I):
+            level = depth
     return out
 
 
-def plain_words_block(files):
+def plain_words_block(files, only=None):
     """The plain-words checker's flagged words and long sentences for each draft,
-    as prompt text, or "" when the checker is missing or finds nothing."""
+    as prompt text, or "" when the checker is missing or finds nothing. only, a
+    set of line numbers, keeps flags on those lines alone (a passage review)."""
     if not PLAIN_WORDS.exists():
         runtime.log("plain-words checker not found: skipping the word and sentence check")
         return ""
@@ -618,9 +629,10 @@ def plain_words_block(files):
         # (names, acronyms): the panel has the draft, and names stay.
         refs = reference_lines(f.read_text())
         at = lambda l: int(re.match(r"L(\d+)", l).group(1))
-        flagged = [l for l in words.stdout.splitlines() if re.match(r"L\d+: ", l) and at(l) not in refs]
+        keep = lambda l: at(l) not in refs and (only is None or at(l) in only)
+        flagged = [l for l in words.stdout.splitlines() if re.match(r"L\d+: ", l) and keep(l)]
         summary = words.stdout.splitlines()[0] if words.stdout.strip() else ""
-        long = [l for l in sents.stdout.splitlines() if re.match(r"L\d+ \(\d+ words\): ", l) and at(l) not in refs]
+        long = [l for l in sents.stdout.splitlines() if re.match(r"L\d+ \(\d+ words\): ", l) and keep(l)]
         stat = sents.stdout.splitlines()[0] if sents.stdout.strip() else ""
         if not flagged and not long:
             continue
@@ -4567,7 +4579,10 @@ def review_passage(path, run, passage):
             decided = decisions_block(declines, applied)
             rules, _ = load_rules(None)
             focus = EDIT_FOCUS.format(passage=passage)
-            prompt = review_prompt(draft, focus, rules, decided)
+            at = draft.find(passage)
+            first = draft.count("\n", 0, at) + 1
+            lines = set(range(first, first + passage.count("\n") + 1)) if at >= 0 else set()
+            prompt = review_prompt(draft, focus, rules, decided + plain_words_block([path], only=lines))
             stamp = time.strftime("%H%M%S")
             found = {}
             for m, r in parallel(lambda m: call(m, prompt, run / f"edit-{stamp}-review-{m}.md",
