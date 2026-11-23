@@ -667,7 +667,7 @@ function renderCard() {
   }
   el.innerHTML = `<div class="sev ${f.severity}">${f.n}. ${f.severity}${f.kind ? " · " + kindOf(f) : ""}${f.form === "question" ? " · Question" : ""} · ${f.tag}${f.added ? " · from your edit" : ""}</div>
     <div class="title">${esc(f.title)} <span class="flagged">${flagged}</span></div>${f.severity === "Nitpick" ? "" : `<p class="point">${inline(pointOf(f))}</p>`}
-    ${f.body.includes("~~") || f.body.includes("🟢") ? `<div class="diff">${f.old != null && f.new != null ? revHtml(f) : diffHtml(f.body)}</div>` : ""}
+    ${(f.old != null && f.new != null) || f.body.includes("~~") || f.body.includes("🟢") ? `<div class="diff">${f.old != null && f.new != null ? revHtml(f) : diffHtml(f.body)}</div>` : ""}
     ${f.alts && f.alts[0] && f.alts[0].unreviewed ? `<p class="meta">This fix is the mediator's own, not reviewed by the panel.</p>` : ""}
     ${(f.alts || []).length > 1 ? f.alts.slice(1).map(a => `<p class="meta">Fix ${esc(a.label)}${a.unreviewed ? ", not reviewed by the panel" : ` from ${esc(a.by)}`} (Accept applies Fix ${esc(f.alts[0].label)}):</p><div class="diff">${marks(esc(a.fix))}</div>`).join("") : ""}
     ${f.ruling ? `<p class="meta">${esc(f.ruling)}</p>` : ""}

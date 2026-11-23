@@ -2833,6 +2833,19 @@ class NotesFile(unittest.TestCase):
         path, _ = self.review({"gpt": SKY(), "argon": WATER})  # raised again: the mark goes
         self.assertNotIn(ur.NOT_RAISED, path.read_text().split("### B1.")[1].split("###")[0])
 
+    def test_an_old_ruling_line_goes_when_the_item_is_raised_again(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        old = "*Argon disagreed with the fix. Claude Opus keeps it: The sky is blue.*"
+        mine = "*My own note.*"
+        t = self.notes.read_text()
+        head = t.index("### B1.")
+        end = t.index("\n### ", head + 1)
+        self.notes.write_text(t[:end] + f"\n\n{old}\n\n{mine}" + t[end:])
+        path, _ = self.review({"gpt": SKY(), "argon": WATER})
+        item = path.read_text().split("### B1.")[1].split("###")[0]
+        self.assertNotIn(old, item)
+        self.assertIn(mine, item)
+
     def test_a_hand_edited_heading_is_left_as_written(self):
         self.review({"gpt": SKY(), "argon": WATER})
         t = self.notes.read_text().replace("### B2. Water is not dry", "### Water, my note")

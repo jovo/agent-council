@@ -1413,6 +1413,11 @@ def ruling_line(g, labels):
     return f"*{' '.join(x for x in out if x)}*" if any(out) else ""
 
 
+# A ruling line an older version of this script wrote under A, B, and C items.
+OLD_RULING = re.compile(r"\*(.* disagreed with the fix\b.*|The fixes differ.*|The reviewers' fixes were flawed.*"
+                        r"|The fixes differed.*)\*")
+
+
 def rendered_fix(fix, text="", inline=False):
     """A fix whose diff is a code block of one old and one new line, shown
     rendered, so the reader never reads source: two equations as a Now and
@@ -3282,7 +3287,8 @@ def write_notes(draft, run, source=None):
                 lines[1] = where_line
             if head:
                 lines[0] = re.sub(r"Slide \d+ \(line \d+\): ", head, lines[0])
-            c[2] = "\n".join(l for l in lines if l != NOT_RAISED)
+            settled = not (g.get("disputed") or g.get("other_of"))  # A, B, C items carry no ruling
+            c[2] = "\n".join(l for l in lines if l != NOT_RAISED and not (settled and OLD_RULING.fullmatch(l)))
             e.update(key=g.get("key"), run=str(run), n=n, title=g["rep"]["title"], quote=g["rep"]["quote"],
                      fix=fix_of(g["rep"]) if g.get("alts") is None else (g["alts"][0]["fix"] if g["alts"] else ""),
                      order=note_order(g, sev))
