@@ -561,6 +561,93 @@ def norm(s):
 
 # ---------------------------------------------------------------- prompts
 
+PLAIN_WORDS = Path(__file__).resolve().parent.parent / "skills" / "plain-words" / "plain_words.py"
+PLAIN_INTRO = """
+The plain-words checker ran on the draft before this review. It flags each word
+outside a list of about 3,250 common English headwords, and each sentence over
+25 words. Its results follow. Act on them as part of this review:
+- For each long sentence, propose a split that puts one idea in each sentence,
+  unless the sentence cannot be split without losing its claim.
+- For each flagged word, propose a common word or phrase when one keeps the
+  meaning and the claim's strength. Keep technical terms of the draft's field,
+  names, acronyms, terms the draft defines, and words with no plain equivalent:
+  report nothing for those.
+- Put every change to one sentence in one finding: kind style, severity
+  Nitpick, unless the wording hides a logic or clarity problem.
+- A point the author declined or applied, listed above, still holds: skip a
+  flag that would raise it again.
+"""
+
+
+UNDERLINE = r" {0,3}(?:=+|-+)\s*"  # a setext heading's underline
+
+
+def reference_lines(text):
+    """Line numbers (1-based) inside a References or Bibliography section, which
+    holds names and titles, not the draft's prose. The section runs to the next
+    heading of the same or a higher level. Headings may be ATX (## References,
+    with closing hashes or a {#id} attribute) or setext (underlined with = or -)."""
+    lines = text.splitlines()
+    out, level = set(), None
+    for i, line in enumerate(lines, 1):
+        h = re.match(r" {0,3}(#{1,6})\s+(.*)", line)
+        under = lines[i] if i < len(lines) else ""
+        if h:
+            depth, title = len(h.group(1)), h.group(2)
+        elif line.strip() and re.fullmatch(UNDERLINE, under):
+            depth, title = (1 if "=" in under else 2), line
+        else:
+            if level and not (i > 1 and re.fullmatch(UNDERLINE, line) and lines[i - 2].strip()):
+                out.add(i)
+            continue
+        if level and depth <= level:
+            level = None
+        title = re.sub(r"\s*\{\s*[#.-][^}]*\}\s*$", "", title.strip())  # a pandoc {#id .class -} attribute
+        title = re.sub(r"\s+#+$", "", title)
+        if re.fullmatch(r"(references|bibliography|works cited)", title.strip(), re.I):
+            level = depth
+    return out
+
+
+def plain_words_block(files, only=None):
+    """The plain-words checker's flagged words and long sentences for each draft,
+    as prompt text, or "" when the checker is missing or finds nothing. only, a
+    set of line numbers, keeps flags on those lines alone (a passage review)."""
+    if not PLAIN_WORDS.exists():
+        runtime.log("plain-words checker not found: skipping the word and sentence check")
+        return ""
+    out = []
+    for f in files:
+        f = Path(f)
+        if is_pdf(f) or not f.exists():
+            continue
+        run = lambda cmd: subprocess.run([sys.executable, "-I", str(PLAIN_WORDS), cmd, str(f)], cwd=f.parent,
+                                         capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+        try:
+            words, sents = run("check"), run("sentences")
+        except (OSError, subprocess.TimeoutExpired) as e:
+            runtime.log(f"plain-words check failed on {f.name}: {e}")
+            continue
+        for line in words.stderr.splitlines():
+            runtime.log(f"plain-words: {line}")
+        # Keep the summary and each "L7: word, word" line. The checker echoes each
+        # line's text under it and then lists words seen only capitalized
+        # (names, acronyms): the panel has the draft, and names stay.
+        refs = reference_lines(f.read_text())
+        at = lambda l: int(re.match(r"L(\d+)", l).group(1))
+        keep = lambda l: at(l) not in refs and (only is None or at(l) in only)
+        flagged = [l for l in words.stdout.splitlines() if re.match(r"L\d+: ", l) and keep(l)]
+        summary = words.stdout.splitlines()[0] if words.stdout.strip() else ""
+        long = [l for l in sents.stdout.splitlines() if re.match(r"L\d+ \(\d+ words\): ", l) and keep(l)]
+        stat = sents.stdout.splitlines()[0] if sents.stdout.strip() else ""
+        if not flagged and not long:
+            continue
+        runtime.log(f"plain-words on {f.name}: {len(flagged)} lines with flagged words, {len(long)} long sentences")
+        out.append(f"\nPlain-words check of {f.name}:\n{summary}\n" + "\n".join(flagged)
+                   + f"\n{stat}\n" + "\n".join(long) + "\n")
+    return PLAIN_INTRO + "".join(out) if out else ""
+
+
 def decisions_block(declines, applied):
     """Prompt text listing points the author declined or already applied."""
     out = ""
@@ -2822,7 +2909,7 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     prev = previous_open(files[0]) if single else []
     if prev:
         runtime.log(f"carrying {len(prev)} open findings from the last review")
-    prompt = review_prompt(shown, focus, rules, decided + open_block(prev), ctx_block)
+    prompt = review_prompt(shown, focus, rules, decided + open_block(prev) + plain_words_block(files), ctx_block)
     (outdir / "prompt.md").write_text(prompt)
     steps = 4 if len(panel) >= 2 else 3  # two or more reviewers add a mediation step
     runtime.log(f"1/{steps} review (no web): {', '.join(panel)}")
@@ -4499,7 +4586,10 @@ def review_passage(path, run, passage):
             decided = decisions_block(declines, applied)
             rules, _ = load_rules(None)
             focus = EDIT_FOCUS.format(passage=passage)
-            prompt = review_prompt(draft, focus, rules, decided)
+            at = draft.find(passage)
+            first = draft.count("\n", 0, at) + 1
+            lines = set(range(first, first + passage.count("\n") + 1)) if at >= 0 else set()
+            prompt = review_prompt(draft, focus, rules, decided + plain_words_block([path], only=lines))
             stamp = time.strftime("%H%M%S")
             found = {}
             for m, r in parallel(lambda m: call(m, prompt, run / f"edit-{stamp}-review-{m}.md",
