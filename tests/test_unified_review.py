@@ -2755,7 +2755,7 @@ class NotesFile(unittest.TestCase):
         f = self.d / "memo.md"
         f.write_text(f.read_text().replace("The sky is green today.", "The sky is blue today."))
         self.review({"gpt": WATER, "argon": WATER})  # B1 closes as applied
-        self.assertIn("- Next free ids: A1, B3, C1, X1.", self.notes.read_text())
+        self.assertIn("<!-- next ids: A1, B3, C1, X1 -->", self.notes.read_text())
         ur.notes_map_file().unlink()
         path, _ = self.review({"gpt": WATER + GRASS, "argon": WATER})
         t = path.read_text()
@@ -2789,12 +2789,81 @@ class NotesFile(unittest.TestCase):
         self.assertNotIn(ur.NOT_RAISED, t.split(f"### {clouds_id}.")[1].split("###")[0])
         self.assertEqual(t.count("Clouds are not purple"), 1)
 
-    def test_dropped_findings_are_listed_in_the_closing_section(self):
+    def test_dropped_findings_stay_out_of_the_notes_file(self):
         path, _ = self.review({"gpt": SKY(), "argon": WATER}, {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}},
                               {"Sky color is wrong": "ruling: drop\nfix: a\nreason: The sky is green here.\nproblem: same"})
         t = path.read_text()
         self.assertNotIn("### B1. Sky", t)
-        self.assertIn("(the reviewers split): Sky color is wrong (The sky is green here).", t)
+        self.assertNotIn("Sky color is wrong", t)
+        self.assertNotIn("Next free ids", t)
+
+    def test_a_math_code_block_fix_shows_rendered(self):
+        fix = "```markdown\n$$p = 1.$$\n$$p = 1. \\tag{1}$$\n```"
+        out = ur.rendered_fix(fix)
+        self.assertNotIn("```", out)
+        self.assertIn("🔴 **Now**\n\n$$p = 1.$$\n\n🟢 **Proposed**\n\n$$p = 1. \\tag{1}$$", out)
+        anchor = "```markdown\n[x](#a)\n[x](#b)\n```"
+        self.assertEqual(ur.rendered_fix(anchor), anchor)
+
+    def test_only_whole_line_equations_render(self):
+        for src in ("For $x > 0$, it holds.\nFor $x \\ge 0$, it holds.",  # prose with inline math
+                    "> $$p = 1.$$\n> $$p = 1. \\tag{1}$$",                # a quoted equation
+                    "See \\autoref{a}.\nSee \\autoref{b}."):             # a macro, no math
+            block = f"```markdown\n{src}\n```"
+            self.assertEqual(ur.rendered_fix(block), block)
+        self.assertIn("$$p = 1. \\tag{1}$$", ur.rendered_fix("```markdown\n$p = 1.$\n$p = 1. \\tag{1}$\n```"))
+
+    def test_every_math_block_in_a_fix_renders(self):
+        two = "```markdown\n$$a.$$\n$$a. \\tag{1}$$\n```\n\n```markdown\n$$b.$$\n$$b. \\tag{2}$$\n```"
+        out = ur.rendered_fix(two)
+        self.assertNotIn("```", out)
+        self.assertEqual(out.count("🔴 **Now**"), 2)
+
+    def test_a_rendered_pair_is_not_read_as_a_diff(self):
+        body = "problem: Number it.\n\n🔴 **Now**\n\n$$p = 1.$$\n\n🟢 **Proposed**\n\n$$p = 1. \\tag{1}$$"
+        old, why = ur.diff_parts(body)
+        self.assertIsNone(old)
+        self.assertIn("by hand", why)
+        self.assertFalse(ur.note_resolved({"fix": body.partition("\n\n")[2]}, "The proposed rule."))
+
+    def test_item_prints_the_stored_code_block_and_the_notes_show_it_rendered(self):
+        g = {"rep": {"title": "T", "quote": "", "body": "", "problem": "Number it.",
+                     "fix": "```markdown\n$$p.$$\n$$p. \\tag{1}$$\n```"}, "alts": [], "votes": {}}
+        with mock.patch.object(ur, "problem_of", lambda r: r["problem"]), \
+                mock.patch.object(ur, "fix_of", lambda r: r["fix"]):
+            self.assertIn("```markdown", ur.finding_md(g, {}, ruling=False, render=False))
+            self.assertNotIn("```", ur.finding_md(g, {}, ruling=False))
+
+    DRAFT_TABLE = "Intro.\n\n| Name | Value |\n|---|---|\n| Alpha | One two three four. |\n| Beta | a \\| b |\n"
+
+    def test_a_table_row_edit_shows_under_the_draft_header(self):
+        fix = "```markdown\n| Alpha | One two three four. |\n| Alpha | One two {{slot}} four. |\n```"
+        out = ur.rendered_fix(fix, self.DRAFT_TABLE)
+        self.assertNotIn("```", out)
+        self.assertEqual(out, "| Name | Value |\n|---|---|\n| Alpha | One two ~~three~~ 🟢 **{{slot}}** four. |")
+
+    def test_a_table_row_not_in_the_draft_gets_a_blank_header(self):
+        out = ur.rendered_fix("```markdown\n| A | x y z |\n| A | x y w |\n```")
+        self.assertTrue(out.startswith("| | |\n|---|---|\n| A | x y ~~z~~ 🟢 **w** |"))
+
+    def test_an_escaped_pipe_stays_in_its_cell(self):
+        fix = "```markdown\n| Beta | a \\| b |\n| Beta | a \\| c |\n```"
+        self.assertIn("| Beta | a \\| ~~b~~ 🟢 **c** |", ur.rendered_fix(fix, self.DRAFT_TABLE))
+
+    def test_a_rewritten_cell_is_struck_whole(self):
+        self.assertEqual(ur.cell_diff("one two three", "four five six"), "~~one two three~~ 🟢 **four five six**")
+
+    def test_a_table_row_edit_in_a_nitpick_bullet_is_one_line(self):
+        fix = "```markdown\n| Alpha | One two three four. |\n| Alpha | One two {{slot}} four. |\n```"
+        out = ur.rendered_fix(fix, self.DRAFT_TABLE, inline=True)
+        self.assertEqual(out, "*Value*: One two ~~three~~ 🟢 **{{slot}}** four.")
+
+    def test_item_keeps_a_table_row_edit_as_stored(self):
+        g = {"rep": {"title": "T", "quote": "", "body": "", "problem": "P.",
+                     "fix": "```markdown\n| A | x |\n| A | y |\n```"}, "alts": [], "votes": {}}
+        with mock.patch.object(ur, "problem_of", lambda r: r["problem"]), \
+                mock.patch.object(ur, "fix_of", lambda r: r["fix"]):
+            self.assertIn("```markdown\n| A | x |", ur.finding_md(g, {}, ruling=False, render=False))
 
     def test_new_ids_read_in_draft_order(self):
         path, _ = self.review({"gpt": WATER + GRASS, "argon": SKY()})
@@ -2830,6 +2899,34 @@ class NotesFile(unittest.TestCase):
         self.assertIn(ur.NOT_RAISED, t.split("### B1.")[1].split("###")[0])
         path, _ = self.review({"gpt": SKY(), "argon": WATER})  # raised again: the mark goes
         self.assertNotIn(ur.NOT_RAISED, path.read_text().split("### B1.")[1].split("###")[0])
+
+    def test_an_old_ruling_line_goes_when_the_item_is_raised_again(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        old = "*Argon disagreed with the fix. Claude Opus keeps it: The sky is blue.*"
+        mine = "*The fixes differ in wording, but keep the original.*"
+        t = self.notes.read_text()
+        head = t.index("### B1.")
+        end = t.index("\n### ", head + 1)
+        self.notes.write_text(t[:end] + f"\n\n{old}\n\n{mine}" + t[end:])
+        path, _ = self.review({"gpt": SKY(), "argon": WATER})
+        item = path.read_text().split("### B1.")[1].split("###")[0]
+        self.assertNotIn(old, item)
+        self.assertIn(mine, item)
+
+    def test_an_old_ruling_line_goes_from_an_item_not_raised_again(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        old = "*The fixes differ. Claude Opus prefers Fix a: shorter.*"
+        t = self.notes.read_text()
+        end = t.index("\n### ", t.index("### B1.") + 1)
+        self.notes.write_text(t[:end] + f"\n\n{old}" + t[end:])
+        path, _ = self.review({"gpt": WATER, "argon": GRASS})
+        item = path.read_text().split("### B1.")[1].split("###")[0]
+        self.assertIn(ur.NOT_RAISED, item)
+        self.assertNotIn(old, item)
+
+    def test_a_problem_that_names_the_labels_still_applies(self):
+        body = "problem: Use 🔴 **Now** and 🟢 **Proposed** labels.\n\nThe sky is ~~green~~ 🟢 **blue**."
+        self.assertEqual(ur.diff_parts(body), ("The sky is green.", "The sky is blue."))
 
     def test_a_hand_edited_heading_is_left_as_written(self):
         self.review({"gpt": SKY(), "argon": WATER})
