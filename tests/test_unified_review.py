@@ -122,6 +122,46 @@ def vote(v, same="NONE", severity="Minor"):
     return {"vote": v, "severity": severity, "same": same, "reason": v}
 
 
+class PlainWords(unittest.TestCase):
+    def test_reference_section_lines_are_found(self):
+        text = "# Paper\n\nBody.\n\n## References\n\n[1] Zhao, Q. Title.\n\n## Appendix\n\nMore."
+        self.assertEqual(ur.reference_lines(text), {6, 7, 8})
+
+    def test_reference_headings_with_attributes_or_underlines_are_found(self):
+        self.assertEqual(ur.reference_lines("Body.\n\n## References {#refs}\n\n[1] Zhao.\n"), {4, 5})
+        self.assertEqual(ur.reference_lines("Body.\n\n## Bibliography ##\n[1] Zhao.\n"), {4})
+        setext = "Paper\n=====\n\nBody.\n\nReferences\n----------\n\n[1] Zhao.\n\nAppendix\n========\n\nMore."
+        self.assertEqual(ur.reference_lines(setext), {8, 9, 10})
+        self.assertEqual(ur.reference_lines("Body.\n\n  ## References\n\n[1] Zhao.\n"), {4, 5})
+        self.assertEqual(ur.reference_lines("Body.\n\n  References\n  ----\n[1] Zhao.\n"), {5})
+        self.assertEqual(ur.reference_lines("## References {draft}\n\nThe result holds.\n"), set())
+
+    def test_a_passage_review_gets_only_the_passage_flags(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "memo.md"
+            f.write_text("The photosynthesis rate rose.\n\nThe ornithology club met.\n")
+            b = ur.plain_words_block([f], only={3})
+        self.assertIn("ornithology", b)
+        self.assertNotIn("photosynthesis", b)
+
+    def test_the_block_lists_flagged_words_and_long_sentences_but_not_references(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "memo.md"
+            long = " ".join(["the dog ran to the house"] * 5) + "."
+            f.write_text(f"# Memo\n\nThe photosynthesis rate rose.\n\n{long}\n\n## References\n\n[1] Xylophonist, Q. Ornithology.\n")
+            b = ur.plain_words_block([f])
+        self.assertIn("L3: photosynthesis", b)
+        self.assertIn("L5 (30 words)", b)
+        self.assertNotIn("ornithology", b.lower())
+        self.assertIn("propose a split", b)
+
+    def test_no_block_for_a_plain_short_draft(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "memo.md"
+            f.write_text("The dog ran to the house.\n")
+            self.assertEqual(ur.plain_words_block([f]), "")
+
+
 class Parsing(unittest.TestCase):
     def test_request_bodies_have_route_specific_limits(self):
         self.assertEqual(ur.read_request_body({"Content-Length": "2"}, io.BytesIO(b"{}"), "POST", "/api/update"), b"{}")
@@ -929,6 +969,33 @@ class Pipeline(unittest.TestCase):
             self.assertEqual(status["status"], "done", status)
             self.assertEqual(status["added"], 1)
             self.assertNotIn("edit vote", stages)
+
+    def test_edit_review_sends_the_plain_words_flags_for_the_passage(self):
+        prompts = []
+
+        def fake_call(m, prompt, out, workdir, web=False, stage=""):
+            prompts.append(prompt)
+            return ""
+
+        real = ur.threading.Thread
+
+        def Now(*a, **kw):
+            if kw.get("daemon"):
+                return types.SimpleNamespace(start=kw["target"])
+            return real(*a, **kw)
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            f = d / "memo.md"
+            f.write_text("The photosynthesis rate rose.\n\nThe ornithology club met.\n")
+            run = d / "run"
+            run.mkdir()
+            (run / "results.json").write_text(json.dumps({"groups": [], "labels": {}}))
+            with mock.patch.object(ur, "call", fake_call), mock.patch.object(ur, "page_panel", lambda p: ["argon"]), \
+                 mock.patch.object(ur, "load_rules", lambda r: ("rules", "x")), mock.patch.object(ur, "RUNS_DIR", d), \
+                 mock.patch.object(ur.threading, "Thread", Now):
+                ur.review_passage(str(f), run, "The ornithology club met.")
+        self.assertIn("L3: ornithology", prompts[0])
+        self.assertNotIn("L1: photosynthesis", prompts[0])
 
     def test_stand_ins_are_claude_then_grok(self):
         self.assertEqual(ur.STANDINS, ["claude", "grok"])
