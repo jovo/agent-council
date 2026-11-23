@@ -409,8 +409,9 @@ table { width: 100%; border-collapse: collapse; font-size: var(--type-small); li
 th, td { padding: var(--s1) var(--s2) var(--s1) 0; border: 0; background: none !important; text-align: left; vertical-align: middle; }
 td, tbody th { color: var(--muted); }
 thead th { color: var(--muted); font-weight: var(--bold); }
-/* Bold in a table cell marks the value that matters: white, not grey. */
-td strong { color: var(--ink); }
+/* Bold in a table cell marks the value that matters: white, not grey.
+   ***word*** (bold inside italic) keeps the accent. */
+td strong:not(em strong) { color: var(--ink); }
 tbody th { font-weight: var(--bold); }
 /* A `contrast` slide holds a table that contrasts its columns: values in
    white body text, labels and headers small and grey, and the last column, the

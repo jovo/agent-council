@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Link agent-council into place: the unified-review, make-pdf, edit-md, and plain-words commands on your PATH, and
+# Link agent-council into place: the unified-review, make-pdf, edit-md, fix-strikes, and plain-words commands on your PATH, and
 # every skill in skills/ into Claude Code, Codex, and Cursor.
 set -euo pipefail
 
@@ -22,6 +22,8 @@ done
 link "$repo/bin/unified-review" "$bin_dir/unified-review"
 link "$repo/bin/make-pdf" "$bin_dir/make-pdf"
 link "$repo/bin/edit-md" "$bin_dir/edit-md"
+chmod +x "$repo/bin/fix_strikes.py"
+link "$repo/bin/fix_strikes.py" "$bin_dir/fix-strikes"
 chmod +x "$repo/skills/plain-words/plain_words.py"
 link "$repo/skills/plain-words/plain_words.py" "$bin_dir/plain-words"
 # Word lists the plain-words skill may not redistribute: the Oxford 3000 and the xkcd Simple Writer list.
