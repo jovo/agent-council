@@ -132,6 +132,9 @@ class PlainWords(unittest.TestCase):
         self.assertEqual(ur.reference_lines("Body.\n\n## Bibliography ##\n[1] Zhao.\n"), {4})
         setext = "Paper\n=====\n\nBody.\n\nReferences\n----------\n\n[1] Zhao.\n\nAppendix\n========\n\nMore."
         self.assertEqual(ur.reference_lines(setext), {8, 9, 10})
+        self.assertEqual(ur.reference_lines("Body.\n\n  ## References\n\n[1] Zhao.\n"), {4, 5})
+        self.assertEqual(ur.reference_lines("Body.\n\n  References\n  ----\n[1] Zhao.\n"), {5})
+        self.assertEqual(ur.reference_lines("## References {draft}\n\nThe result holds.\n"), set())
 
     def test_a_passage_review_gets_only_the_passage_flags(self):
         with tempfile.TemporaryDirectory() as d:

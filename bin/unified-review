@@ -573,7 +573,12 @@ outside a list of about 3,250 common English headwords, and each sentence over
   report nothing for those.
 - Put every change to one sentence in one finding: kind style, severity
   Nitpick, unless the wording hides a logic or clarity problem.
+- A point the author declined or applied, listed above, still holds: skip a
+  flag that would raise it again.
 """
+
+
+UNDERLINE = r" {0,3}(?:=+|-+)\s*"  # a setext heading's underline
 
 
 def reference_lines(text):
@@ -584,19 +589,19 @@ def reference_lines(text):
     lines = text.splitlines()
     out, level = set(), None
     for i, line in enumerate(lines, 1):
-        h = re.match(r"(#+)\s+(.*)", line)
+        h = re.match(r" {0,3}(#{1,6})\s+(.*)", line)
         under = lines[i] if i < len(lines) else ""
         if h:
             depth, title = len(h.group(1)), h.group(2)
-        elif line.strip() and re.fullmatch(r"=+\s*|-+\s*", under):
-            depth, title = (1 if under.startswith("=") else 2), line
+        elif line.strip() and re.fullmatch(UNDERLINE, under):
+            depth, title = (1 if "=" in under else 2), line
         else:
-            if level and not (i > 1 and re.fullmatch(r"=+\s*|-+\s*", line) and lines[i - 2].strip()):
+            if level and not (i > 1 and re.fullmatch(UNDERLINE, line) and lines[i - 2].strip()):
                 out.add(i)
             continue
         if level and depth <= level:
             level = None
-        title = re.sub(r"\s*\{[^}]*\}\s*$", "", title.strip())
+        title = re.sub(r"\s*\{\s*[#.-][^}]*\}\s*$", "", title.strip())  # a pandoc {#id .class -} attribute
         title = re.sub(r"\s+#+$", "", title)
         if re.fullmatch(r"(references|bibliography|works cited)", title.strip(), re.I):
             level = depth
