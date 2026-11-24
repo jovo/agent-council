@@ -1390,6 +1390,17 @@ class NotAssessed(unittest.TestCase):
                           ur.not_assessed({"files": [str(nums), str(fig)], "verify": False}))
 
 
+class PaperRules(unittest.TestCase):
+    def test_paper_skill_reaches_the_panel_with_its_scope(self):
+        rules = ur.with_figure_rules("base rules")
+        self.assertTrue(rules.startswith("base rules"))
+        self.assertIn("# Papers and proposals", rules)
+        self.assertIn("**Abstract.**", rules)
+        self.assertLess(rules.index(ur.PAPER_RULES), rules.index("# Papers and proposals"))
+        # The scope note covers only the paper rules, so it follows the general skills.
+        self.assertLess(rules.index("# Documents"), rules.index(ur.PAPER_RULES))
+
+
 class ClaimRules(unittest.TestCase):
     def test_claim_map_and_finding_rule_reach_the_panel(self):
         rules = ur.reviewer_rules()
