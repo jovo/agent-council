@@ -17,7 +17,27 @@ CODEX = (os.environ.get("CODEX_BIN") or shutil.which("codex")
                   if os.access(c, os.X_OK)), "codex"))
 CURSOR = os.environ.get("CURSOR_BIN") or shutil.which("cursor-agent")
 
-HARNESS_BIN = {"claude": CLAUDE, "codex": CODEX, "cursor": CURSOR}
+AGY = os.environ.get("AGY_BIN") or shutil.which("agy")  # Google's Antigravity CLI
+
+HARNESS_BIN = {"claude": CLAUDE, "codex": CODEX, "cursor": CURSOR, "agy": AGY}
+
+# In one-prompt mode agy runs shell commands, reads files outside its folder, and
+# searches the web without asking, even with --sandbox. So a panelist runs as an
+# agent whose only tool is ask_question, with every permission denied, in an empty
+# folder of its own. An unknown --agent makes agy exit 1, so a missing file fails
+# closed. The deny rules hold without the agent, but leave web search on.
+AGY_AGENT = """---
+name: unified-reviewer
+description: Answers from the prompt alone.
+tools:
+  - ask_question
+mainAgent: true
+subagent: false
+---
+Answer from the prompt alone.
+"""
+AGY_SETTINGS = ('{"permissions":{"deny":["command(*)","unsandboxed(*)","read_file(*)","write_file(*)",'
+                '"read_url(*)","execute_url(*)","mcp(*)"]},"allowNonWorkspaceAccess":false}')
 
 # When launched from inside Claude Code, Codex, or Cursor, the parent agent's
 # session variables leak into the child CLIs and break their auth. Drop them.

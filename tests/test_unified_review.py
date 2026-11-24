@@ -439,6 +439,62 @@ class Calls(unittest.TestCase):
         panel, _ = self.choose(["argon", "gpt", "gemini"], missing=("gpt",))
         self.assertEqual(panel, ["argon", "gemini", "grok"])
 
+    def run_agy(self, writes=None, web=False, cursor="/bin/cursor-agent"):
+        seen = {}
+
+        def fake(cmd, **kw):
+            seen.update(cmd=cmd, cwd=kw.get("cwd"))
+            if kw.get("cwd"):
+                seen["files"] = sorted(str(p.relative_to(kw["cwd"])) for p in Path(kw["cwd"]).rglob("*") if p.is_file())
+                if writes:
+                    (Path(kw["cwd"]) / writes).write_text("x")
+            return SimpleNamespace(returncode=0, stdout="fine")
+        with mock.patch.object(ur.subprocess, "run", fake), mock.patch.object(ur.runtime, "AGY", "/bin/agy"), \
+                mock.patch.object(ur.runtime, "CURSOR", cursor), \
+                mock.patch.dict(ur.PANELISTS, {"argon": ("agy", "gemini-4-argon-medium", "Argon")}):
+            return ur.call_once("argon", "the draft", self.tmp / "out.md", self.tmp, web), seen
+
+    def test_agy_runs_with_no_tools_in_its_own_empty_folder(self):
+        (text, reason), seen = self.run_agy()
+        self.assertEqual((text, reason), ("fine", None))
+        self.assertEqual(seen["files"], [".agents/agents/unified-reviewer.md"])
+        self.assertNotEqual(Path(seen["cwd"]), self.tmp)
+        self.assertFalse(Path(seen["cwd"]).exists())  # removed after the call
+        settings = json.loads(seen["cmd"][seen["cmd"].index("--settings") + 1])
+        for rule in ("command(*)", "read_file(*)", "write_file(*)", "read_url(*)", "mcp(*)"):
+            self.assertIn(rule, settings["permissions"]["deny"])
+        self.assertEqual(seen["cmd"][seen["cmd"].index("--agent") + 1], "unified-reviewer")
+        self.assertNotIn("--dangerously-skip-permissions", seen["cmd"])
+
+    def test_agy_output_is_refused_when_it_wrote_a_file(self):
+        (text, reason), seen = self.run_agy(writes="probe.md")
+        self.assertIsNone(text)
+        self.assertIn("probe.md", reason)
+        self.assertFalse(Path(seen["cwd"]).exists())
+
+    def test_agy_hands_web_calls_to_cursor(self):
+        (text, _), seen = self.run_agy(web=True)
+        self.assertEqual((text, seen["cmd"][0], seen["cwd"]), ("fine", "/bin/cursor-agent", None))
+        (text, reason), seen = self.run_agy(web=True, cursor=None)
+        self.assertIsNone(text)
+        self.assertEqual(seen, {})
+
+    def test_gemini_uses_agy_only_when_installed(self):
+        for binary, want in ((None, "cursor"), (sys.executable, "agy")):
+            with mock.patch.object(ur.runtime, "AGY", binary), mock.patch.dict(ur.PANELISTS):
+                ur.use_agy()
+                self.assertEqual([ur.PANELISTS[m][0] for m in ("argon", "gemini")], [want, want])
+                self.assertEqual(ur.PANELISTS["grok"][0], "cursor")
+
+    def test_agy_preflight(self):
+        for rc, out, kept in ((0, "gemini-4-argon-medium\tArgon", True), (1, "authentication required", False),
+                              (1, "network down", True)):
+            fake = lambda cmd, **kw: SimpleNamespace(returncode=rc, stdout=out, stderr="")
+            ur.FAILURES.clear()
+            with mock.patch.object(ur.subprocess, "run", fake), mock.patch.object(ur.runtime, "log", lambda *a: None), \
+                    mock.patch.dict(ur.PANELISTS, {"argon": ("agy", "gemini-4-argon-medium", "Argon")}):
+                self.assertEqual(ur.preflight(["argon"]), ["argon"] if kept else [])
+
     def test_no_panel_when_nothing_is_available(self):
         with self.assertRaises(SystemExit):
             self.choose(["gpt"], missing=("gpt", "claude", "grok"))
