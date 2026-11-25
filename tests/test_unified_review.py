@@ -439,6 +439,95 @@ class Calls(unittest.TestCase):
         panel, _ = self.choose(["argon", "gpt", "gemini"], missing=("gpt",))
         self.assertEqual(panel, ["argon", "gemini", "grok"])
 
+    def run_agy(self, writes=None, web=False, cursor="/bin/cursor-agent"):
+        seen = {}
+
+        def fake(cmd, **kw):
+            seen.update(cmd=cmd, cwd=kw.get("cwd"))
+            if kw.get("cwd"):
+                seen["files"] = sorted(str(p.relative_to(kw["cwd"])) for p in Path(kw["cwd"]).rglob("*") if p.is_file())
+                if writes:
+                    (Path(kw["cwd"]) / writes).write_text("x")
+            return SimpleNamespace(returncode=0, stdout="fine")
+        with mock.patch.object(ur.subprocess, "run", fake), mock.patch.object(ur.runtime, "AGY", "/bin/agy"), \
+                mock.patch.object(ur.runtime, "CURSOR", cursor), \
+                mock.patch.dict(ur.PANELISTS, {"argon": ("agy", "gemini-4-argon-medium", "Argon")}):
+            return ur.call_once("argon", "the draft", self.tmp / "out.md", self.tmp, web), seen
+
+    def test_agy_runs_with_no_tools_in_its_own_empty_folder(self):
+        (text, reason), seen = self.run_agy()
+        self.assertEqual((text, reason), ("fine", None))
+        self.assertEqual(seen["files"], [".agents/agents/unified-reviewer.md"])
+        self.assertNotEqual(Path(seen["cwd"]), self.tmp)
+        self.assertFalse(Path(seen["cwd"]).exists())  # removed after the call
+        settings = json.loads(seen["cmd"][seen["cmd"].index("--settings") + 1])
+        for rule in ("command(*)", "read_file(*)", "write_file(*)", "read_url(*)", "mcp(*)"):
+            self.assertIn(rule, settings["permissions"]["deny"])
+        self.assertEqual(seen["cmd"][seen["cmd"].index("--agent") + 1], "unified-reviewer")
+        self.assertNotIn("--dangerously-skip-permissions", seen["cmd"])
+
+    def test_agy_output_is_refused_when_it_wrote_a_file(self):
+        (text, reason), seen = self.run_agy(writes="probe.md")
+        self.assertIsNone(text)
+        self.assertIn("probe.md", reason)
+        self.assertFalse(Path(seen["cwd"]).exists())
+
+    def test_agy_hands_web_calls_to_cursor(self):
+        (text, _), seen = self.run_agy(web=True)
+        self.assertEqual((text, seen["cmd"][0], seen["cwd"]), ("fine", "/bin/cursor-agent", None))
+        (text, reason), seen = self.run_agy(web=True, cursor=None)
+        self.assertIsNone(text)
+        self.assertEqual(seen, {})
+
+    def test_gemini_uses_agy_only_when_installed(self):
+        for binary, want in ((None, "cursor"), (tempfile.gettempdir(), "cursor"), (sys.executable, "agy")):
+            with mock.patch.object(ur.runtime, "AGY", binary), mock.patch.dict(ur.PANELISTS):
+                ur.use_agy()
+                self.assertEqual([ur.PANELISTS[m][0] for m in ("argon", "gemini")], [want, want])
+                self.assertEqual(ur.PANELISTS["grok"][0], "cursor")
+
+    def test_agy_preflight(self):
+        for rc, out, kept in ((0, "gemini-4-argon-medium\tArgon", True), (1, "authentication required", False),
+                              (1, "network down", True)):
+            fake = lambda cmd, **kw: SimpleNamespace(returncode=rc, stdout=out, stderr="")
+            ur.FAILURES.clear()
+            with mock.patch.object(ur.subprocess, "run", fake), mock.patch.object(ur.runtime, "log", lambda *a: None), \
+                    mock.patch.dict(ur.PANELISTS, {"argon": ("agy", "gemini-4-argon-medium", "Argon")}):
+                self.assertEqual(ur.preflight(["argon"]), ["argon"] if kept else [])
+
+    def test_agy_preflight_needs_the_model_asked_for(self):
+        for cursor, status, kept in ((sys.executable, "Logged in as x", True), (sys.executable, "Not logged in", False),
+                                     (None, "", False), ("/no/such/cursor-agent", "Logged in as x", False),
+                                     (tempfile.gettempdir(), "Logged in as x", False)):
+            fake = lambda cmd, **kw: SimpleNamespace(
+                returncode=0, stderr="", stdout="Fetching available models...\ngemini-3.8-flash-low\tFlash\n"
+                "gemini-4-argon-medium-x\tOther\n" if cmd[1] == "models" else status)
+            ur.FAILURES.clear()
+            with mock.patch.object(ur.subprocess, "run", fake), mock.patch.object(ur.runtime, "log", lambda *a: None), \
+                    mock.patch.object(ur.runtime, "CURSOR", cursor), mock.patch.dict(ur.runtime.CHILD_ENV), \
+                    mock.patch.dict(ur.PANELISTS, {"argon": ("agy", "gemini-4-argon-medium", "Argon"),
+                                                   "gemini": ("agy", "gemini-3.8-flash-low", "Flash")}):
+                ur.runtime.CHILD_ENV.pop("CURSOR_API_KEY", None)
+                self.assertEqual(ur.preflight(["argon", "gemini"]), ["argon", "gemini"] if kept else ["gemini"])
+                self.assertEqual(ur.PANELISTS["argon"], ("cursor" if cursor == sys.executable else "agy", "gemini-4-argon-medium", "Argon"))
+                self.assertEqual(ur.PANELISTS["gemini"][0], "agy")
+            if cursor != sys.executable:
+                self.assertIn("does not offer gemini-4-argon-medium", ur.FAILURES[0]["reason"])
+
+    def test_agy_preflight_tells_an_empty_list_from_output_it_cannot_read(self):
+        for out, err, kept, route in (("Fetching available models...\n", "", True, "cursor"), ("", "", True, "cursor"),
+                                      ("Models: Argon, Flash\n", "", True, "agy"),
+                                      ("gemini-3.8-flash-low\tFlash\nArgon (Medium)\n", "", True, "agy"),
+                                      ("gemini-4-argon-medium\tArgon\nA new version is available\n", "", True, "agy"),
+                                      ("", "authentication required", False, "agy")):
+            fake = lambda cmd, **kw: SimpleNamespace(returncode=0, stderr=err, stdout=out if cmd[1] == "models" else "Logged in as x")
+            ur.FAILURES.clear()
+            with mock.patch.object(ur.subprocess, "run", fake), mock.patch.object(ur.runtime, "log", lambda *a: None), \
+                    mock.patch.object(ur.runtime, "CURSOR", sys.executable), \
+                    mock.patch.dict(ur.PANELISTS, {"argon": ("agy", "gemini-4-argon-medium", "Argon")}):
+                self.assertEqual(ur.preflight(["argon"]), ["argon"] if kept else [])
+                self.assertEqual(ur.PANELISTS["argon"][0], route)
+
     def test_no_panel_when_nothing_is_available(self):
         with self.assertRaises(SystemExit):
             self.choose(["gpt"], missing=("gpt", "claude", "grok"))

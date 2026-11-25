@@ -150,6 +150,21 @@ PANELISTS = {
     "gemini": ("cursor", "gemini-3.8-flash-low", "Gemini 3.8 Flash Low"),
     "grok": ("cursor", "grok-4.7-low-fast", "Grok 4.7 Low Fast"),
 }
+
+
+def runnable(binary):
+    """True for an executable file. A folder passes os.access alone."""
+    return bool(binary) and os.path.isfile(binary) and os.access(binary, os.X_OK)
+
+
+def use_agy():
+    """Run the Gemini panelists through Google's Antigravity CLI when it is installed.
+    Cursor offers the same models under the same ids, and stays the route without it."""
+    if runnable(runtime.AGY):
+        for m in ("argon", "gemini"):
+            PANELISTS[m] = ("agy",) + PANELISTS[m][1:]
+
+
 # When a panelist fails, the first of these not already on the panel stands in,
 # then the next if that one fails too, so the panel keeps its size and can
 # break ties. Claude comes first, then Grok (via cursor-agent).
@@ -257,8 +272,7 @@ def cursor_models():
 
 
 def available(name):
-    b = runtime.HARNESS_BIN[PANELISTS[name][0]]
-    return bool(b) and os.access(b, os.X_OK)
+    return runnable(runtime.HARNESS_BIN[PANELISTS[name][0]])
 
 
 # Every failed panelist step, with its reason, for results.json and the reports.
@@ -398,6 +412,11 @@ exactly as printed."""
 def call_once(name, prompt, out, workdir, web):
     """One attempt. Returns (text, None) or (None, reason)."""
     harness, model, _ = PANELISTS[name]
+    if harness == "agy" and (web or READ_FILES):  # agy runs with no tools, so it can do neither
+        if not runtime.CURSOR:
+            return None, "agy has no web search or file access here, and cursor-agent is not installed"
+        harness = "cursor"
+    box = None  # agy's own empty folder
     out, err = Path(out), Path(out).with_suffix(".err")
     if harness == "claude":
         tools = (["Read"] if READ_FILES else []) + (["WebSearch", "WebFetch"] if web else [])
@@ -409,6 +428,13 @@ def call_once(name, prompt, out, workdir, web):
             ["-m", model, "-c", f'model_reasoning_effort="{EFFORT.get(name, "low")}"'] if model else []) + [
             "exec", "-s", "read-only", "--skip-git-repo-check", "--ephemeral",
             "--color", "never", "-C", str(workdir), "-o", str(out), prompt]
+    elif harness == "agy":
+        box = tempfile.TemporaryDirectory(prefix="unified-review-agy-")
+        agent = Path(box.name) / ".agents/agents/unified-reviewer.md"
+        agent.parent.mkdir(parents=True)
+        agent.write_text(runtime.AGY_AGENT)
+        cmd = [runtime.AGY, "-p", prompt, "--agent", "unified-reviewer", "--settings", runtime.AGY_SETTINGS,
+               "--sandbox", "--disable-slash-commands", "--output-format", "text"] + (["--model", model] if model else [])
     else:
         cmd = [runtime.CURSOR, "-p", "--mode", "ask", "--trust", "--output-format", "text",
                "--workspace", str(workdir)] + (["--model", model] if model else []) + [prompt]
@@ -417,11 +443,19 @@ def call_once(name, prompt, out, workdir, web):
     try:
         with open(err, "w") as ef:
             r = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                               stderr=ef, text=True, env=runtime.CHILD_ENV, timeout=runtime.TIMEOUT)
+                               stderr=ef, text=True, env=runtime.CHILD_ENV, timeout=runtime.TIMEOUT,
+                               **({"cwd": box.name} if box else {}))
+        wrote = [str(p.relative_to(box.name)) for p in Path(box.name).rglob("*")
+                 if p.is_file() and p != agent] if box else []
     except subprocess.TimeoutExpired:
         return None, f"timed out after {runtime.TIMEOUT} s"
     except OSError as e:
         return None, f"could not start: {e}"
+    finally:
+        if box:
+            box.cleanup()
+    if wrote:
+        return None, f"agy wrote files despite its deny rules: {', '.join(wrote)[:80]}"
     if harness != "codex":
         out.write_text(r.stdout)
     text = out.read_text() if out.exists() else ""
@@ -514,7 +548,7 @@ def preflight(panel):
         if key and runtime.CHILD_ENV.get(key):
             return True, ""
         cmd = {"claude": [runtime.CLAUDE, "auth", "status"], "codex": [runtime.CODEX, "login", "status"],
-               "cursor": [runtime.CURSOR, "status"]}[harness]
+               "cursor": [runtime.CURSOR, "status"], "agy": [runtime.AGY, "models"]}[harness]
         try:
             r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                env=runtime.CHILD_ENV, timeout=30)
@@ -526,6 +560,21 @@ def preflight(panel):
                 return bool(json.loads(r.stdout).get("loggedIn")), "claude auth status"
             except ValueError:
                 return None, "status unclear"
+        if harness == "agy":  # agy has no status command. Listing models is the closest, and makes no model call.
+            rows = [l for l in r.stdout.splitlines() if l.strip() and not l.startswith("Fetching available models")]
+            listed = [l.split("\t")[0] for l in rows if re.match(r"\S+\t\S", l)] if r.returncode == 0 else []
+            model = PANELISTS[m][1]
+            if model in listed:
+                return True, ""
+            # Logged in, on an account without this model: agy would exit 1 on it. Output that
+            # is not a model list stays unclear, so a new agy format does not move calls to Cursor.
+            if r.returncode == 0 and len(listed) == len(rows) and not AUTH_ERROR.search(r.stderr):
+                if not runnable(runtime.CURSOR):
+                    return False, f"agy does not offer {model}, and cursor-agent is not installed"
+                runtime.log(f"  {m}: agy does not offer {model}, using cursor-agent, which can read files")
+                PANELISTS[m] = ("cursor",) + PANELISTS[m][1:]
+                return check(m)
+            return (False, "not logged in") if AUTH_ERROR.search(outp) else (None, f"status unclear: {outp.strip()[:80]}")
         if re.search(r"not logged in|logged out", outp, re.I):
             return False, "not logged in"
         if re.search(r"logged in", outp, re.I):
@@ -535,8 +584,8 @@ def preflight(panel):
     for m, (ok, why) in parallel(check, panel).items():
         if ok is False:
             login = {"claude": "claude, then /login", "codex": "codex login",
-                     "cursor": "cursor-agent login"}[PANELISTS[m][0]]
-            fail("preflight", m, f"not logged in. Run: {login}")
+                     "cursor": "cursor-agent login", "agy": "agy, then sign in"}[PANELISTS[m][0]]
+            fail("preflight", m, why if "does not offer" in why else f"not logged in. Run: {login}")
         else:
             if ok is None:
                 runtime.log(f"  {m}: {why}, trying anyway")
@@ -6211,6 +6260,7 @@ def load_rules(path):
 
 
 def main():
+    use_agy()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("files", nargs="*")
     ap.add_argument("-o", dest="outdir")

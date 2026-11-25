@@ -47,7 +47,7 @@ footnote mark, new formatting, new table cells) are listed for the user to make
 by hand. A PDF comes back through make-pdf.
 
 The default is three models from three labs: `gpt` (GPT-5.6 Luna, low
-effort, via codex) and `argon` (Gemini 4 Argon Medium, via cursor-agent)
+effort, via codex) and `argon` (Gemini 4 Argon Medium, via agy when installed, else cursor-agent)
 review, and Claude Opus mediates without reviewing. `-p` names the reviewers:
 short names `argon`, `claude` (Sonnet), `gpt` (GPT-5.6 Luna, low effort),
 `gemini` (Gemini 3.8 Flash Low), `grok`, or `harness:model[@effort]`. `-p gpt`
