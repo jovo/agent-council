@@ -3695,7 +3695,7 @@ def renumber_ids(chunks):
     return ids
 
 
-def renumber_lines(text, ids, in_draft):
+def renumber_lines(text, ids, in_draft, earlier=()):
     """The notes text with its headings, sub-issues, and references under the new
     ids. A reference that could be the draft's own words, or that names a closed
     item or a range, keeps its whole line as written. Returns (text, changed, left), the last two
@@ -3730,8 +3730,9 @@ def renumber_lines(text, ids, in_draft):
             line = NOTE_WAS.sub("", line) if m else line  # the closing section lists the earlier ids
         hold = i in held or bool(head) or line.startswith(("#", ">")) or re.search(r"\bearlier ids?\b", line, re.I)
         ranges = [r.span() for r in NOTE_RANGE.finditer(line)]
-        # Wrong now: an open item's id that moved, or a closed one's that another item took.
-        wrong = lambda t: ids[t] != t if t in ids else t in ids.values()
+        # Wrong now: an open item's id that moved, a closed one's that another item took, or
+        # one from before an earlier renumbering, which may have named two items since.
+        wrong = lambda t: ids[t] != t if t in ids else t in ids.values() or t in earlier
         seen = set()
 
         def ref(r):
@@ -3794,6 +3795,7 @@ def renumber(path):
     in_draft = {i for f in drafts if Path(f).exists() for i in re.findall(r"\b[ABCX]\d+\b", doc_text(Path(f)))}
 
     news = ", ".join(moved + [f"{i} had closed" for i in shut]) or "the next ids were reset"
+    earlier = {i for l in re.findall(r"^- Earlier ids\b.+$", old_text, re.M) for i in re.findall(r"\b[ABCX]\d+\b", l)}
     log = f"- Earlier ids ({time.strftime('%Y-%m-%d %H:%M')}): {news}."
     pre, about = re.split(rf"(?m)^(?=## {ABOUT}\s*$)", old_text, maxsplit=1)
     lines = about.rstrip("\n").replace(IDS_FIXED, RENUMBERED).replace("- Closed this round:", "- Closed this round, by earlier ids:").split("\n")
@@ -3806,7 +3808,7 @@ def renumber(path):
     else:
         end = next((i for i, l in enumerate(lines) if l.startswith("<!-- next ids")), len(lines))
         lines[end:end] = ["", log] if end == len(lines) else [log, ""]
-    text, changed, left = renumber_lines(pre + "\n".join(lines) + "\n", refs, in_draft)
+    text, changed, left = renumber_lines(pre + "\n".join(lines) + "\n", refs, in_draft, earlier)
     write_atomic(path, text)
     if key:
         items = {ids[i]: e for i, e in entries.items() if i in ids}

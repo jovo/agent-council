@@ -3107,6 +3107,21 @@ Closed, by their earlier ids: B7 and C2.
         self.renumber()
         self.assertIn("B2 is now A3", self.notes.read_text())
 
+    def test_renumber_prints_a_line_that_uses_an_id_from_before_an_earlier_renumbering(self):
+        self.notes.parent.mkdir()
+        self.notes.write_text("# Review of memo.md\n\n## Minor\n\n### B7. First (was A4)\n\nText.\n\n"
+                              "## Nitpicks\n\n### C1. Second\n\nText.\n\n## About this review\n\nCounts.\n")
+        self.renumber()
+        t = self.notes.read_text()
+        self.assertIn("A4 and B7 are now B1.", t)
+        self.notes.write_text(t.replace("## Minor\n\n### B1. First\n\nText.", "").replace(
+            "## About", "### B1. First\n\nSee A4. C1 stays.\n\n## About"))
+        out = self.renumber()
+        t = self.notes.read_text()
+        self.assertIn("### C2. First", t)
+        self.assertIn("See A4. C1 stays.", t)
+        self.assertIn("See A4. C1 stays.", out.split("Check by hand")[1])
+
     def test_renumber_does_not_claim_a_closed_items_id_for_the_item_that_names_it(self):
         self.majors([1, 2], [3])
         f = self.d / "memo.md"
