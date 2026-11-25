@@ -495,6 +495,24 @@ class Calls(unittest.TestCase):
                     mock.patch.dict(ur.PANELISTS, {"argon": ("agy", "gemini-4-argon-medium", "Argon")}):
                 self.assertEqual(ur.preflight(["argon"]), ["argon"] if kept else [])
 
+    def test_agy_preflight_needs_the_model_asked_for(self):
+        for cursor, status, kept in (("/bin/cursor-agent", "Logged in as x", True), ("/bin/cursor-agent", "Not logged in", False),
+                                     (None, "", False)):
+            fake = lambda cmd, **kw: SimpleNamespace(
+                returncode=0, stderr="", stdout="Fetching available models...\ngemini-3.8-flash-low\tFlash\n"
+                "gemini-4-argon-medium-x\tOther\n" if cmd[1] == "models" else status)
+            ur.FAILURES.clear()
+            with mock.patch.object(ur.subprocess, "run", fake), mock.patch.object(ur.runtime, "log", lambda *a: None), \
+                    mock.patch.object(ur.runtime, "CURSOR", cursor), mock.patch.dict(ur.runtime.CHILD_ENV), \
+                    mock.patch.dict(ur.PANELISTS, {"argon": ("agy", "gemini-4-argon-medium", "Argon"),
+                                                   "gemini": ("agy", "gemini-3.8-flash-low", "Flash")}):
+                ur.runtime.CHILD_ENV.pop("CURSOR_API_KEY", None)
+                self.assertEqual(ur.preflight(["argon", "gemini"]), ["argon", "gemini"] if kept else ["gemini"])
+                self.assertEqual(ur.PANELISTS["argon"], ("cursor" if cursor else "agy", "gemini-4-argon-medium", "Argon"))
+                self.assertEqual(ur.PANELISTS["gemini"][0], "agy")
+            if not cursor:
+                self.assertIn("does not offer gemini-4-argon-medium", ur.FAILURES[0]["reason"])
+
     def test_no_panel_when_nothing_is_available(self):
         with self.assertRaises(SystemExit):
             self.choose(["gpt"], missing=("gpt", "claude", "grok"))

@@ -556,8 +556,16 @@ def preflight(panel):
             except ValueError:
                 return None, "status unclear"
         if harness == "agy":  # agy has no status command. Listing models is the closest, and makes no model call.
-            if r.returncode == 0 and re.search(r"^gemini-", r.stdout, re.M):
+            listed = re.findall(r"^(\S+)\t", r.stdout, re.M) if r.returncode == 0 else []
+            model = PANELISTS[m][1]
+            if model in listed:
                 return True, ""
+            if listed:  # logged in, on an account without this model: agy would exit 1 on it
+                if not runtime.CURSOR:
+                    return False, f"agy does not offer {model}, and cursor-agent is not installed"
+                runtime.log(f"  {m}: agy does not offer {model}, using cursor-agent, which can read files")
+                PANELISTS[m] = ("cursor",) + PANELISTS[m][1:]
+                return check(m)
             return (False, "not logged in") if AUTH_ERROR.search(outp) else (None, f"status unclear: {outp.strip()[:80]}")
         if re.search(r"not logged in|logged out", outp, re.I):
             return False, "not logged in"
@@ -569,7 +577,7 @@ def preflight(panel):
         if ok is False:
             login = {"claude": "claude, then /login", "codex": "codex login",
                      "cursor": "cursor-agent login", "agy": "agy, then sign in"}[PANELISTS[m][0]]
-            fail("preflight", m, f"not logged in. Run: {login}")
+            fail("preflight", m, why if "does not offer" in why else f"not logged in. Run: {login}")
         else:
             if ok is None:
                 runtime.log(f"  {m}: {why}, trying anyway")

@@ -183,7 +183,7 @@ You need Python 3.9 or later, macOS or Linux, and these CLIs, logged in:
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) (`claude`)
 - [Codex CLI](https://github.com/openai/codex) (`codex`, or the copy inside the ChatGPT app, which the script finds on its own)
 - [Cursor CLI](https://cursor.com/cli) (`cursor-agent`)
-- Optional: [Antigravity CLI](https://antigravity.google/docs/cli/overview) (`agy`), which runs the Gemini reviewers on a Google account. Each call runs in an empty temporary folder with no tools. Fact-checks and PDFs opened directly still use `cursor-agent`. Antigravity keeps conversations, and so the draft, under `~/.gemini/antigravity-cli`.
+- Optional: [Antigravity CLI](https://antigravity.google/docs/cli/overview) (`agy`), which runs the Gemini reviewers on a Google account. Each call runs in an empty temporary folder with no tools. Fact-checks, PDFs opened directly, Gemini models picked under **Panel**, and models your Google account does not offer still use `cursor-agent`. Antigravity keeps conversations, and so the draft, under `~/.gemini/antigravity-cli`.
 
 Then run `./install.sh`. It links `unified-review`, `make-pdf`, `edit-md`, and `plain-words` into `~/.local/bin`, downloads the word lists `plain-words` uses, links every skill into `~/.claude/skills`, `~/.codex/skills`, and `~/.cursor/skills`, and installs the fonts into `~/Library/Fonts` (`~/.local/share/fonts` on Linux). It does not overwrite real files. If a CLI lives somewhere unusual, set `CLAUDE_BIN`, `CODEX_BIN`, or `CURSOR_BIN`.
 
