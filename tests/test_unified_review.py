@@ -2265,7 +2265,7 @@ class ReviewPage(unittest.TestCase):
 DRAFT2 = "# Intro\n\nThe sky is green today.\n\nGrass grows slowly.\n\nWater is dry.\n"
 
 
-def two_lab_review(d, replies, votes, mediation=None, draft_text=DRAFT2, fails=(), panel=("gpt", "argon"), missing=()):
+def two_lab_review(d, replies, votes, mediation=None, draft_text=DRAFT2, fails=(), panel=("gpt", "argon"), missing=(), rank=""):
     """Run foreground with two reviewers and a scripted mediator. replies: {model: review text}.
     votes: {model: {title: "problem | fix"}}. mediation: {title: block lines} or None.
     Returns (run folder, prompts)."""
@@ -2291,6 +2291,8 @@ def two_lab_review(d, replies, votes, mediation=None, draft_text=DRAFT2, fails=(
             # mediation may be a function of (model, title) that returns None to skip an item.
             pick = mediation if callable(mediation) else lambda m, t: (mediation or {}).get(t, default)
             return "\n\n".join(f"=== {i}\n" + b for i, t in items if (b := pick(m, t)) is not None)
+        if stage == "rank":
+            return rank
         return ""
     f = d / "memo.md"
     if not f.exists():
@@ -2693,6 +2695,86 @@ class TwoLab(unittest.TestCase):
         self.assertFalse(ur.auto_applies({**base, "tag": "Fixes differ"}))
 
 
+SEVEN = ["Rivers freeze each winter", "Copper conducts heat well", "Owls hunt after sunset", "Glass melts near a forge",
+         "Maples drop red leaves", "Bread rises with yeast", "Comets orbit the sun"]
+
+
+def claims(*ns, severity="Major"):
+    """One finding per claim number in DRAFT7, so two reviewers with the same text agree on each."""
+    return "".join(finding_text(f"Claim {n} fails", f"{SEVEN[n - 1]}.", "It fails.",
+                                f"{SEVEN[n - 1]} 🟢 **in no case**.", severity) for n in ns)
+
+
+DRAFT7 = "# Intro\n\n" + "\n\n".join(f"{x}." for x in SEVEN) + "\n"
+
+
+class CapMajors(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_review(self, ns=range(1, 8), votes=None, panel=("gpt", "argon"), **kw):
+        out, prompts = two_lab_review(self.d, {m: claims(*ns) for m in panel}, votes or {"gpt": {}, "argon": {}},
+                                      draft_text=DRAFT7, panel=panel, **kw)
+        r = json.loads((out / "results.json").read_text())
+        return {g["rep"]["title"]: g["severity"] for g in r["groups"]}, prompts, r
+
+    def test_seven_majors_become_five_by_the_mediators_rank(self):
+        sev, prompts, r = self.run_review(rank="keep: J7, J6, J3, J2, J1")
+        self.assertEqual([n for n in range(1, 8) if sev[f"Claim {n} fails"] == "Major"], [1, 2, 3, 6, 7])
+        self.assertEqual([n for n in range(1, 8) if sev[f"Claim {n} fails"] == "Minor"], [4, 5])
+        self.assertIn("[J4] Claim 4 fails", prompts["rank"][ur.MEDIATOR])
+        self.assertEqual(r["failures"], [])
+        # Numbered after the cap: the five Majors come first.
+        self.assertEqual([sev for _, sev, _, _ in ur.ordered_findings(r)], ["Major"] * 5 + ["Minor"] * 2)
+
+    def test_five_majors_need_no_rank(self):
+        sev, prompts, _ = self.run_review(range(1, 6))
+        self.assertEqual(set(sev.values()), {"Major"})
+        self.assertNotIn("rank", prompts)
+
+    def test_mediator_failure_falls_back_to_the_votes(self):
+        sev, _, r = self.run_review(fails=(("rank", ur.MEDIATOR),))
+        self.assertEqual([n for n in range(1, 8) if sev[f"Claim {n} fails"] == "Major"], [1, 2, 3, 4, 5])
+        self.assertTrue(any(f["stage"] == "rank" for f in r["failures"]))
+
+    def test_a_reply_with_no_ids_falls_back_and_is_reported(self):
+        sev, _, r = self.run_review(rank="I cannot decide")
+        self.assertEqual(list(sev.values()).count("Major"), 5)
+        self.assertTrue(any(f["stage"] == "rank" and "no ids" in f["reason"] for f in r["failures"]))
+
+    def test_a_short_rank_is_filled_from_the_votes(self):
+        sev, _, _ = self.run_review(rank="keep: J7, J99, J7")
+        self.assertEqual([n for n in range(1, 8) if sev[f"Claim {n} fails"] == "Major"], [1, 2, 3, 4, 7])
+
+    def test_one_reviewer_is_capped_without_a_mediator(self):
+        sev, prompts, _ = self.run_review(panel=("gpt",), votes={"gpt": {}})
+        self.assertEqual(list(sev.values()).count("Major"), 5)
+        self.assertNotIn("rank", prompts)
+
+    def test_fallback_prefers_agreed_then_more_reviewers_then_votes(self):
+        g = lambda t, **kw: {"rep": {"title": t}, "severity": "Major", "pos": 0, "raised_by": ["a"], "frac": 1, **kw}
+        gs = [g("disputed", disputed=True, raised_by=["a", "b"]), g("low", frac=0.2), g("one"),
+              g("two", raised_by=["a", "b"]), g("declined", declined={"id": "D1"}), g("held", held="churn"),
+              g("rejected", rejected=True), g("other", other_of="two")]
+        self.assertEqual([x["rep"]["title"] for x in ur.open_majors(gs)], ["two", "one", "low", "disputed"])
+        self.assertEqual([x["rep"]["title"] for x in ur.cap_majors(gs, room=2)], ["low", "disputed"])
+        self.assertEqual([x["rep"]["title"] for x in gs if x["severity"] == "Major"],
+                         ["one", "two", "declined", "held", "rejected", "other"])
+        self.assertEqual([x["rep"]["title"] for x in ur.cap_majors([g("new")], room=0)], ["new"])
+
+    def test_every_prompt_rates_against_central_claims(self):
+        for p in (ur.review_prompt("draft", "", "rules"), ur.VOTE, ur.MEDIATE, ur.RANK, ur.reviewer_rules()):
+            self.assertIn("central", p)
+        for p in (ur.review_prompt("draft", "", "rules"), ur.VOTE, ur.MEDIATE):
+            self.assertNotRegex(p, r"Major,? \(?a claim")
+            self.assertRegex(p, r"missing reference")
+        self.assertIn("at most five Majors", ur.reviewer_rules())
+
+
 class NotesFile(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -2702,8 +2784,8 @@ class NotesFile(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def review(self, replies, votes=None, mediation=None):
-        out, _ = two_lab_review(self.d, replies, votes or {"gpt": {}, "argon": {}}, mediation)
+    def review(self, replies, votes=None, mediation=None, rank=""):
+        out, _ = two_lab_review(self.d, replies, votes or {"gpt": {}, "argon": {}}, mediation, rank=rank)
         with mock.patch.object(ur.runtime, "log", lambda *a: None):
             return ur.write_notes(self.d / "memo.md", out), out
 
@@ -2797,6 +2879,64 @@ class NotesFile(unittest.TestCase):
         self.assertNotIn("Sky color is wrong", t)
         self.assertNotIn("Next free ids", t)
 
+    def majors(self, ns, minor=(), rank=""):
+        f = self.d / "memo.md"
+        if not f.exists():
+            f.write_text(DRAFT7)
+        text = claims(*ns) + claims(*minor, severity="Minor")
+        return self.review({"gpt": text, "argon": text}, rank=rank)[0].read_text()
+
+    def heads(self, t, name):
+        return re.findall(r"^### (\w+)\.", t.split(f"## {name}\n")[1].split("\n## ")[0], re.M)
+
+    def test_a_severity_change_moves_the_item_and_keeps_the_old_id(self):
+        self.majors([1, 2], [3])
+        t = self.majors([1], [2, 3])
+        self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1"], ["B1", "B2"]))
+        self.assertRegex(t, r"### B2\. Claim 2 fails .*\(was A2\)")
+        self.assertIn("- Open items: 1 Major, 2 Minor.", t)
+        items = json.loads(ur.notes_map_file().read_text())[str(self.notes)]["items"]
+        self.assertEqual({k: v.get("closed") for k, v in items.items()}, {"A1": None, "B1": None, "B2": None})
+        t = self.majors([1, 4], [2, 3])  # A2 is not reused, and B2 is found again
+        self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1", "A3"], ["B1", "B2"]))
+        self.assertEqual(t.count("Claim 2 fails"), 1)
+        t = self.majors([1, 2, 4], [3])
+        self.assertRegex(t, r"### A4\. Claim 2 fails .*\(was A2, B2\)")
+
+    def test_an_item_moved_by_hand_keeps_its_place_and_record(self):
+        t = self.majors([1, 2], [3])
+        c = re.search(r"### A2\..*?(?=## Minor)", t, re.S).group(0)
+        head, _, body = c.partition("\n")
+        t = t.replace(c, "").replace("## About", head.replace("A2.", "B2.") + " (was A2)\n" + body + "## About")
+        self.notes.write_text(t)
+        t = self.majors([1, 2], [3])
+        self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1"], ["B1", "B2"]))
+        self.assertEqual(t.count("Claim 2 fails"), 1)
+        f = self.d / "memo.md"
+        f.write_text(f.read_text().replace("Copper conducts heat well.", "Copper conducts heat well in no case."))
+        t = self.majors([1], [3])  # its record followed the move, so the applied change closes it
+        self.assertNotIn("### B2.", t)
+        self.assertIn("B2 (applied)", t)
+
+    def test_an_item_demoted_with_its_old_letter_is_counted_by_section_and_stays(self):
+        t = self.majors([1, 2], [3])
+        c = re.search(r"### A2\..*?(?=## Minor)", t, re.S).group(0)
+        self.notes.write_text(t.replace(c, "").replace("## About", c + "## About"))
+        t = self.majors([1, 2], [3])
+        self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1"], ["B1", "A2"]))
+        self.assertIn("- Open items: 1 Major, 2 Minor.", t)
+
+    def test_majors_not_raised_again_give_way_past_five(self):
+        self.majors([1, 2, 3, 4, 5])
+        t = self.majors([1, 2, 3, 6, 7])
+        self.assertEqual(self.heads(t, "Major"), ["A1", "A2", "A3", "A6", "A7"])
+        self.assertEqual(len(self.heads(t, "Minor")), 2)
+        self.assertRegex(t, r"Claim 4 fails .*\(was A4\)")
+        self.assertRegex(t, r"Claim 5 fails .*\(was A5\)")
+        t = self.majors([1, 2, 3, 6, 7])  # stable on a further run
+        self.assertEqual(self.heads(t, "Major"), ["A1", "A2", "A3", "A6", "A7"])
+        self.assertEqual(len(self.heads(t, "Minor")), 2)
+
     def test_a_math_code_block_fix_shows_rendered(self):
         fix = "```markdown\n$$p = 1.$$\n$$p = 1. \\tag{1}$$\n```"
         out = ur.rendered_fix(fix)
@@ -2886,7 +3026,7 @@ class NotesFile(unittest.TestCase):
         self.assertIn("### B2. Water is not dry", t)
         self.assertIn("memo.md, line 9*", t)
         self.assertIn("### B3. Grass speed unsupported", t)  # next free id, never B1 again
-        self.assertLess(t.index("B3. Grass"), t.index("B2. Water"))  # draft order
+        self.assertLess(t.index("B2. Water"), t.index("B3. Grass"))  # added later, so last in its set
         self.assertIn("Closed this round: B1 (applied)", t)
         self.assertTrue(any(d["decision"] == "applied" and d["title"] == "Sky color is wrong"
                             for d in ur.load_decisions().get(str(f), [])))

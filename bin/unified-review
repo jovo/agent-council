@@ -95,6 +95,7 @@ import unified_review_runtime as runtime  # noqa: E402
 import fix_strikes  # noqa: E402
 
 SEVERITIES = ["Major", "Minor", "Nitpick"]
+MAX_MAJORS = 5  # a review keeps at most this many; the rest become Minor
 JSON_BODY_LIMIT = 1 * 1024 * 1024
 UPLOAD_BODY_LIMIT = 50 * 1024 * 1024
 AUDIO_BODY_LIMIT = 25 * 1024 * 1024
@@ -725,7 +726,7 @@ final text, such as "RECAP {{{{citation: Author, year}}}}" or
 "{{{{measured success rate}}}}", and say in the problem what fills it. Use double
 braces only for slots. To add new text, such as a sentence or a
 table row, include the text just before it, unchanged, so the change can be
-placed. Ignore the house rules' cap on findings
+placed. Ignore the house rules' caps on findings and on Majors
 and their ordering rule: report every finding worth making, in any order. This
 script places findings in draft order. Before writing findings, when the draft makes an argument or asks its reader
 to decide something, identify up to three central claims or decision-critical
@@ -760,9 +761,13 @@ on its line ($$...$$ or $...$, an equation tag edit included), and an edit to on
 table row. Each is a code block of two lines, the old line copied verbatim and
 then the new line. This script shows it rendered. No heading and no number.>
 
-Severities: Major, a claim of the draft fails or is unsupported until this is
-fixed; Minor, the claims stand without the fix, but it makes the draft clearer,
-more complete, or easier to reproduce; Nitpick, wording, style, or a typo.
+Severities: Major, a central claim (a headline claim of the abstract or
+conclusion, or of the whole draft when it has neither) fails or loses its
+support until the author reruns an analysis, replaces a result, or narrows that
+claim; Minor, the central claims stand without the fix, but it makes the draft
+clearer, more complete, or easier to reproduce; Nitpick, wording, style, or a
+typo. A missing reference, a wrong count or value, a mislabeled panel, or an
+overworded sentence is Minor or Nitpick, unless a central claim rests on it.
 
 Kinds: logic, a step that does not follow (missing premise, non sequitur,
 circular setup, unaddressed alternative, over- or underclaim, or an inference
@@ -795,9 +800,11 @@ Judge the problem and the fix separately. For each finding, decide:
 - fix: agree (the diff fixes the problem and reads well in the draft) or
   disagree (the diff is wrong, misses the problem, or makes the draft worse).
   Judge the fix as if the problem were real, even when you disagree that it is.
-- severity: Major (a claim fails or is unsupported until this is fixed), Minor
-  (the claims stand without the fix), or Nitpick (wording, style, typo), as you
-  would rate it.
+- severity: Major (a central claim, a headline claim of the draft, fails or
+  loses its support until this is fixed), Minor (the central claims stand
+  without the fix), or Nitpick (wording, style, typo), as you would rate it. A
+  missing reference, a wrong count or value, a mislabeled panel, or an overworded
+  sentence is Minor or Nitpick, unless a central claim rests on it.
 - kind: logic (a step that does not follow, or an inference the evidence does
   not support), evidence (an unsupported or wrong factual claim, or a
   citation), clarity (the argument holds but is hard to follow), or style.
@@ -1266,9 +1273,11 @@ problem: <the problem, one sentence of at most {words} words, or the word same>
 ---
 <only when fix is own: your fix, an inline diff in the same form as the others>
 
-For an item that is not DISPUTED, ruling is uphold. Severity: Major, a claim of
-the draft fails or is unsupported until this is fixed. Minor, the claims stand
-without the fix. Nitpick, wording, style, or a typo.
+For an item that is not DISPUTED, ruling is uphold. Severity: Major, a central
+claim (a headline claim of the draft) fails or loses its support until this is
+fixed. Minor, the central claims stand without the fix. Nitpick, wording, style,
+or a typo. A missing reference, a wrong count or value, a mislabeled panel, or an
+overworded sentence is Minor or Nitpick, unless a central claim rests on it.
 
 <draft>
 {draft}
@@ -1418,6 +1427,78 @@ def mediate(groups, shown, focus, ok, outdir, workdir):
         if mid not in got and g.get("disputed"):
             g["ruling"] = None
     return len(items)
+
+
+RANK = """Reviewers rated more findings on the draft below Major than a review
+may keep. A review keeps at most {keep}. Major means a central claim (a headline
+claim of the abstract or conclusion, or of the whole draft when it has neither)
+fails or loses its support until this is fixed.
+
+Pick the {keep} that threaten the most central claims, then those that take the
+most work to fix (a new analysis before a replaced result, a replaced result
+before a reworded claim). The rest become Minor. Do not judge factual accuracy:
+a separate pass does that.
+
+Reply with one line and nothing else, strongest first:
+keep: <{keep} ids, separated by commas>
+
+<draft>
+{draft}
+</draft>
+
+<findings>
+{findings}
+</findings>
+"""
+
+
+def open_majors(groups):
+    """Major findings the review shows, Disputed included, strongest first as far
+    as the votes tell: agreed before disputed, then raised by more reviewers,
+    then a higher vote share, then draft order."""
+    ms = [g for g in groups if canon_sev(g["severity"]) == "Major" and not g.get("rejected")
+          and not g.get("declined") and not g.get("held") and not g.get("other_of")]
+    return sorted(ms, key=lambda g: (bool(g.get("disputed")), -len(g.get("raised_by") or []), -g.get("frac", 0), g["pos"]))
+
+
+def rank_majors(majors, shown, outdir, workdir):
+    """MEDIATOR's pick of the Majors to keep, strongest first, or [] when it is
+    logged out or fails. A mediator that already failed in this review is not asked again."""
+    m = panelist(MEDIATOR)
+    if any(f["model"] == m for f in FAILURES):
+        return []
+    if not available(m):
+        fail("preflight", m, f"{PANELISTS[m][0]} CLI not found")
+        return []
+    if not preflight([m]):
+        return []
+    runtime.log(f"3/4 rank {len(majors)} Majors, keep {MAX_MAJORS}: {label(m)}")
+    items = {f"J{i}": g for i, g in enumerate(sorted(majors, key=lambda g: g["pos"]), 1)}
+    listed = "\n\n".join(f"[{i}] {g['rep']['title']}\nquote: {g['rep']['quote'] or '(whole draft)'}\n{g['rep']['body']}"
+                         for i, g in items.items())
+    for attempt in (1, 2):
+        text = call(m, RANK.format(keep=MAX_MAJORS, draft=shown, findings=listed), outdir / "majors.txt", workdir, stage="rank")
+        line = re.search(r"^\W*keep\W*:(.*)$", text or "", re.M | re.I)
+        ids = list(dict.fromkeys(i.upper() for i in re.findall(r"\bJ\d+\b", line.group(1), re.I))) if line else []
+        got = [items[i] for i in ids if i in items]
+        if got or text is None:
+            return got
+    fail("rank", m, "reply had no ids in the expected format, after one retry")
+    return []
+
+
+def cap_majors(groups, rank=None, room=MAX_MAJORS):
+    """Keep at most room Majors and make the rest Minor. rank(majors) gives the
+    ones to keep, strongest first. Any places it leaves go by the votes."""
+    majors = open_majors(groups)
+    if len(majors) <= room:
+        return []
+    picked = (rank(majors) if rank else [])[:room]
+    keep = (picked + [g for g in majors if not any(g is p for p in picked)])[:room]
+    demoted = [g for g in majors if not any(g is k for k in keep)]
+    for g in demoted:
+        g["severity"], g["demoted"] = "Minor", True
+    return demoted
 
 
 OTHER_FIX = "Other fix"
@@ -3157,6 +3238,13 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         for g in groups:
             if not g.get("ruling"):
                 keep_shortest_fix(g, byid)
+    # Before the passed-over fixes are listed, so each takes its finding's severity.
+    t = time.time()
+    demoted = cap_majors(groups, (lambda ms: rank_majors(ms, shown, outdir, workdir)) if two else None)
+    if demoted:
+        timings["rank"] = round(time.time() - t, 1)
+        runtime.log(f"  {len(demoted)} Major{'' if len(demoted) == 1 else 's'} over {MAX_MAJORS} made Minor")
+    if two:
         for og in other_fix_groups(groups, byid):
             d = next((d for d in other_declines if d["title"] == og["rep"]["title"]), None)
             if d:
@@ -3193,12 +3281,14 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
 # a finding raised again keeps its id, its body, and any notes added under it,
 # with its line number refreshed. An item whose change is in the draft is
 # removed and recorded as applied. One declined is removed. One not raised
-# again, with its passage unchanged, stays and is marked. A new finding takes
-# the next free id in its set. Only "## About this review" is rewritten. An
+# again, with its passage unchanged, stays and is marked. One whose severity
+# changed moves to its new set and takes a new id there. A new finding takes
+# the next free id in its set and goes last. Only "## About this review" is rewritten. An
 # item whose heading was edited out of the "### A1. Title" form is left as it is.
 
 NOTE_SETS = {"A": "Major", "B": "Minor", "C": "Nitpicks", "X": "Disputed"}
 NOTE_HEAD = re.compile(r"^### ([ABCX])(\d+)\.\s")
+NOTE_WAS = re.compile(r"\s*\(was ([ABCX]\d+(?:, [ABCX]\d+)*)\)\s*$")  # the ids an item had before, oldest first
 NOT_RAISED = "*Not raised this round.*"
 ABOUT = "About this review"
 
@@ -3278,6 +3368,38 @@ def split_notes(text):
     return [c for c in chunks if c[2] or c[0] != "pre"]
 
 
+def note_section(chunks, c):
+    """The set (A, B, C, X) whose section chunk c sits in, or its id's letter outside the four sections."""
+    i = next(i for i, x in enumerate(chunks) if x is c)
+    h = next((x[1] for x in reversed(chunks[:i]) if x[0] == "h2"), "")
+    return next((s for s, name in NOTE_SETS.items() if name.lower() == h.lower()), c[1][0])
+
+
+def note_add(chunks, s, chunk):
+    """Put an item last in set s, adding the set's section when the file lacks it."""
+    h = next((i for i, c in enumerate(chunks) if c[0] == "h2" and c[1].lower() == NOTE_SETS[s].lower()), None)
+    if h is None:  # a new section, in set order, before About this review
+        later = [i for i, c in enumerate(chunks) if c[0] == "h2" and (
+            c[1] == ABOUT or any(c[1].lower() == NOTE_SETS[t].lower() for t in "ABCX" if t > s))]
+        h = later[0] if later else len(chunks)
+        chunks.insert(h, ["h2", NOTE_SETS[s], f"## {NOTE_SETS[s]}\n\n"])
+    chunks.insert(next((i for i in range(h + 1, len(chunks)) if chunks[i][0] == "h2"), len(chunks)), chunk)
+
+
+def note_move(chunks, c, s, entries, nxt, present):
+    """Move item c to set s with the next free id there. Its heading keeps the old id."""
+    old, nid = c[1], f"{s}{nxt.get(s, 1)}"
+    nxt[s] = nxt.get(s, 1) + 1
+    head, _, rest = c[2].partition("\n")
+    was = NOTE_WAS.search(head)
+    head = NOTE_WAS.sub("", head).replace(f"### {old}.", f"### {nid}.", 1)
+    c[1], c[2] = nid, f"{head} (was {was.group(1) + ', ' if was else ''}{old})\n{rest}"
+    chunks[:] = [x for x in chunks if x is not c]
+    note_add(chunks, s, c)
+    entries[nid] = entries.pop(old)
+    present.add(nid)  # in the file under its new id, so not removed by hand
+
+
 def note_resolved(entry, text):
     """True when an item's change is in the draft: its struck text is gone, or its added text is there."""
     old, new = diff_parts("x\n\n" + (entry.get("fix") or ""))
@@ -3339,6 +3461,13 @@ def write_notes(draft, run, source=None):
 
     dropped = [g for g in r["groups"] if g.get("dropped")]
     ids = [c[1] for c in chunks if c[0] == "item"]
+    for c in [c for c in chunks if c[0] == "item"]:  # an item moved by hand keeps its record and its place
+        was = NOTE_WAS.search(c[2].partition("\n")[0])
+        old = was.group(1).split(", ")[-1] if was else None
+        if old in entries and old not in present and c[1] not in entries:
+            entries[c[1]] = {**entries.pop(old), "pinned": True}
+        elif c[1] in entries and note_section(chunks, c) != c[1][0]:
+            entries[c[1]]["pinned"] = True
     for nid in ids:
         if nid not in entries:
             # No record of this item (the map was lost, or someone else wrote it):
@@ -3386,6 +3515,9 @@ def write_notes(draft, run, source=None):
             e.update(key=g.get("key"), run=str(run), n=n, title=g["rep"]["title"], quote=g["rep"]["quote"],
                      fix=fix_of(g["rep"]) if g.get("alts") is None else (g["alts"][0]["fix"] if g["alts"] else ""),
                      order=note_order(g, sev))
+            s = note_set(g, sev)
+            if s != nid[0] and "X" not in (s, nid[0]) and not e.get("pinned"):
+                note_move(chunks, c, s, entries, nxt, present)
             continue
         if any(same_finding(e, g) for g in dropped):  # raised again, and the mediator dropped it
             chunks.remove(c)
@@ -3415,8 +3547,8 @@ def write_notes(draft, run, source=None):
         if any(same_finding(e, x[3]) for e in entries.values() if e.get("closed") == "removed by hand"):
             unmatched.remove(x)
 
-    # New findings: the next free id in their set, placed by severity and draft order,
-    # so a new file's ids read in order down the page.
+    # New findings: the next free id in their set, in draft order and last in
+    # the set, so ids read in order down the page.
     unmatched.sort(key=lambda x: ("ABCX".index(note_set(x[3], x[1])), note_order(x[3], x[1])))
     for n, sev, lab, g in unmatched:
         s = note_set(g, sev)
@@ -3428,16 +3560,13 @@ def write_notes(draft, run, source=None):
                         "quote": g["rep"]["quote"], "order": order,
                         "fix": fix_of(g["rep"]) if g.get("alts") is None else (g["alts"][0]["fix"] if g["alts"] else "")}
         chunk = ["item", nid, note_item(nid, g, sev, labels, voters, files, text, deck)]
-        h = next((i for i, c in enumerate(chunks) if c[0] == "h2" and c[1].lower() == NOTE_SETS[s].lower()), None)
-        if h is None:  # a new section, in set order, before About this review
-            later = [i for i, c in enumerate(chunks) if c[0] == "h2" and (
-                c[1] == ABOUT or any(c[1].lower() == NOTE_SETS[t].lower() for t in "ABCX" if t > s))]
-            h = later[0] if later else len(chunks)
-            chunks.insert(h, ["h2", NOTE_SETS[s], f"## {NOTE_SETS[s]}\n\n"])
-        end = next((i for i in range(h + 1, len(chunks)) if chunks[i][0] == "h2"), len(chunks))
-        at = next((i for i in range(h + 1, end) if chunks[i][0] == "item"
-                   and (entries.get(chunks[i][1]) or {}).get("order", [float("inf")]) > order), end)
-        chunks.insert(at, chunk)
+        note_add(chunks, s, chunk)
+
+    # At most MAX_MAJORS Majors stay open: past that, the ones not raised this round become Minor, last first.
+    majors = [c for c in chunks if c[0] == "item" and note_section(chunks, c) == "A"]
+    stale = [c for c in majors if c[1] in not_raised and not (entries.get(c[1]) or {}).get("pinned")]
+    for c in list(reversed(stale))[:max(0, len(majors) - MAX_MAJORS)]:
+        note_move(chunks, c, "B", entries, nxt, present)
 
     # Drop sections left with no items, then rewrite About this review.
     keep = []
@@ -3450,8 +3579,8 @@ def write_notes(draft, run, source=None):
                 continue
         keep.append(c)
     body = "".join(c[2] if c[2].endswith("\n\n") else c[2].rstrip("\n") + "\n\n" for c in keep)
-    open_ids = [c[1] for c in keep if c[0] == "item"]
-    count = lambda s: sum(i.startswith(s) for i in open_ids)
+    open_sets = [note_section(keep, c) for c in keep if c[0] == "item"]
+    count = open_sets.count
     counts = ", ".join(f"{count(s)} {NOTE_SETS[s] if s != 'C' else 'Nitpick'}" for s in "ABCX" if count(s))
     who = " and ".join(labels.get(m, m) for m in r["reviewers_ok"])
     med = labels.get(r.get("mediator") or "")
@@ -4742,6 +4871,8 @@ def review_passage(path, run, passage):
                     new.append(g)
             with EDIT_REVIEW_LOCK:
                 r = json.loads((run / "results.json").read_text())
+                settled = [g for g in open_majors(r["groups"]) if decision_for(run.name, g["rep"]["title"])]
+                cap_majors(new, room=max(0, MAX_MAJORS - len(open_majors(r["groups"])) + len(settled)))
                 r["groups"] += new
                 r["labels"].update({m: label(m) for m in ok})
                 write_atomic(run / "results.json", json.dumps(r, indent=1, ensure_ascii=False) + "\n")
