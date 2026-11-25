@@ -3087,6 +3087,55 @@ Closed, by their earlier ids: B7 and C2.
         self.assertLess(t.index("### A1."), t.index("## Minor"))
         self.assertIn("- Open items: 1 Major, 1 Minor.", t)
 
+    def test_an_item_moved_by_hand_onto_a_closed_id_is_not_lost(self):
+        for renumber in (True, False):
+            with self.subTest(renumber=renumber):
+                for f in (self.d / "memo.md", self.notes, ur.notes_map_file()):
+                    f.unlink(missing_ok=True)
+                self.majors([1, 2], [3])
+                f = self.d / "memo.md"
+                f.write_text(f.read_text().replace(f"{SEVEN[2]}.", f"{SEVEN[2]} in no case."))
+                self.majors([1, 2], [4])  # B1 closes as applied
+                t = self.notes.read_text()
+                self.notes.write_text(t.replace("## About", "Author: B1 was easy.\n\n## About"))
+                self.move("A2", "B1", "Minor")
+                a, _, b = self.notes.read_text().rpartition("## Minor\n\n")
+                self.notes.write_text(a + b)  # one Minor section
+                if renumber:
+                    self.assertIn("Author: B1 was easy.", self.renumber())  # which B1 is unclear
+                for _ in range(2):
+                    t = self.majors([1, 2], [4])
+                    self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1"], ["B1", "B2"]))
+                    self.assertIn("### B1. Claim 2 fails", t)
+                    self.assertEqual(t.count("Claim 2 fails"), 1)
+
+    def test_items_moved_by_hand_in_a_chain_keep_their_records(self):
+        self.majors([1, 2], [3])
+        t = self.notes.read_text()
+        head = {n: re.search(rf"### \w+\. (.*Claim {n} fails.*)", t).group(1) for n in (2, 3)}
+        t = t.replace(f"### B1. {head[3]}", f"### B5. {head[3]} (was B1)")
+        c = re.search(r"### A2\..*?(?=## Minor)", t, re.S).group(0)
+        self.notes.write_text(t.replace(c, "").replace("## About", c.replace(f"### A2. {head[2]}", f"### B1. {head[2]} (was A2)") + "## About"))
+        for _ in range(2):
+            t = self.majors([1, 2], [3])
+            items = json.loads(ur.notes_map_file().read_text())[str(self.notes)]["items"]
+            self.assertEqual({k: v["title"][:13] for k, v in items.items()},
+                             {"A1": "Claim 1 fails", "B1": "Claim 2 fails", "B5": "Claim 3 fails"})
+            self.assertEqual(t.count("\n### "), 3)
+
+    def test_an_item_moved_by_hand_onto_the_id_of_one_the_user_deleted(self):
+        t = self.majors([1, 2], [3])
+        a, b = t.index("### B1."), t.index("## About")
+        c = re.search(r"### A2\..*?(?=## Minor)", t, re.S).group(0)
+        head, _, body = c.partition("\n")
+        self.notes.write_text((t[:a] + head.replace("A2.", "B1.") + " (was A2)\n" + body + t[b:]).replace(c, ""))
+        for _ in range(2):
+            t = self.majors([1, 2], [3])
+            self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1"], ["B1"]))
+            self.assertIn("### B1. Claim 2 fails", t)  # and claim 3 stays deleted
+            items = json.loads(ur.notes_map_file().read_text())[str(self.notes)]["items"]
+            self.assertTrue(items["B1"]["title"].startswith("Claim 2 fails"))
+
     def test_renumber_after_the_script_moved_an_item(self):
         self.majors([1, 2], [3])
         t = self.majors([1, 4], [2, 3])

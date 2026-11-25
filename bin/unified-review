@@ -3434,15 +3434,40 @@ def note_was(c):
 
 
 def note_follow(chunks, entries):
-    """An item moved by hand keeps its record, and its place in later reviews."""
+    """An item moved by hand keeps its record, and its place in later reviews, even
+    under an id that had a record. Returns those reused ids."""
     items = [c for c in chunks if c[0] == "item"]
     present = {c[1] for c in items}
+    claims = {}  # new id: the open item it says it was, the first to say so
     for c in items:
         old = (note_was(c) or [None])[-1]
-        if old in entries and old not in present and c[1] not in entries and not entries[old].get("closed"):
-            entries[c[1]] = {**entries.pop(old), "pinned": True}
-        elif c[1] in entries and note_section(chunks, c) != c[1][0]:
+        if old != c[1] and old in entries and not entries[old].get("closed") and old not in claims.values():
+            claims[c[1]] = old
+    moves, more = {}, True
+    while more:  # an old id still in the file names its own item, unless that item moved too
+        more = {n: o for n, o in claims.items() if n not in moves and (o not in present or o in moves)}
+        moves.update(more)
+    reused = {n for n in moves if n in entries}
+    records = {n: {**entries.pop(o), "pinned": True} for n, o in moves.items()}
+    for n in reused & set(entries):  # what had the id before is closed or gone
+        e = entries.pop(n)
+        e["closed"] = e.get("closed") or "removed by hand"
+        entries[closed_key(n, entries)] = e
+    entries.update(records)
+    for c in items:
+        if c[1] not in moves and c[1] in entries and note_section(chunks, c) != c[1][0]:
             entries[c[1]]["pinned"] = True
+    return reused
+
+
+def closed_key(i, entries):
+    """A key for the closed record of item i that no item can take."""
+    i = i.removeprefix("closed-")
+    k, n = f"closed-{i}", 1
+    while k in entries:
+        n += 1
+        k = f"closed-{i}-{n}"
+    return k
 
 
 def note_add(chunks, s, chunk):
@@ -3696,7 +3721,7 @@ def renumber_ids(chunks):
     return ids
 
 
-def renumber_lines(text, ids, in_draft, earlier=()):
+def renumber_lines(text, ids, in_draft, earlier=(), reused=()):
     """The notes text with its headings, sub-issues, and references under the new
     ids. A reference that could be the draft's own words, or that names a closed
     item or a range, keeps its whole line as written. Returns (text, changed, left), the last two
@@ -3732,8 +3757,8 @@ def renumber_lines(text, ids, in_draft, earlier=()):
         hold = i in held or bool(head) or line.startswith(("#", ">")) or re.search(r"\bearlier ids?\b", line, re.I)
         ranges = [r.span() for r in NOTE_RANGE.finditer(line)]
         # Wrong now: an open item's id that moved, a closed one's that another item took, or
-        # one from before an earlier renumbering, which may have named two items since.
-        wrong = lambda t: ids[t] != t if t in ids else t in ids.values() or t in earlier
+        # one from before an earlier renumbering or reused by a move, which may name two items.
+        wrong = lambda t: t in reused or (ids[t] != t if t in ids else t in ids.values() or t in earlier)
         seen = set()
 
         def ref(r):
@@ -3744,7 +3769,7 @@ def renumber_lines(text, ids, in_draft, earlier=()):
                 return r.group(0)
             if not wrong(t):
                 return t
-            if (hold or t not in ids or t in in_draft or any(a <= r.start() < b for a, b in ranges)
+            if (hold or t not in ids or t in reused or t in in_draft or any(a <= r.start() < b for a, b in ranges)
                     or DRAFT_LABEL.search(line[:r.start()])):
                 seen.add("left")
                 return t
@@ -3776,7 +3801,7 @@ def renumber(path):
     store = json.loads(store_file.read_text()) if store_file.exists() else {}
     key = next((k for k in store if Path(k).exists() and os.path.samefile(k, path)), None)
     entries = store[key]["items"] if key else {}
-    note_follow(chunks, entries)
+    reused = note_follow(chunks, entries)
     was = {c[1]: [i for i in note_was(c) if i not in ids and i not in entries] for c in chunks if c[0] == "item"}
     aliases = [i for olds in was.values() for i in olds]
     refs = {**{i: ids[a] for a, olds in was.items() for i in olds if aliases.count(i) == 1}, **ids}
@@ -3789,7 +3814,7 @@ def renumber(path):
     earlier = {i for l in re.findall(r"^- Earlier ids\b.+$", old_text, re.M) for i in re.findall(r"\b[ABCX]\d+\b", l)}
     if not moved and not shut and (not hidden or hidden.group(1) == nexts):
         print(f"{path.name}: the ids already run in file order. Nothing changed.")
-        print_left(renumber_lines(old_text, refs, (), earlier)[2])
+        print_left(renumber_lines(old_text, refs, (), earlier, reused)[2])
         return
     drafts = set()
     for run in {e.get("run") for e in entries.values()} - {None}:
@@ -3810,18 +3835,14 @@ def renumber(path):
     else:
         end = next((i for i, l in enumerate(lines) if l.startswith("<!-- next ids")), len(lines))
         lines[end:end] = ["", log] if end == len(lines) else [log, ""]
-    text, changed, left = renumber_lines(pre + "\n".join(lines) + "\n", refs, in_draft, earlier)
+    text, changed, left = renumber_lines(pre + "\n".join(lines) + "\n", refs, in_draft, earlier, reused)
     write_atomic(path, text)
     if key:
         items = {ids[i]: e for i, e in entries.items() if i in ids}
         for i, e in entries.items():
             if i not in ids:
                 e["closed"] = e.get("closed") or "removed by hand"
-                k, n = f"closed-{i.removeprefix('closed-')}", 1
-                while k in items:
-                    n += 1
-                    k = f"closed-{i.removeprefix('closed-')}-{n}"
-                items[k] = e
+                items[closed_key(i, items)] = e
         store[key] = {"items": items, "next": nxt}
         try:
             write_atomic(store_file, json.dumps(store, indent=1, ensure_ascii=False) + "\n")
