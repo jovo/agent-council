@@ -233,16 +233,17 @@ set (A2, B7), and the notes file lists the sets in that order. Where an item
 from an older review shows Fix a and Fix b, they are alternatives: A2a and A2b name them. Ids stay fixed and are never
 reused, leaving gaps, so an id the user said earlier still names the same item.
 A new item takes the next free number in its set. An item whose severity
-changes keeps its id. If the user asks to renumber, renumber each set in file
-order, fix every cross-reference, and list the old ids on one line in the
-closing section, `- Earlier ids: B4 is now B1.`, which the script keeps. The
-script matches items to findings by id, so when
-`~/.local/share/unified-review/runs/notes-ids.json` lists the file, delete that
-file's entry. The script then leaves items it cannot match by title as written.
+changes keeps its id. If the user asks to renumber, first put the items in
+the order and sections the user wants, then run `unified-review --renumber NOTES`.
+It numbers each set in file order and changes the headings, sub-issues,
+references, and its own record of the file. Closed items stay closed. It adds a
+line of earlier ids to the closing section. Check each line it prints: changed
+references, and lines it left for you. Never renumber by hand.
 When several Major items bear on one claim, merge them into one item with
 sub-issues, `#### A4.1. Title`. The merged item takes the next free id and a
 heading of its own. The script tracks one change per item, so under a kept id it
-would remove the whole item once that change is made.
+would remove the whole item once that change is made. It leaves a merged item
+as written, so keep its line numbers, applied parts, and `--applied` records yourself.
 For a script review, record each one with `--applied N` or `--ignore N`, so the
 next review neither raises it again nor forgets it.
 
