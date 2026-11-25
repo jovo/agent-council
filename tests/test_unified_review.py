@@ -2804,6 +2804,38 @@ class NotesFile(unittest.TestCase):
         self.assertIn("- Open items: 2 Minor, 1 Disputed.", t)
         self.assertIn("ties broken by Claude Opus", t)  # the scripted mediator ruled on X1
 
+    def test_a_renumbered_file_keeps_its_items_and_earlier_ids(self):
+        replies = {"gpt": SKY(), "argon": WATER}
+        self.review(replies)
+        t = self.notes.read_text()
+        self.assertIn("### B1. Sky color is wrong", t)
+        t = t.replace("### B1.", "### B9.").replace("### B2.", "### B1.").replace("### B9.", "### B2.")
+        self.notes.write_text(t.replace("- Ids:", "- Earlier ids: B1 is now B2, and B2 is now B1.\n- Ids:"))
+        store = json.loads(ur.notes_map_file().read_text())
+        del store[str(self.notes)]
+        ur.notes_map_file().write_text(json.dumps(store))
+        self.review(replies)
+        self.review(replies)
+        t = self.notes.read_text()
+        self.assertIn("### B2. Sky color is wrong", t)
+        self.assertIn("### B1. Water is not dry", t)
+        self.assertEqual(t.count("### B"), 2)
+        self.assertEqual(t.count("- Earlier ids: B1 is now B2, and B2 is now B1."), 1)
+        self.assertNotIn("never reused", t)
+
+    def test_a_merged_item_under_a_new_id_is_left_alone(self):
+        replies = {"gpt": SKY(), "argon": WATER}
+        self.review(replies)
+        t = self.notes.read_text()
+        a, b = t.index("### B1."), t.index("## About this review")
+        merged = "### B3. Two wrong facts\n\n#### B3.1. Sky\n\nText.\n\n#### B3.2. Water\n\nText.\n\n"
+        self.notes.write_text(t[:a] + merged + t[b:])
+        self.review(replies)
+        t = self.notes.read_text()
+        self.assertIn(merged.strip(), t)
+        self.assertEqual(t.count("### B3."), 3)
+        self.assertNotIn("Sky color is wrong", t)
+
     def test_an_open_item_the_mediator_drops_is_closed(self):
         self.review({"gpt": SKY(), "argon": WATER})
         path, _ = self.review({"gpt": SKY(), "argon": WATER}, {"argon": {"Sky color is wrong": "disagree | agree"}, "gpt": {}},
@@ -2902,6 +2934,16 @@ class NotesFile(unittest.TestCase):
         self.assertEqual(t.count("Claim 2 fails"), 1)
         t = self.majors([1, 2, 4], [3])
         self.assertRegex(t, r"### A4\. Claim 2 fails .*\(was A2, B2\)")
+
+    def test_a_closed_record_is_not_taken_by_an_item_that_names_its_id(self):
+        self.majors([1, 2], [3])
+        f = self.d / "memo.md"
+        f.write_text(f.read_text().replace("Copper conducts heat well.", "Copper conducts heat well in no case."))
+        t = self.majors([1], [3])  # A2 closes as applied
+        mine = "### B2. My own note (was A2)\n\nKeep this.\n\n"
+        self.notes.write_text(t.replace("## About", mine + "## About"))
+        self.majors([1], [3])
+        self.assertIn(mine.strip(), self.notes.read_text())
 
     def test_an_id_a_moved_item_had_is_not_reused_when_the_map_is_lost(self):
         self.majors([1, 2], [3])

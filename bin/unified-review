@@ -3466,7 +3466,7 @@ def write_notes(draft, run, source=None):
     for c in [c for c in chunks if c[0] == "item"]:  # an item moved by hand keeps its record and its place
         was = NOTE_WAS.search(c[2].partition("\n")[0])
         old = was.group(1).split(", ")[-1] if was else None
-        if old in entries and old not in present and c[1] not in entries:
+        if old in entries and old not in present and c[1] not in entries and not entries[old].get("closed"):
             entries[c[1]] = {**entries.pop(old), "pinned": True}
         elif c[1] in entries and note_section(chunks, c) != c[1][0]:
             entries[c[1]]["pinned"] = True
@@ -3586,10 +3586,12 @@ def write_notes(draft, run, source=None):
     counts = ", ".join(f"{count(s)} {NOTE_SETS[s] if s != 'C' else 'Nitpick'}" for s in "ABCX" if count(s))
     who = " and ".join(labels.get(m, m) for m in r["reviewers_ok"])
     med = labels.get(r.get("mediator") or "")
+    earlier = re.findall(r"^- Earlier ids: .+$", old_text, re.M)  # a renumbered file's old ids, written by hand
     about = [f"- Open items: {counts or 'none'}.",
              f"- Line numbers refer to {draft.name} as of {time.strftime('%Y-%m-%d %H:%M')}.",
              f"- Review run: `{run}`. Reviewed by {who}" + (f", ties broken by {med}." if med else "."),
-             "- Ids: A Major, B Minor, C Nitpick, X disputed. Ids stay fixed and are never reused.",
+             "- Ids: A Major, B Minor, C Nitpick, X disputed. " + ("Renumbered by hand." if earlier else "Ids stay fixed and are never reused."),
+             *earlier,
              *([f"- Closed this round: {', '.join(closed)}."] if closed else []),
              *([f"- Left as written, heading not in the \"### A1. Title\" form: {', '.join(bad)}."] if bad else []),
              *([f"- {not_assessed(r)}"] if not_assessed(r) else []),

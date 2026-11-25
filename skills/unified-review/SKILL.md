@@ -241,14 +241,19 @@ reused, leaving gaps, so an id the user said earlier still names the same item.
 A new item takes the next free number in its set. An item whose severity
 changes moves to the new set, takes its next free id, and shows the old id at
 the end of its heading: `### B22. Title (was A4)`. The old id is not reused and
-still names the item, and the script follows `(was A4)` on the next review. Items run in id order within each set, so an item added
-later goes last. If the user asks to renumber, renumber each set in file
-order, fix every cross-reference, and list the old ids in the closing section.
-The script matches items to findings by id, so when
-`~/.local/share/unified-review/runs/notes-ids.json` lists the file, change its
-keys to match. Give ids that are no longer in the file numbers above the
-highest one in use, and raise `next` past them. A Major item with several parts
-has sub-issues, `#### A4.1. Title`, inside the item.
+still names the item, and the script follows `(was A4)` on the next review.
+Items run in id order within each set, so an item added later goes last.
+If the user asks to renumber, renumber each set in file
+order, fix every cross-reference, and list the old ids on one line in the
+closing section, `- Earlier ids: B4 is now B1.`, which the script keeps. The
+script matches items to findings by id, so when
+`~/.local/share/unified-review/runs/notes-ids.json` lists the file, delete that
+file's entry. The script then leaves items it cannot match by title as written.
+When several Major items bear on one claim, merge them into one item with
+sub-issues, `#### A4.1. Title`. The merged item takes the next free id and a
+heading of its own, with no `(was A4)`. The script tracks one change per item, so under a kept id it
+would remove the whole item once that change is made. When you renumber, drop
+each `(was A4)`, since the closing section lists the old ids.
 For a script review, record each one with `--applied N` or `--ignore N`, so the
 next review neither raises it again nor forgets it.
 
@@ -405,7 +410,7 @@ Reviewer instructions for feedback on drafts. This covers verification and how f
 
 ### Output format
 
-- Group findings by severity, judged by one test: do the draft's central claims still stand if this goes unfixed? **Major**: no, a central claim (a headline claim of the abstract or conclusion) fails or loses its support until the author reruns an analysis, replaces a result, or narrows that claim. Findings that bear on one claim are one Major item. A missing reference, a wrong count or value, a mislabeled panel, or an overworded sentence is Minor or Nitpick, unless a central claim rests on it. **Minor**: yes, but the fix makes the draft clearer, more complete, or easier to reproduce. **Nitpick**: style, phrasing, typos, with a few words of point at most and a diff of only the words that change. A review has at most five Majors, and fewer is fine. If more pass the test, keep the five that threaten the most central claims, then those that take the most work to fix. Demote the rest to Minor. Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Major first, so a finding can be cited by number alone. For each finding, state the problem, then immediately show its fix, before moving to the next finding. Do not collect all diffs into a separate list at the end.
+- Group findings by severity, judged by one test: do the draft's central claims still stand if this goes unfixed? **Major**: no, a central claim (a headline claim of the abstract or conclusion) fails or loses its support until the author reruns an analysis, replaces a result, or narrows that claim. A missing reference, a wrong count or value, a mislabeled panel, or an overworded sentence is Minor or Nitpick, unless a central claim rests on it. **Minor**: yes, but the fix makes the draft clearer, more complete, or easier to reproduce. **Nitpick**: style, phrasing, typos, with a few words of point at most and a diff of only the words that change. A review has at most five Majors, and fewer is fine. If more pass the test, keep the five that threaten the most central claims, then those that take the most work to fix. Demote the rest to Minor. Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Major first, so a finding can be cited by number alone. For each finding, state the problem, then immediately show its fix, before moving to the next finding. Do not collect all diffs into a separate list at the end.
 - Each finding has two parts. The problem is one sentence of at most 25 words: the claim or decision affected and what the defect costs it. The fix is the diff, with no restatement of the problem. For a Major finding about a claim, the fix adds the missing support or narrows the claim to what the evidence supports. Keep Nitpicks terse: a few words and the diff.
 - Every finding proposes at least one revision, a question finding included. For a question, state it in one or two sentences, list the readings or options you see, say which one you assumed, and give the revision for that reading. Use a question only when the answer is the author's to give. When the draft already implies the answer, make it an edit.
 - Show every diff as an **inline revision of the original text**, not as a `Replace:` / `With:` pair. Strike deletions with `~~tildes~~`, and make every struck span render as strikeout, never as literal tildes. The opening `~~` touches the first struck character and the closing `~~` touches the last, so a space next to a span sits outside it: `the tokens it covers ~~and the rest~~.`, not `the tokens it covers~~ and the rest~~.`. A span may open on punctuation, as in `~~(v2)~~`, only when a space or the start of a line comes before it. When a deletion starts with punctuation attached to the word before it, as in `choice, because`, widen it to take in that word and restore the word in the 🟢 text: `~~choice, because x~~ 🟢 **choice**`, not `choice~~, because x~~`. Bold each addition and prefix it with `🟢 `. When an addition runs several sentences or lines in a row, one `🟢 ` before the first is enough: bold the whole run once, not each sentence. Tildes mark deletions only, never additions. Leave genuinely unchanged sentences plain, and for a mostly-rewritten paragraph strike the whole old block and follow it with the whole new one rather than a word-level diff. When the finding says the quoted text is wrong, the diff strikes or rewrites that text. A diff that only adds text is for an omission, never for a fix to text the draft already has. The added text does not repeat what neighboring sentences already say.
