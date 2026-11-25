@@ -2792,6 +2792,19 @@ class NotesFile(unittest.TestCase):
         self.assertIn("### B1. Water", t)
         self.assertEqual(t.count("\n### B"), 1)
 
+    def test_renumber_resets_the_next_id_when_only_the_last_item_closed(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        f = self.d / "memo.md"
+        f.write_text(f.read_text().replace("Water is dry.", "Water is wet."))
+        self.review({"gpt": SKY(), "argon": SKY()})  # B2 closes as applied
+        self.renumber()
+        self.assertIn("already run in file order", self.renumber())
+        self.assertIn("B2 had closed.", self.notes.read_text())
+        self.review({"gpt": SKY() + GRASS, "argon": SKY()})
+        t = self.notes.read_text()
+        self.assertIn("### B1. Sky color is wrong", t)
+        self.assertIn("### B2. Grass speed unsupported", t)
+
     def test_renumber_changes_references_and_leaves_what_may_be_the_drafts_words(self):
         self.notes.parent.mkdir()
         self.notes.write_text("""# Review of memo.md

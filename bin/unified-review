@@ -3581,28 +3581,30 @@ def renumber(path):
     if not re.search(rf"^## {ABOUT}\s*$", old_text, re.M):
         sys.exit(f"error: {path.name} has no \"## {ABOUT}\" section, so it is not a notes file")
     ids = renumber_ids(old_text)
-    if all(a == b for a, b in ids.items()):
-        print(f"{path.name}: the ids already run in file order. Nothing changed.")
-        return
     store_file = notes_map_file()
     store = json.loads(store_file.read_text()) if store_file.exists() else {}
     key = next((k for k in store if Path(k).exists() and os.path.samefile(k, path)), None)
     entries = store[key]["items"] if key else {}
     shut = sorted((i for i in entries if i not in ids and NOTE_HEAD.match(f"### {i}. ")), key=lambda i: (i[0], int(i[1:])))
+    nxt = {s: 1 + sum(i.startswith(s) for i in ids.values()) for s in "ABCX"}
+    nexts = ", ".join(f"{s}{nxt[s]}" for s in "ABCX")
+    moved = [f"{a} is now {b}" for a, b in ids.items() if a != b]
+    hidden = re.search(r"^<!-- next ids: (.+?) -->$", old_text, re.M)
+    if not moved and not shut and (not hidden or hidden.group(1) == nexts):
+        print(f"{path.name}: the ids already run in file order. Nothing changed.")
+        return
     drafts = set()
     for run in {e.get("run") for e in entries.values()} - {None}:
         with contextlib.suppress(OSError, ValueError):
             drafts.update(json.loads((Path(run) / "results.json").read_text())["files"])
     in_draft = {i for f in drafts if Path(f).exists() for i in re.findall(r"\b[ABCX]\d+\b", doc_text(Path(f)))}
 
-    moved = [f"{a} is now {b}" for a, b in ids.items() if a != b]
-    log = f"- Earlier ids ({time.strftime('%Y-%m-%d %H:%M')}): " + ", ".join(moved + [f"{i} had closed" for i in shut]) + "."
+    news = ", ".join(moved + [f"{i} had closed" for i in shut]) or "the next ids were reset"
+    log = f"- Earlier ids ({time.strftime('%Y-%m-%d %H:%M')}): {news}."
     pre, about = re.split(rf"(?m)^(?=## {ABOUT}\s*$)", old_text, maxsplit=1)
     lines = about.rstrip("\n").replace(IDS_FIXED, RENUMBERED).replace("- Closed this round:", "- Closed this round, by earlier ids:").split("\n")
     if key:
         lines = [f"- Open items: {note_counts(ids.values())}." if re.fullmatch(r"- Open items: [\w ,]+\.", l) else l for l in lines]
-    nxt = {s: 1 + sum(i.startswith(s) for i in ids.values()) for s in "ABCX"}
-    nexts = ", ".join(f"{s}{nxt[s]}" for s in "ABCX")
     lines = [re.sub(r"^(- Next free ids: |<!-- next ids: ).+?(\.?|\.? -->)$", rf"\g<1>{nexts}\g<2>", l) for l in lines]
     spots = [i for i, l in enumerate(lines) if re.match(r"- (?:Ids: |Earlier ids\b)", l)]
     if spots:
@@ -3628,7 +3630,7 @@ def renumber(path):
         except BaseException:
             write_atomic(path, old_text)  # both or neither
             raise
-    print(f"{path}: {', '.join(moved)}.")
+    print(f"{path}: {news}.")
     for n, what in changed:
         print(f"  line {n}: reference changed, {what}")
     if left:
