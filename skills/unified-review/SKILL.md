@@ -104,7 +104,10 @@ The script groups duplicates and writes `unified.md` in the run folder and the
 notes file (below) in the draft's folder:
 findings grouped by severity (Major, Minor, Nitpick), each group in
 draft order with its section, file, and line, then Disputed, then a one-line
-list of findings the mediator dropped. There is no cap on findings. When the file was reviewed before,
+list of findings the mediator dropped. There is no cap on
+findings, but at most five are Major: when more pass the test, the mediator
+picks five and the rest become Minor. With no mediator, the script keeps those
+more reviewers raised, then those with more votes. When the file was reviewed before,
 `unified.md` opens with a "Since the last review" section: three counts and
 their finding numbers, resolved (an earlier finding whose passage changed and
 that no panelist raised again, numbered as in the last review), persisting,
@@ -179,13 +182,16 @@ describes, with the counts by severity from its closing section. With
 After a script review of one file, the script writes and updates the notes
 file. On a re-review it edits the file in place and never rewrites it:
 - A finding raised again keeps its id and its body, so notes added under it
-  survive. Its line number is refreshed.
+  survive. Its line number is refreshed. If its severity changed, it moves to
+  the new set with a new id, unless you or the user had moved it by hand.
+- At most five Majors stay. Beyond five, Majors not raised this round become
+  Minor. An item moved into Major by hand stays there, even as a sixth.
 - An item whose struck text is gone from the draft, or whose added text is in
   it, is removed and recorded with `--applied`. A declined item is removed.
 - An item not raised again, with its passage unchanged, stays, marked "Not
   raised this round."
-- A new finding takes the next free id in its set and goes in by severity,
-  then draft order. An item the user deleted is not added back.
+- A new finding takes the next free id in its set and goes in last, so
+  a new file reads in draft order. An item the user deleted is not added back.
 - Only `## About this review` is rewritten. An item whose heading no longer
   has the `### A1. Title` form is left as written, and the closing section
   names it.
@@ -235,19 +241,28 @@ set (A2, B7), and the notes file lists the sets in that order. Where an item
 from an older review shows Fix a and Fix b, they are alternatives: A2a and A2b name them. Ids stay fixed and are never
 reused, leaving gaps, so an id the user said earlier still names the same item.
 A new item takes the next free number in its set. An item whose severity
-changes keeps its id. If the user asks to renumber, first put the items in
+changes moves to the new set, takes its next free id, and shows the old id at
+the end of its heading: `### B22. Title (was A4)`. The old id is not reused and
+still names the item, and the script follows `(was A4)` on the next review.
+Items run in id order within each set, so an item added later goes last.
+If the user asks to renumber, first put the items in
 the order and sections the user wants, then run `unified-review --renumber NOTES`.
 It numbers each set in file order and changes the headings, sub-issues,
-references, and its own record of the file. Closed items stay closed. It adds a
-line of earlier ids to the closing section. Check each line it prints: changed
+references, and its own record of the file. It drops each `(was A4)`, since it
+adds a line of earlier ids to the closing section. Closed items stay closed, and
+an item you put in another set stays there. Check each line it prints: changed
 references, and lines it left for you. Never renumber by hand.
 When several Major items bear on one claim, merge them into one item with
 sub-issues, `#### A4.1. Title`. The merged item takes the next free id and a
-heading of its own. The script tracks one change per item, so under a kept id it
+heading of its own, with no `(was A4)`. The script tracks one change per item, so under a kept id it
 would remove the whole item once that change is made. It leaves a merged item
 as written, so keep its line numbers, applied parts, and `--applied` records yourself.
 For a script review, record each one with `--applied N` or `--ignore N`, so the
 next review neither raises it again nor forgets it.
+
+When a check changes an item's problem, rate its severity again in the same
+edit. Keep at most five Majors, counting Disputed items rated Major and items
+you add to a script review.
 
 Write each item from scratch, as if the reader has seen no conversation. Open
 with why the change is proposed: what is wrong or missing in the current text
@@ -398,7 +413,7 @@ Reviewer instructions for feedback on drafts. This covers verification and how f
 
 ### Output format
 
-- Group findings by severity, judged by one test: do the draft's claims still stand if this goes unfixed? **Major**: no, a claim fails or is unsupported until this is fixed. A wrong value in one table cell or figure is Minor unless a claim rests on it. **Minor**: yes, but the fix makes the draft clearer, more complete, or easier to reproduce. **Nitpick**: style, phrasing, typos, with a few words of point at most and a diff of only the words that change. Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Major first, so a finding can be cited by number alone. For each finding, state the problem, then immediately show its fix, before moving to the next finding. Do not collect all diffs into a separate list at the end.
+- Group findings by severity, judged by one test: do the draft's central claims still stand if this goes unfixed? **Major**: no, a central claim (a headline claim of the abstract or conclusion) fails or loses its support until the author reruns an analysis, replaces a result, or narrows that claim. A missing reference, a wrong count or value, a mislabeled panel, or an overworded sentence is Minor or Nitpick, unless a central claim rests on it. **Minor**: yes, but the fix makes the draft clearer, more complete, or easier to reproduce. **Nitpick**: style, phrasing, typos, with a few words of point at most and a diff of only the words that change. A review has at most five Majors, and fewer is fine. If more pass the test, keep the five that threaten the most central claims, then those that take the most work to fix. Demote the rest to Minor. Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Major first, so a finding can be cited by number alone. For each finding, state the problem, then immediately show its fix, before moving to the next finding. Do not collect all diffs into a separate list at the end.
 - Each finding has two parts. The problem is one sentence of at most 25 words: the claim or decision affected and what the defect costs it. The fix is the diff, with no restatement of the problem. For a Major finding about a claim, the fix adds the missing support or narrows the claim to what the evidence supports. Keep Nitpicks terse: a few words and the diff.
 - Every finding proposes at least one revision, a question finding included. For a question, state it in one or two sentences, list the readings or options you see, say which one you assumed, and give the revision for that reading. Use a question only when the answer is the author's to give. When the draft already implies the answer, make it an edit.
 - Show every diff as an **inline revision of the original text**, not as a `Replace:` / `With:` pair. Strike deletions with `~~tildes~~`, and make every struck span render as strikeout, never as literal tildes. The opening `~~` touches the first struck character and the closing `~~` touches the last, so a space next to a span sits outside it: `the tokens it covers ~~and the rest~~.`, not `the tokens it covers~~ and the rest~~.`. A span may open on punctuation, as in `~~(v2)~~`, only when a space or the start of a line comes before it. When a deletion starts with punctuation attached to the word before it, as in `choice, because`, widen it to take in that word and restore the word in the 🟢 text: `~~choice, because x~~ 🟢 **choice**`, not `choice~~, because x~~`. Bold each addition and prefix it with `🟢 `. When an addition runs several sentences or lines in a row, one `🟢 ` before the first is enough: bold the whole run once, not each sentence. Tildes mark deletions only, never additions. Leave genuinely unchanged sentences plain, and for a mostly-rewritten paragraph strike the whole old block and follow it with the whole new one rather than a word-level diff. When the finding says the quoted text is wrong, the diff strikes or rewrites that text. A diff that only adds text is for an omission, never for a fix to text the draft already has. The added text does not repeat what neighboring sentences already say.

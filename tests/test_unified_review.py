@@ -2365,7 +2365,7 @@ class ReviewPage(unittest.TestCase):
 DRAFT2 = "# Intro\n\nThe sky is green today.\n\nGrass grows slowly.\n\nWater is dry.\n"
 
 
-def two_lab_review(d, replies, votes, mediation=None, draft_text=DRAFT2, fails=(), panel=("gpt", "argon"), missing=()):
+def two_lab_review(d, replies, votes, mediation=None, draft_text=DRAFT2, fails=(), panel=("gpt", "argon"), missing=(), rank=""):
     """Run foreground with two reviewers and a scripted mediator. replies: {model: review text}.
     votes: {model: {title: "problem | fix"}}. mediation: {title: block lines} or None.
     Returns (run folder, prompts)."""
@@ -2391,6 +2391,8 @@ def two_lab_review(d, replies, votes, mediation=None, draft_text=DRAFT2, fails=(
             # mediation may be a function of (model, title) that returns None to skip an item.
             pick = mediation if callable(mediation) else lambda m, t: (mediation or {}).get(t, default)
             return "\n\n".join(f"=== {i}\n" + b for i, t in items if (b := pick(m, t)) is not None)
+        if stage == "rank":
+            return rank
         return ""
     f = d / "memo.md"
     if not f.exists():
@@ -2793,6 +2795,86 @@ class TwoLab(unittest.TestCase):
         self.assertFalse(ur.auto_applies({**base, "tag": "Fixes differ"}))
 
 
+SEVEN = ["Rivers freeze each winter", "Copper conducts heat well", "Owls hunt after sunset", "Glass melts near a forge",
+         "Maples drop red leaves", "Bread rises with yeast", "Comets orbit the sun"]
+
+
+def claims(*ns, severity="Major"):
+    """One finding per claim number in DRAFT7, so two reviewers with the same text agree on each."""
+    return "".join(finding_text(f"Claim {n} fails", f"{SEVEN[n - 1]}.", "It fails.",
+                                f"{SEVEN[n - 1]} 🟢 **in no case**.", severity) for n in ns)
+
+
+DRAFT7 = "# Intro\n\n" + "\n\n".join(f"{x}." for x in SEVEN) + "\n"
+
+
+class CapMajors(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_review(self, ns=range(1, 8), votes=None, panel=("gpt", "argon"), **kw):
+        out, prompts = two_lab_review(self.d, {m: claims(*ns) for m in panel}, votes or {"gpt": {}, "argon": {}},
+                                      draft_text=DRAFT7, panel=panel, **kw)
+        r = json.loads((out / "results.json").read_text())
+        return {g["rep"]["title"]: g["severity"] for g in r["groups"]}, prompts, r
+
+    def test_seven_majors_become_five_by_the_mediators_rank(self):
+        sev, prompts, r = self.run_review(rank="keep: J7, J6, J3, J2, J1")
+        self.assertEqual([n for n in range(1, 8) if sev[f"Claim {n} fails"] == "Major"], [1, 2, 3, 6, 7])
+        self.assertEqual([n for n in range(1, 8) if sev[f"Claim {n} fails"] == "Minor"], [4, 5])
+        self.assertIn("[J4] Claim 4 fails", prompts["rank"][ur.MEDIATOR])
+        self.assertEqual(r["failures"], [])
+        # Numbered after the cap: the five Majors come first.
+        self.assertEqual([sev for _, sev, _, _ in ur.ordered_findings(r)], ["Major"] * 5 + ["Minor"] * 2)
+
+    def test_five_majors_need_no_rank(self):
+        sev, prompts, _ = self.run_review(range(1, 6))
+        self.assertEqual(set(sev.values()), {"Major"})
+        self.assertNotIn("rank", prompts)
+
+    def test_mediator_failure_falls_back_to_the_votes(self):
+        sev, _, r = self.run_review(fails=(("rank", ur.MEDIATOR),))
+        self.assertEqual([n for n in range(1, 8) if sev[f"Claim {n} fails"] == "Major"], [1, 2, 3, 4, 5])
+        self.assertTrue(any(f["stage"] == "rank" for f in r["failures"]))
+
+    def test_a_reply_with_no_ids_falls_back_and_is_reported(self):
+        sev, _, r = self.run_review(rank="I cannot decide")
+        self.assertEqual(list(sev.values()).count("Major"), 5)
+        self.assertTrue(any(f["stage"] == "rank" and "no ids" in f["reason"] for f in r["failures"]))
+
+    def test_a_short_rank_is_filled_from_the_votes(self):
+        sev, _, _ = self.run_review(rank="keep: J7, J99, J7")
+        self.assertEqual([n for n in range(1, 8) if sev[f"Claim {n} fails"] == "Major"], [1, 2, 3, 4, 7])
+
+    def test_one_reviewer_is_capped_without_a_mediator(self):
+        sev, prompts, _ = self.run_review(panel=("gpt",), votes={"gpt": {}})
+        self.assertEqual(list(sev.values()).count("Major"), 5)
+        self.assertNotIn("rank", prompts)
+
+    def test_fallback_prefers_agreed_then_more_reviewers_then_votes(self):
+        g = lambda t, **kw: {"rep": {"title": t}, "severity": "Major", "pos": 0, "raised_by": ["a"], "frac": 1, **kw}
+        gs = [g("disputed", disputed=True, raised_by=["a", "b"]), g("low", frac=0.2), g("one"),
+              g("two", raised_by=["a", "b"]), g("declined", declined={"id": "D1"}), g("held", held="churn"),
+              g("rejected", rejected=True), g("other", other_of="two")]
+        self.assertEqual([x["rep"]["title"] for x in ur.open_majors(gs)], ["two", "one", "low", "disputed"])
+        self.assertEqual([x["rep"]["title"] for x in ur.cap_majors(gs, room=2)], ["low", "disputed"])
+        self.assertEqual([x["rep"]["title"] for x in gs if x["severity"] == "Major"],
+                         ["one", "two", "declined", "held", "rejected", "other"])
+        self.assertEqual([x["rep"]["title"] for x in ur.cap_majors([g("new")], room=0)], ["new"])
+
+    def test_every_prompt_rates_against_central_claims(self):
+        for p in (ur.review_prompt("draft", "", "rules"), ur.VOTE, ur.MEDIATE, ur.RANK, ur.reviewer_rules()):
+            self.assertIn("central", p)
+        for p in (ur.review_prompt("draft", "", "rules"), ur.VOTE, ur.MEDIATE):
+            self.assertNotRegex(p, r"Major,? \(?a claim")
+            self.assertRegex(p, r"missing reference")
+        self.assertIn("at most five Majors", ur.reviewer_rules())
+
+
 class NotesFile(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -2802,8 +2884,8 @@ class NotesFile(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def review(self, replies, votes=None, mediation=None):
-        out, _ = two_lab_review(self.d, replies, votes or {"gpt": {}, "argon": {}}, mediation)
+    def review(self, replies, votes=None, mediation=None, rank=""):
+        out, _ = two_lab_review(self.d, replies, votes or {"gpt": {}, "argon": {}}, mediation, rank=rank)
         with mock.patch.object(ur.runtime, "log", lambda *a: None):
             return ur.write_notes(self.d / "memo.md", out), out
 
@@ -2965,6 +3047,170 @@ Closed, by their earlier ids: B7 and C2.
         self.renumber()
         self.assertIn("B2 plants differ.\n\nB2 does not.", self.notes.read_text())
 
+    def move(self, old, new, head):
+        """Move an item under another section by hand, as the skill says: new id, old id in the heading."""
+        t = self.notes.read_text()
+        a = t.index(f"### {old}.")
+        b = min(x for x in (t.find("\n### ", a + 1) + 1, t.find("\n## ", a) + 1) if x > 0)
+        line, _, rest = t[a:b].partition("\n")
+        was = f" (was {old})" if new != old else ""
+        item = line.replace(f"### {old}.", f"### {new}.") + was + "\n" + rest
+        t = t[:a] + t[b:]
+        self.notes.write_text(t.replace("## Minor", f"## {head}\n\n{item}## Minor", 1))
+
+    def test_renumber_follows_an_item_moved_by_hand_before_the_next_review(self):
+        replies = {"gpt": SKY() + GRASS, "argon": WATER}
+        self.review(replies)
+        t = self.notes.read_text()
+        self.notes.write_text(t.replace("## About", "Author: B2 waits for B3.\n\n## About"))
+        self.move("B2", "A7", "Major")
+        self.renumber()
+        for _ in range(2):
+            t = self.notes.read_text()
+            self.assertIn("### A1. Grass speed unsupported", t)
+            self.assertLess(t.index("### A1."), t.index("## Minor"))
+            self.assertIn("### B2. Water is not dry", t)
+            self.assertEqual(t.count("Grass speed unsupported"), 1)
+            self.assertNotIn("(was", t)
+            self.assertIn("Author: A1 waits for B2.", t)
+            self.assertIn("B2 and A7 are now A1, B3 is now B2.", t)
+            self.review(replies)  # rated Minor again, and stays where the user put it
+
+    def test_renumber_keeps_an_item_the_user_put_in_another_set_under_its_old_id(self):
+        replies = {"gpt": SKY(), "argon": WATER}
+        self.review(replies)
+        self.move("B2", "B2", "Major")
+        self.renumber()
+        self.review(replies)
+        t = self.notes.read_text()
+        self.assertIn("### A1. Water is not dry", t)
+        self.assertLess(t.index("### A1."), t.index("## Minor"))
+        self.assertIn("- Open items: 1 Major, 1 Minor.", t)
+
+    def test_an_item_moved_by_hand_onto_a_closed_id_is_not_lost(self):
+        for renumber in (True, False):
+            with self.subTest(renumber=renumber):
+                for f in (self.d / "memo.md", self.notes, ur.notes_map_file()):
+                    f.unlink(missing_ok=True)
+                self.majors([1, 2], [3])
+                f = self.d / "memo.md"
+                f.write_text(f.read_text().replace(f"{SEVEN[2]}.", f"{SEVEN[2]} in no case."))
+                self.majors([1, 2], [4])  # B1 closes as applied
+                t = self.notes.read_text()
+                self.notes.write_text(t.replace("## About", "Author: B1 was easy.\n\n## About"))
+                self.move("A2", "B1", "Minor")
+                a, _, b = self.notes.read_text().rpartition("## Minor\n\n")
+                self.notes.write_text(a + b)  # one Minor section
+                if renumber:
+                    self.assertIn("Author: B1 was easy.", self.renumber())  # which B1 is unclear
+                for _ in range(2):
+                    t = self.majors([1, 2], [4])
+                    self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1"], ["B1", "B2"]))
+                    self.assertIn("### B1. Claim 2 fails", t)
+                    self.assertEqual(t.count("Claim 2 fails"), 1)
+
+    def test_an_item_moved_by_hand_twice_before_the_next_review_keeps_its_record(self):
+        self.majors([1, 2], [3])
+        self.move("A2", "B2", "Major")
+        self.notes.write_text(self.notes.read_text().replace("### B2.", "### A9.").replace("(was A2)", "(was A2, B2)"))
+        for _ in range(2):
+            t = self.majors([1], [2, 3])  # rated Minor, and stays where the user put it
+            items = json.loads(ur.notes_map_file().read_text())[str(self.notes)]["items"]
+            self.assertEqual({k: (v["title"], v.get("closed")) for k, v in items.items()},
+                             {"A1": ("Claim 1 fails", None), "A9": ("Claim 2 fails", None), "B1": ("Claim 3 fails", None)})
+            self.assertTrue(items["A9"]["pinned"])
+            self.assertEqual(t.count("Claim 2 fails"), 1)
+
+    def test_an_item_with_its_own_record_does_not_take_one_under_an_id_it_had(self):
+        self.majors([1, 2], [3])
+        self.majors([1], [2, 3])  # A2 is now B2
+        store = json.loads(ur.notes_map_file().read_text())
+        items = store[str(self.notes)]["items"]
+        items["A2"] = {**items["A1"], "title": "Another", "quote": "Other words."}
+        ur.notes_map_file().write_text(json.dumps(store))
+        self.majors([1], [2, 3])
+        items = json.loads(ur.notes_map_file().read_text())[str(self.notes)]["items"]
+        self.assertEqual(items["B2"]["title"], "Claim 2 fails")
+        self.assertEqual((items["A2"]["title"], items["A2"]["closed"]), ("Another", "removed by hand"))
+
+    def test_items_moved_by_hand_in_a_chain_keep_their_records(self):
+        self.majors([1, 2], [3])
+        t = self.notes.read_text()
+        head = {n: re.search(rf"### \w+\. (.*Claim {n} fails.*)", t).group(1) for n in (2, 3)}
+        t = t.replace(f"### B1. {head[3]}", f"### B5. {head[3]} (was B1)")
+        c = re.search(r"### A2\..*?(?=## Minor)", t, re.S).group(0)
+        self.notes.write_text(t.replace(c, "").replace("## About", c.replace(f"### A2. {head[2]}", f"### B1. {head[2]} (was A2)") + "## About"))
+        for _ in range(2):
+            t = self.majors([1, 2], [3])
+            items = json.loads(ur.notes_map_file().read_text())[str(self.notes)]["items"]
+            self.assertEqual({k: v["title"][:13] for k, v in items.items()},
+                             {"A1": "Claim 1 fails", "B1": "Claim 2 fails", "B5": "Claim 3 fails"})
+            self.assertEqual(t.count("\n### "), 3)
+
+    def test_an_item_moved_by_hand_onto_the_id_of_one_the_user_deleted(self):
+        t = self.majors([1, 2], [3])
+        a, b = t.index("### B1."), t.index("## About")
+        c = re.search(r"### A2\..*?(?=## Minor)", t, re.S).group(0)
+        head, _, body = c.partition("\n")
+        self.notes.write_text((t[:a] + head.replace("A2.", "B1.") + " (was A2)\n" + body + t[b:]).replace(c, ""))
+        for _ in range(2):
+            t = self.majors([1, 2], [3])
+            self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1"], ["B1"]))
+            self.assertIn("### B1. Claim 2 fails", t)  # and claim 3 stays deleted
+            items = json.loads(ur.notes_map_file().read_text())[str(self.notes)]["items"]
+            self.assertTrue(items["B1"]["title"].startswith("Claim 2 fails"))
+
+    def test_renumber_after_the_script_moved_an_item(self):
+        self.majors([1, 2], [3])
+        t = self.majors([1, 4], [2, 3])
+        self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1", "A3"], ["B1", "B2"]))
+        self.notes.write_text(t.replace("## About", "Author: A2 waits for A3.\n\n## About"))
+        self.renumber()
+        for _ in range(2):
+            t = self.notes.read_text()
+            self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1", "A2"], ["B1", "B2"]))
+            self.assertIn("A3 is now A2, A2 is now B2.", t)
+            self.assertIn("Author: B2 waits for A2.", t)
+            self.assertNotIn("(was", t)
+            self.assertIn("<!-- next ids: A3, B3, C1, X1 -->", t)
+            self.assertEqual(t.count("Claim 2 fails"), 1)
+            self.majors([1, 4], [2, 3])
+        t = self.majors([1, 2, 4], [3])  # rated Major again, and free to move
+        self.assertRegex(t, r"### A3\. Claim 2 fails .*\(was B2\)")
+        self.renumber()
+        self.assertIn("B2 is now A3", self.notes.read_text())
+
+    def test_renumber_prints_a_line_that_uses_an_id_from_before_an_earlier_renumbering(self):
+        self.notes.parent.mkdir()
+        self.notes.write_text("# Review of memo.md\n\n## Minor\n\n### B7. First (was A4)\n\nText.\n\n"
+                              "## Nitpicks\n\n### C1. Second\n\nText.\n\n## About this review\n\nCounts.\n")
+        self.renumber()
+        t = self.notes.read_text()
+        self.assertIn("A4 and B7 are now B1.", t)
+        self.notes.write_text(t.replace("## Minor\n\n### B1. First\n\nText.", "").replace(
+            "## About", "### B1. First\n\nSee A4. C1 stays.\n\n## About"))
+        out = self.renumber()
+        t = self.notes.read_text()
+        self.assertIn("### C2. First", t)
+        self.assertIn("See A4. C1 stays.", t)
+        self.assertIn("See A4. C1 stays.", out.split("Check by hand")[1])
+        out = self.renumber()  # nothing to renumber now, and the line is still printed
+        self.assertIn("already run in file order", out)
+        self.assertIn("See A4. C1 stays.", out.split("Check by hand")[1])
+        self.assertEqual(self.notes.read_text(), t)
+
+    def test_renumber_does_not_claim_a_closed_items_id_for_the_item_that_names_it(self):
+        self.majors([1, 2], [3])
+        f = self.d / "memo.md"
+        f.write_text(f.read_text().replace("Copper conducts heat well.", "Copper conducts heat well in no case."))
+        t = self.majors([1], [3])  # A2 closes as applied
+        self.notes.write_text(t.replace("## About", "### B2. My own note (was A2)\n\nKeep this.\n\n## About"))
+        self.renumber()
+        t = self.notes.read_text()
+        self.assertIn("A2 had closed.", t)
+        self.assertNotIn("are now", t)
+        self.assertIn("### B2. My own note", t)
+
     def test_renumber_refuses_a_file_that_is_not_a_notes_file_or_has_one_id_twice(self):
         f = self.d / "memo.md"
         f.write_text("### A2. A heading\n")
@@ -3075,6 +3321,96 @@ Closed, by their earlier ids: B7 and C2.
         self.assertNotIn("Sky color is wrong", t)
         self.assertNotIn("Next free ids", t)
 
+    def majors(self, ns, minor=(), rank=""):
+        f = self.d / "memo.md"
+        if not f.exists():
+            f.write_text(DRAFT7)
+        text = claims(*ns) + claims(*minor, severity="Minor")
+        return self.review({"gpt": text, "argon": text}, rank=rank)[0].read_text()
+
+    def heads(self, t, name):
+        return re.findall(r"^### (\w+)\.", t.split(f"## {name}\n")[1].split("\n## ")[0], re.M)
+
+    def test_a_severity_change_moves_the_item_and_keeps_the_old_id(self):
+        self.majors([1, 2], [3])
+        t = self.majors([1], [2, 3])
+        self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1"], ["B1", "B2"]))
+        self.assertRegex(t, r"### B2\. Claim 2 fails .*\(was A2\)")
+        self.assertIn("- Open items: 1 Major, 2 Minor.", t)
+        items = json.loads(ur.notes_map_file().read_text())[str(self.notes)]["items"]
+        self.assertEqual({k: v.get("closed") for k, v in items.items()}, {"A1": None, "B1": None, "B2": None})
+        t = self.majors([1, 4], [2, 3])  # A2 is not reused, and B2 is found again
+        self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1", "A3"], ["B1", "B2"]))
+        self.assertEqual(t.count("Claim 2 fails"), 1)
+        t = self.majors([1, 2, 4], [3])
+        self.assertRegex(t, r"### A4\. Claim 2 fails .*\(was A2, B2\)")
+
+    def test_a_closed_record_is_not_taken_by_an_item_that_names_its_id(self):
+        self.majors([1, 2], [3])
+        f = self.d / "memo.md"
+        f.write_text(f.read_text().replace("Copper conducts heat well.", "Copper conducts heat well in no case."))
+        t = self.majors([1], [3])  # A2 closes as applied
+        mine = "### B2. My own note (was A2)\n\nKeep this.\n\n"
+        self.notes.write_text(t.replace("## About", mine + "## About"))
+        self.majors([1], [3])
+        self.assertIn(mine.strip(), self.notes.read_text())
+
+    def test_an_id_a_moved_item_had_is_not_reused_when_the_map_is_lost(self):
+        self.majors([1, 2], [3])
+        t = self.majors([1], [2, 3])
+        ur.notes_map_file().unlink()
+        self.notes.write_text(re.sub(r"<!-- next ids.*-->\n", "", t))
+        t = self.majors([1, 4], [2, 3])
+        self.assertEqual(self.heads(t, "Major"), ["A1", "A3"])
+
+    def test_an_item_moved_by_hand_keeps_its_place_and_record(self):
+        t = self.majors([1, 2], [3])
+        c = re.search(r"### A2\..*?(?=## Minor)", t, re.S).group(0)
+        head, _, body = c.partition("\n")
+        t = t.replace(c, "").replace("## About", head.replace("A2.", "B2.") + " (was A2)\n" + body + "## About")
+        self.notes.write_text(t)
+        t = self.majors([1, 2], [3])
+        self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1"], ["B1", "B2"]))
+        self.assertEqual(t.count("Claim 2 fails"), 1)
+        f = self.d / "memo.md"
+        f.write_text(f.read_text().replace("Copper conducts heat well.", "Copper conducts heat well in no case."))
+        t = self.majors([1], [3])  # its record followed the move, so the applied change closes it
+        self.assertNotIn("### B2.", t)
+        self.assertIn("B2 (applied)", t)
+
+    def test_an_item_demoted_with_its_old_letter_is_counted_by_section_and_stays(self):
+        t = self.majors([1, 2], [3])
+        c = re.search(r"### A2\..*?(?=## Minor)", t, re.S).group(0)
+        self.notes.write_text(t.replace(c, "").replace("## About", c + "## About"))
+        t = self.majors([1, 2], [3])
+        self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1"], ["B1", "A2"]))
+        self.assertIn("- Open items: 1 Major, 2 Minor.", t)
+
+    def test_an_item_moved_into_major_by_hand_stays_as_a_sixth(self):
+        t = self.majors([1, 2, 3, 4, 5], [6])
+        c = re.search(r"### B1\..*?(?=## About)", t, re.S).group(0)
+        t = t.replace(c, "").replace("## Minor\n\n", "").replace("## About", c.replace("B1.", "A6.", 1) + "## About")
+        head = re.search(r"### A6\..*", t).group(0)
+        self.notes.write_text(t.replace(head, head + " (was B1)"))
+        for raised in ([1, 2, 3, 4, 5], [1, 2, 3, 4, 7]):  # a Major not raised again still gives way
+            t = self.majors(raised, [6])
+            self.assertEqual(len(self.heads(t, "Major")), 6)
+            self.assertIn("A6", self.heads(t, "Major"))
+        self.assertRegex(t, r"Claim 5 fails .*\(was A5\)")
+        t = self.majors([1, 2, 3, 4, 7])  # it stays when not raised, too
+        self.assertIn("A6", self.heads(t, "Major"))
+
+    def test_majors_not_raised_again_give_way_past_five(self):
+        self.majors([1, 2, 3, 4, 5])
+        t = self.majors([1, 2, 3, 6, 7])
+        self.assertEqual(self.heads(t, "Major"), ["A1", "A2", "A3", "A6", "A7"])
+        self.assertEqual(len(self.heads(t, "Minor")), 2)
+        self.assertRegex(t, r"Claim 4 fails .*\(was A4\)")
+        self.assertRegex(t, r"Claim 5 fails .*\(was A5\)")
+        t = self.majors([1, 2, 3, 6, 7])  # stable on a further run
+        self.assertEqual(self.heads(t, "Major"), ["A1", "A2", "A3", "A6", "A7"])
+        self.assertEqual(len(self.heads(t, "Minor")), 2)
+
     def test_a_math_code_block_fix_shows_rendered(self):
         fix = "```markdown\n$$p = 1.$$\n$$p = 1. \\tag{1}$$\n```"
         out = ur.rendered_fix(fix)
@@ -3164,7 +3500,7 @@ Closed, by their earlier ids: B7 and C2.
         self.assertIn("### B2. Water is not dry", t)
         self.assertIn("memo.md, line 9*", t)
         self.assertIn("### B3. Grass speed unsupported", t)  # next free id, never B1 again
-        self.assertLess(t.index("B3. Grass"), t.index("B2. Water"))  # draft order
+        self.assertLess(t.index("B2. Water"), t.index("B3. Grass"))  # added later, so last in its set
         self.assertIn("Closed this round: B1 (applied)", t)
         self.assertTrue(any(d["decision"] == "applied" and d["title"] == "Sky color is wrong"
                             for d in ur.load_decisions().get(str(f), [])))

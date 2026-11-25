@@ -96,6 +96,7 @@ import unified_review_runtime as runtime  # noqa: E402
 import fix_strikes  # noqa: E402
 
 SEVERITIES = ["Major", "Minor", "Nitpick"]
+MAX_MAJORS = 5  # a review keeps at most this many; the rest become Minor
 JSON_BODY_LIMIT = 1 * 1024 * 1024
 UPLOAD_BODY_LIMIT = 50 * 1024 * 1024
 AUDIO_BODY_LIMIT = 25 * 1024 * 1024
@@ -775,7 +776,7 @@ final text, such as "RECAP {{{{citation: Author, year}}}}" or
 "{{{{measured success rate}}}}", and say in the problem what fills it. Use double
 braces only for slots. To add new text, such as a sentence or a
 table row, include the text just before it, unchanged, so the change can be
-placed. Ignore the house rules' cap on findings
+placed. Ignore the house rules' caps on findings and on Majors
 and their ordering rule: report every finding worth making, in any order. This
 script places findings in draft order. Before writing findings, when the draft makes an argument or asks its reader
 to decide something, identify up to three central claims or decision-critical
@@ -810,9 +811,13 @@ on its line ($$...$$ or $...$, an equation tag edit included), and an edit to on
 table row. Each is a code block of two lines, the old line copied verbatim and
 then the new line. This script shows it rendered. No heading and no number.>
 
-Severities: Major, a claim of the draft fails or is unsupported until this is
-fixed; Minor, the claims stand without the fix, but it makes the draft clearer,
-more complete, or easier to reproduce; Nitpick, wording, style, or a typo.
+Severities: Major, a central claim (a headline claim of the abstract or
+conclusion, or of the whole draft when it has neither) fails or loses its
+support until the author reruns an analysis, replaces a result, or narrows that
+claim; Minor, the central claims stand without the fix, but it makes the draft
+clearer, more complete, or easier to reproduce; Nitpick, wording, style, or a
+typo. A missing reference, a wrong count or value, a mislabeled panel, or an
+overworded sentence is Minor or Nitpick, unless a central claim rests on it.
 
 Kinds: logic, a step that does not follow (missing premise, non sequitur,
 circular setup, unaddressed alternative, over- or underclaim, or an inference
@@ -845,9 +850,11 @@ Judge the problem and the fix separately. For each finding, decide:
 - fix: agree (the diff fixes the problem and reads well in the draft) or
   disagree (the diff is wrong, misses the problem, or makes the draft worse).
   Judge the fix as if the problem were real, even when you disagree that it is.
-- severity: Major (a claim fails or is unsupported until this is fixed), Minor
-  (the claims stand without the fix), or Nitpick (wording, style, typo), as you
-  would rate it.
+- severity: Major (a central claim, a headline claim of the draft, fails or
+  loses its support until this is fixed), Minor (the central claims stand
+  without the fix), or Nitpick (wording, style, typo), as you would rate it. A
+  missing reference, a wrong count or value, a mislabeled panel, or an overworded
+  sentence is Minor or Nitpick, unless a central claim rests on it.
 - kind: logic (a step that does not follow, or an inference the evidence does
   not support), evidence (an unsupported or wrong factual claim, or a
   citation), clarity (the argument holds but is hard to follow), or style.
@@ -1316,9 +1323,11 @@ problem: <the problem, one sentence of at most {words} words, or the word same>
 ---
 <only when fix is own: your fix, an inline diff in the same form as the others>
 
-For an item that is not DISPUTED, ruling is uphold. Severity: Major, a claim of
-the draft fails or is unsupported until this is fixed. Minor, the claims stand
-without the fix. Nitpick, wording, style, or a typo.
+For an item that is not DISPUTED, ruling is uphold. Severity: Major, a central
+claim (a headline claim of the draft) fails or loses its support until this is
+fixed. Minor, the central claims stand without the fix. Nitpick, wording, style,
+or a typo. A missing reference, a wrong count or value, a mislabeled panel, or an
+overworded sentence is Minor or Nitpick, unless a central claim rests on it.
 
 <draft>
 {draft}
@@ -1468,6 +1477,78 @@ def mediate(groups, shown, focus, ok, outdir, workdir):
         if mid not in got and g.get("disputed"):
             g["ruling"] = None
     return len(items)
+
+
+RANK = """Reviewers rated more findings on the draft below Major than a review
+may keep. A review keeps at most {keep}. Major means a central claim (a headline
+claim of the abstract or conclusion, or of the whole draft when it has neither)
+fails or loses its support until this is fixed.
+
+Pick the {keep} that threaten the most central claims, then those that take the
+most work to fix (a new analysis before a replaced result, a replaced result
+before a reworded claim). The rest become Minor. Do not judge factual accuracy:
+a separate pass does that.
+
+Reply with one line and nothing else, strongest first:
+keep: <{keep} ids, separated by commas>
+
+<draft>
+{draft}
+</draft>
+
+<findings>
+{findings}
+</findings>
+"""
+
+
+def open_majors(groups):
+    """Major findings the review shows, Disputed included, strongest first as far
+    as the votes tell: agreed before disputed, then raised by more reviewers,
+    then a higher vote share, then draft order."""
+    ms = [g for g in groups if canon_sev(g["severity"]) == "Major" and not g.get("rejected")
+          and not g.get("declined") and not g.get("held") and not g.get("other_of")]
+    return sorted(ms, key=lambda g: (bool(g.get("disputed")), -len(g.get("raised_by") or []), -g.get("frac", 0), g["pos"]))
+
+
+def rank_majors(majors, shown, outdir, workdir):
+    """MEDIATOR's pick of the Majors to keep, strongest first, or [] when it is
+    logged out or fails. A mediator that already failed in this review is not asked again."""
+    m = panelist(MEDIATOR)
+    if any(f["model"] == m for f in FAILURES):
+        return []
+    if not available(m):
+        fail("preflight", m, f"{PANELISTS[m][0]} CLI not found")
+        return []
+    if not preflight([m]):
+        return []
+    runtime.log(f"3/4 rank {len(majors)} Majors, keep {MAX_MAJORS}: {label(m)}")
+    items = {f"J{i}": g for i, g in enumerate(sorted(majors, key=lambda g: g["pos"]), 1)}
+    listed = "\n\n".join(f"[{i}] {g['rep']['title']}\nquote: {g['rep']['quote'] or '(whole draft)'}\n{g['rep']['body']}"
+                         for i, g in items.items())
+    for attempt in (1, 2):
+        text = call(m, RANK.format(keep=MAX_MAJORS, draft=shown, findings=listed), outdir / "majors.txt", workdir, stage="rank")
+        line = re.search(r"^\W*keep\W*:(.*)$", text or "", re.M | re.I)
+        ids = list(dict.fromkeys(i.upper() for i in re.findall(r"\bJ\d+\b", line.group(1), re.I))) if line else []
+        got = [items[i] for i in ids if i in items]
+        if got or text is None:
+            return got
+    fail("rank", m, "reply had no ids in the expected format, after one retry")
+    return []
+
+
+def cap_majors(groups, rank=None, room=MAX_MAJORS):
+    """Keep at most room Majors and make the rest Minor. rank(majors) gives the
+    ones to keep, strongest first. Any places it leaves go by the votes."""
+    majors = open_majors(groups)
+    if len(majors) <= room:
+        return []
+    picked = (rank(majors) if rank else [])[:room]
+    keep = (picked + [g for g in majors if not any(g is p for p in picked)])[:room]
+    demoted = [g for g in majors if not any(g is k for k in keep)]
+    for g in demoted:
+        g["severity"], g["demoted"] = "Minor", True
+    return demoted
 
 
 OTHER_FIX = "Other fix"
@@ -3207,6 +3288,13 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         for g in groups:
             if not g.get("ruling"):
                 keep_shortest_fix(g, byid)
+    # Before the passed-over fixes are listed, so each takes its finding's severity.
+    t = time.time()
+    demoted = cap_majors(groups, (lambda ms: rank_majors(ms, shown, outdir, workdir)) if two else None)
+    if demoted:
+        timings["rank"] = round(time.time() - t, 1)
+        runtime.log(f"  {len(demoted)} Major{'' if len(demoted) == 1 else 's'} over {MAX_MAJORS} made Minor")
+    if two:
         for og in other_fix_groups(groups, byid):
             d = next((d for d in other_declines if d["title"] == og["rep"]["title"]), None)
             if d:
@@ -3243,12 +3331,14 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
 # a finding raised again keeps its id, its body, and any notes added under it,
 # with its line number refreshed. An item whose change is in the draft is
 # removed and recorded as applied. One declined is removed. One not raised
-# again, with its passage unchanged, stays and is marked. A new finding takes
-# the next free id in its set. Only "## About this review" is rewritten. An
+# again, with its passage unchanged, stays and is marked. One whose severity
+# changed moves to its new set and takes a new id there. A new finding takes
+# the next free id in its set and goes last. Only "## About this review" is rewritten. An
 # item whose heading was edited out of the "### A1. Title" form is left as it is.
 
 NOTE_SETS = {"A": "Major", "B": "Minor", "C": "Nitpicks", "X": "Disputed"}
 NOTE_HEAD = re.compile(r"^### ([ABCX])(\d+)\.\s")
+NOTE_WAS = re.compile(r"\s*\(was ([ABCX]\d+(?:, [ABCX]\d+)*)\)\s*$")  # the ids an item had before, oldest first
 NOT_RAISED = "*Not raised this round.*"
 ABOUT = "About this review"
 IDS_FIXED = "Ids stay fixed and are never reused."
@@ -3330,6 +3420,85 @@ def split_notes(text):
     return [c for c in chunks if c[2] or c[0] != "pre"]
 
 
+def note_section(chunks, c):
+    """The set (A, B, C, X) whose section chunk c sits in, or its id's letter outside the four sections."""
+    i = next(i for i, x in enumerate(chunks) if x is c)
+    h = next((x[1] for x in reversed(chunks[:i]) if x[0] == "h2"), "")
+    return next((s for s, name in NOTE_SETS.items() if name.lower() == h.lower()), c[1][0])
+
+
+def note_was(c):
+    """The ids a moved item had before, oldest first, from the (was A4) in its heading."""
+    m = NOTE_WAS.search(c[2].partition("\n")[0])
+    return m.group(1).split(", ") if m else []
+
+
+def note_follow(chunks, entries):
+    """An item moved by hand keeps its record, and its place in later reviews, even
+    under an id that had a record. Returns those reused ids."""
+    items = [c for c in chunks if c[0] == "item"]
+    present = {c[1] for c in items}
+    claims = {}  # new id: the open item it says it was, the first to say so
+    for c in items:
+        e = entries.get(c[1], {})
+        if e.get("title") and not e.get("closed") and e["title"] in c[2].partition("\n")[0]:
+            continue  # it has its own record
+        old = next((i for i in reversed(note_was(c)) if i != c[1] and i in entries
+                    and not entries[i].get("closed") and i not in claims.values()), None)
+        if old:
+            claims[c[1]] = old
+    moves, more = {}, True
+    while more:  # an old id still in the file names its own item, unless that item moved too
+        more = {n: o for n, o in claims.items() if n not in moves and (o not in present or o in moves)}
+        moves.update(more)
+    reused = {n for n in moves if n in entries}
+    records = {n: {**entries.pop(o), "pinned": True} for n, o in moves.items()}
+    for n in reused & set(entries):  # what had the id before is closed or gone
+        e = entries.pop(n)
+        e["closed"] = e.get("closed") or "removed by hand"
+        entries[closed_key(n, entries)] = e
+    entries.update(records)
+    for c in items:
+        if c[1] not in moves and c[1] in entries and note_section(chunks, c) != c[1][0]:
+            entries[c[1]]["pinned"] = True
+    return reused
+
+
+def closed_key(i, entries):
+    """A key for the closed record of item i that no item can take."""
+    i = i.removeprefix("closed-")
+    k, n = f"closed-{i}", 1
+    while k in entries:
+        n += 1
+        k = f"closed-{i}-{n}"
+    return k
+
+
+def note_add(chunks, s, chunk):
+    """Put an item last in set s, adding the set's section when the file lacks it."""
+    h = next((i for i, c in enumerate(chunks) if c[0] == "h2" and c[1].lower() == NOTE_SETS[s].lower()), None)
+    if h is None:  # a new section, in set order, before About this review
+        later = [i for i, c in enumerate(chunks) if c[0] == "h2" and (
+            c[1] == ABOUT or any(c[1].lower() == NOTE_SETS[t].lower() for t in "ABCX" if t > s))]
+        h = later[0] if later else len(chunks)
+        chunks.insert(h, ["h2", NOTE_SETS[s], f"## {NOTE_SETS[s]}\n\n"])
+    chunks.insert(next((i for i in range(h + 1, len(chunks)) if chunks[i][0] == "h2"), len(chunks)), chunk)
+
+
+def note_move(chunks, c, s, entries, nxt, present):
+    """Move item c to set s with the next free id there. Its heading keeps the old id."""
+    old, nid = c[1], f"{s}{nxt.get(s, 1)}"
+    nxt[s] = nxt.get(s, 1) + 1
+    head, _, rest = c[2].partition("\n")
+    was = NOTE_WAS.search(head)
+    head = NOTE_WAS.sub("", head).replace(f"### {old}.", f"### {nid}.", 1)
+    c[1], c[2] = nid, f"{head} (was {was.group(1) + ', ' if was else ''}{old})\n{rest}"
+    chunks[:] = [x for x in chunks if x is not c]
+    note_add(chunks, s, c)
+    entries[nid] = entries.pop(old)
+    present.add(nid)  # in the file under its new id, so not removed by hand
+
+
 def note_resolved(entry, text):
     """True when an item's change is in the draft: its struck text is gone, or its added text is there."""
     old, new = diff_parts("x\n\n" + (entry.get("fix") or ""))
@@ -3376,7 +3545,8 @@ def write_notes(draft, run, source=None):
     m = re.search(r"^(?:- Next free ids: |<!-- next ids: )(.+?)\.?(?: -->)?$", old_text, re.M)
     for s, k in re.findall(r"\b([ABCX])(\d+)\b", m.group(1) if m else ""):
         nxt[s] = max(nxt.get(s, 1), int(k))
-    for nid in present:  # ids are never reused, even ones the map does not know
+    was = {i for c in chunks if c[0] == "item" for i in note_was(c)}  # ids moved items had before
+    for nid in present | was:  # ids are never reused, even ones the map does not know
         s, k = nid[0], int(nid[1:])
         nxt[s] = max(nxt.get(s, 1), k + 1)
     found = [(n, sev, lab, g) for n, sev, lab, g in ordered_findings(r)]
@@ -3391,6 +3561,7 @@ def write_notes(draft, run, source=None):
 
     dropped = [g for g in r["groups"] if g.get("dropped")]
     ids = [c[1] for c in chunks if c[0] == "item"]
+    note_follow(chunks, entries)
     for nid in ids:
         if nid not in entries:
             # No record of this item (the map was lost, or someone else wrote it):
@@ -3438,6 +3609,9 @@ def write_notes(draft, run, source=None):
             e.update(key=g.get("key"), run=str(run), n=n, title=g["rep"]["title"], quote=g["rep"]["quote"],
                      fix=fix_of(g["rep"]) if g.get("alts") is None else (g["alts"][0]["fix"] if g["alts"] else ""),
                      order=note_order(g, sev))
+            s = note_set(g, sev)
+            if s != nid[0] and "X" not in (s, nid[0]) and not e.get("pinned"):
+                note_move(chunks, c, s, entries, nxt, present)
             continue
         if any(same_finding(e, g) for g in dropped):  # raised again, and the mediator dropped it
             chunks.remove(c)
@@ -3467,8 +3641,8 @@ def write_notes(draft, run, source=None):
         if any(same_finding(e, x[3]) for e in entries.values() if e.get("closed") == "removed by hand"):
             unmatched.remove(x)
 
-    # New findings: the next free id in their set, placed by severity and draft order,
-    # so a new file's ids read in order down the page.
+    # New findings: the next free id in their set, in draft order and last in
+    # the set, so ids read in order down the page.
     unmatched.sort(key=lambda x: ("ABCX".index(note_set(x[3], x[1])), note_order(x[3], x[1])))
     for n, sev, lab, g in unmatched:
         s = note_set(g, sev)
@@ -3480,16 +3654,14 @@ def write_notes(draft, run, source=None):
                         "quote": g["rep"]["quote"], "order": order,
                         "fix": fix_of(g["rep"]) if g.get("alts") is None else (g["alts"][0]["fix"] if g["alts"] else "")}
         chunk = ["item", nid, note_item(nid, g, sev, labels, voters, files, text, deck)]
-        h = next((i for i, c in enumerate(chunks) if c[0] == "h2" and c[1].lower() == NOTE_SETS[s].lower()), None)
-        if h is None:  # a new section, in set order, before About this review
-            later = [i for i, c in enumerate(chunks) if c[0] == "h2" and (
-                c[1] == ABOUT or any(c[1].lower() == NOTE_SETS[t].lower() for t in "ABCX" if t > s))]
-            h = later[0] if later else len(chunks)
-            chunks.insert(h, ["h2", NOTE_SETS[s], f"## {NOTE_SETS[s]}\n\n"])
-        end = next((i for i in range(h + 1, len(chunks)) if chunks[i][0] == "h2"), len(chunks))
-        at = next((i for i in range(h + 1, end) if chunks[i][0] == "item"
-                   and (entries.get(chunks[i][1]) or {}).get("order", [float("inf")]) > order), end)
-        chunks.insert(at, chunk)
+        note_add(chunks, s, chunk)
+
+    # At most MAX_MAJORS Majors stay open: past that, the ones not raised this round become Minor, last first.
+    # One moved into Major by hand stays, even as a sixth.
+    majors = [c for c in chunks if c[0] == "item" and note_section(chunks, c) == "A"]
+    stale = [c for c in majors if c[1] in not_raised and not (entries.get(c[1]) or {}).get("pinned")]
+    for c in list(reversed(stale))[:max(0, len(majors) - MAX_MAJORS)]:
+        note_move(chunks, c, "B", entries, nxt, present)
 
     # Drop sections left with no items, then rewrite About this review.
     keep = []
@@ -3502,8 +3674,7 @@ def write_notes(draft, run, source=None):
                 continue
         keep.append(c)
     body = "".join(c[2] if c[2].endswith("\n\n") else c[2].rstrip("\n") + "\n\n" for c in keep)
-    open_ids = [c[1] for c in keep if c[0] == "item"]
-    counts = note_counts(open_ids)
+    counts = note_counts([note_section(keep, c) for c in keep if c[0] == "item"])
     who = " and ".join(labels.get(m, m) for m in r["reviewers_ok"])
     med = labels.get(r.get("mediator") or "")
     earlier = re.findall(r"^- Earlier ids\b.+$", old_text, re.M)  # a renumbered file's old ids
@@ -3537,27 +3708,24 @@ DRAFT_LABEL = re.compile(r"\b(?:tables?|fig(?:ure)?s?|appendix|appendices|sectio
 
 
 def note_counts(ids):
+    """The counts by set, from ids or from their set letters."""
     return ", ".join(f"{n} {NOTE_SETS[s] if s != 'C' else 'Nitpick'}" for s in "ABCX" if (n := sum(i.startswith(s) for i in ids)))
 
 
-def renumber_ids(text):
+def renumber_ids(chunks):
     """{old id: new id} for a notes file: each set counted from 1 in file order.
     An item under another set's section takes that set's letter."""
-    ids, n, sec = {}, dict.fromkeys("ABCX", 0), None
-    for kind, name, _ in split_notes(text):
-        if kind == "h2":
-            m = re.match(r"(major|minor|nitpick|disputed)", name, re.I)
-            sec = {"major": "A", "minor": "B", "nitpick": "C", "disputed": "X"}[m.group(1).lower()] if m else None
-        if kind == "item":
-            if name in ids:
-                sys.exit(f"error: two items are called {name}. Give one a free id, then run this again.")
-            s = sec or name[0]
-            n[s] += 1
-            ids[name] = f"{s}{n[s]}"
+    ids, n = {}, dict.fromkeys("ABCX", 0)
+    for c in [c for c in chunks if c[0] == "item"]:
+        if c[1] in ids:
+            sys.exit(f"error: two items are called {c[1]}. Give one a free id, then run this again.")
+        s = note_section(chunks, c)
+        n[s] += 1
+        ids[c[1]] = f"{s}{n[s]}"
     return ids
 
 
-def renumber_lines(text, ids, in_draft):
+def renumber_lines(text, ids, in_draft, earlier=(), reused=()):
     """The notes text with its headings, sub-issues, and references under the new
     ids. A reference that could be the draft's own words, or that names a closed
     item or a range, keeps its whole line as written. Returns (text, changed, left), the last two
@@ -3589,10 +3757,12 @@ def renumber_lines(text, ids, in_draft):
         if m or sm and i not in held:
             head = f"{'###' if m else '####'} {ids[owner]}"
             line = line[(m.end(2) if m else sm.end()):]
+            line = NOTE_WAS.sub("", line) if m else line  # the closing section lists the earlier ids
         hold = i in held or bool(head) or line.startswith(("#", ">")) or re.search(r"\bearlier ids?\b", line, re.I)
         ranges = [r.span() for r in NOTE_RANGE.finditer(line)]
-        # Wrong now: an open item's id that moved, or a closed one's that another item took.
-        wrong = lambda t: ids[t] != t if t in ids else t in ids.values()
+        # Wrong now: an open item's id that moved, a closed one's that another item took, or
+        # one from before an earlier renumbering or reused by a move, which may name two items.
+        wrong = lambda t: t in reused or (ids[t] != t if t in ids else t in ids.values() or t in earlier)
         seen = set()
 
         def ref(r):
@@ -3603,7 +3773,7 @@ def renumber_lines(text, ids, in_draft):
                 return r.group(0)
             if not wrong(t):
                 return t
-            if (hold or t not in ids or t in in_draft or any(a <= r.start() < b for a, b in ranges)
+            if (hold or t not in ids or t in reused or t in in_draft or any(a <= r.start() < b for a, b in ranges)
                     or DRAFT_LABEL.search(line[:r.start()])):
                 seen.add("left")
                 return t
@@ -3629,18 +3799,26 @@ def renumber(path):
     old_text = path.read_text()
     if not re.search(rf"^## {ABOUT}\s*$", old_text, re.M):
         sys.exit(f"error: {path.name} has no \"## {ABOUT}\" section, so it is not a notes file")
-    ids = renumber_ids(old_text)
+    chunks = split_notes(old_text)
+    ids = renumber_ids(chunks)
     store_file = notes_map_file()
     store = json.loads(store_file.read_text()) if store_file.exists() else {}
     key = next((k for k in store if Path(k).exists() and os.path.samefile(k, path)), None)
     entries = store[key]["items"] if key else {}
+    reused = note_follow(chunks, entries)
+    was = {c[1]: [i for i in note_was(c) if i not in ids and i not in entries] for c in chunks if c[0] == "item"}
+    aliases = [i for olds in was.values() for i in olds]
+    refs = {**{i: ids[a] for a, olds in was.items() for i in olds if aliases.count(i) == 1}, **ids}
     shut = sorted((i for i in entries if i not in ids and NOTE_HEAD.match(f"### {i}. ")), key=lambda i: (i[0], int(i[1:])))
     nxt = {s: 1 + sum(i.startswith(s) for i in ids.values()) for s in "ABCX"}
     nexts = ", ".join(f"{s}{nxt[s]}" for s in "ABCX")
-    moved = [f"{a} is now {b}" for a, b in ids.items() if a != b]
+    olds = {a: [i for i in was[a] + [a] if i != b] for a, b in ids.items()}
+    moved = [f"{' and '.join(olds[a])} {'is' if len(olds[a]) == 1 else 'are'} now {b}" for a, b in ids.items() if olds[a]]
     hidden = re.search(r"^<!-- next ids: (.+?) -->$", old_text, re.M)
+    earlier = {i for l in re.findall(r"^- Earlier ids\b.+$", old_text, re.M) for i in re.findall(r"\b[ABCX]\d+\b", l)}
     if not moved and not shut and (not hidden or hidden.group(1) == nexts):
         print(f"{path.name}: the ids already run in file order. Nothing changed.")
+        print_left(renumber_lines(old_text, refs, (), earlier, reused)[2])
         return
     drafts = set()
     for run in {e.get("run") for e in entries.values()} - {None}:
@@ -3661,18 +3839,14 @@ def renumber(path):
     else:
         end = next((i for i, l in enumerate(lines) if l.startswith("<!-- next ids")), len(lines))
         lines[end:end] = ["", log] if end == len(lines) else [log, ""]
-    text, changed, left = renumber_lines(pre + "\n".join(lines) + "\n", ids, in_draft)
+    text, changed, left = renumber_lines(pre + "\n".join(lines) + "\n", refs, in_draft, earlier, reused)
     write_atomic(path, text)
     if key:
         items = {ids[i]: e for i, e in entries.items() if i in ids}
         for i, e in entries.items():
             if i not in ids:
                 e["closed"] = e.get("closed") or "removed by hand"
-                k, n = f"closed-{i.removeprefix('closed-')}", 1
-                while k in items:
-                    n += 1
-                    k = f"closed-{i.removeprefix('closed-')}-{n}"
-                items[k] = e
+                items[closed_key(i, items)] = e
         store[key] = {"items": items, "next": nxt}
         try:
             write_atomic(store_file, json.dumps(store, indent=1, ensure_ascii=False) + "\n")
@@ -3682,6 +3856,10 @@ def renumber(path):
     print(f"{path}: {news}.")
     for n, what in changed:
         print(f"  line {n}: reference changed, {what}")
+    print_left(left)
+
+
+def print_left(left):
     if left:
         print("Check by hand. These lines are as written, since an id in them may be an earlier one or the draft's own word:")
         for n, what in left:
@@ -4954,6 +5132,8 @@ def review_passage(path, run, passage):
                     new.append(g)
             with EDIT_REVIEW_LOCK:
                 r = json.loads((run / "results.json").read_text())
+                settled = [g for g in open_majors(r["groups"]) if decision_for(run.name, g["rep"]["title"])]
+                cap_majors(new, room=max(0, MAX_MAJORS - len(open_majors(r["groups"])) + len(settled)))
                 r["groups"] += new
                 r["labels"].update({m: label(m) for m in ok})
                 write_atomic(run / "results.json", json.dumps(r, indent=1, ensure_ascii=False) + "\n")
