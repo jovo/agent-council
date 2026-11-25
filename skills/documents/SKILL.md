@@ -34,4 +34,5 @@ description: Rules for equations, citations, and tables in Markdown documents (p
 
 - Markdown pipe tables. Keep to ≤8 rows and ≤6 columns where possible; larger tables go in an appendix.
 - Number tables per chapter as `Table C.N`. Put `<a id="table-C-N"></a>` on its own line immediately above the italic caption, and reference every table from prose as a link: `[Table C.N](#table-C-N)` same-file, `[Table C.N](<chapter>.md#table-C-N)` cross-file.
+- Comparison tables: each column is something the paper claims matters, and each cell is filled. Group rows by kind, sort by completeness, and merge rows with the same values. Use ● ◐ ○ with lettered footnotes.
 - Every numeric column carries its unit in the header, e.g. "Conduction velocity (m/s)".

@@ -39,6 +39,8 @@ Match the opening's scope to the resolution's. An opening wider than the resolut
 - **Results.** A sequence of statements, each supported by a figure, that connect logically to the central contribution. Subsection headers and figure titles state conclusions. Each paragraph opens with the question it addresses and ends with its answer. A results paragraph for a display item gives the setting, the details, then the take-home sentence.
 - **Discussion.** The resolution: how the gap was filled, the limits of the interpretation and how future work could address them, and how the paper moves the field. Related work and extensions, not a summary of the results.
 - Number every display item (figure, table, theorem) and reference it in the text.
+- The abstract, the introduction's question, and the results address the same gap. A comparison table, if there is one, shows that gap.
+- Before claiming that no prior work has X, read the nearest rival's code or documentation, not only its paper.
 - Credit the prior work the paper builds on. Its authors are likely readers and reviewers.
 
 ## Process
@@ -53,6 +55,10 @@ Match the opening's scope to the resolution's. An opening wider than the resolut
 - One bold sentence per aim states its objective as what the aim will learn or build, not the data it will collect. Each aim gives expected outcomes, and pitfalls with alternatives.
 - Distinguish the applicant's own work from others' at every citation.
 - A one-page summary follows OCAR: the opportunity and its significance (opening), the gap and the question it leaves (challenge), the planned work and its feasibility (action), and what will be known or possible after (resolution).
+
+## Reviews
+
+- In a review of a paper or proposal, findings on the title come first in each severity group, then findings on the abstract, then the rest in the usual order.
 
 ## Rebuttals
 

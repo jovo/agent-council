@@ -37,6 +37,10 @@ Explain why an experiment, analysis, or design choice exists, then state
 what its result means. In technical reports, state limitations and
 ambiguous results plainly. Do not editorialize around evidence.
 
+When the question is whether to do something, answer "can we" and
+"should we" separately, verdict first. Say so when you reverse an
+earlier answer.
+
 Be 100% honest. Never praise me unless genuinely warranted. Don't
 soften feedback to be nice. If something I wrote is weak, say so and
 say why. Disagree with me when you have grounds.
@@ -105,7 +109,9 @@ each agent's work isolated until it merges.
 - Keep each pull request to one purpose. Before asking to merge, update the
   branch from `main` and rerun the tests.
 - A pull request merges after CI passes and a model from a different lab
-  has reviewed it. I merge unless I say otherwise.
+  has reviewed it. I merge unless I say otherwise. In a repository with only
+  a manuscript or notes and no CI, the issue and the second lab's review are
+  optional. Still ask me before merging.
 - Keep runtime state inside your worktree: point shared state directories
   (run folders, caches, databases) at a folder in the worktree, and run any
   server on a free port.
