@@ -497,7 +497,8 @@ class Calls(unittest.TestCase):
 
     def test_agy_preflight_needs_the_model_asked_for(self):
         for cursor, status, kept in ((sys.executable, "Logged in as x", True), (sys.executable, "Not logged in", False),
-                                     (None, "", False), ("/no/such/cursor-agent", "Logged in as x", False)):
+                                     (None, "", False), ("/no/such/cursor-agent", "Logged in as x", False),
+                                     (tempfile.gettempdir(), "Logged in as x", False)):
             fake = lambda cmd, **kw: SimpleNamespace(
                 returncode=0, stderr="", stdout="Fetching available models...\ngemini-3.8-flash-low\tFlash\n"
                 "gemini-4-argon-medium-x\tOther\n" if cmd[1] == "models" else status)
@@ -515,7 +516,10 @@ class Calls(unittest.TestCase):
 
     def test_agy_preflight_tells_an_empty_list_from_output_it_cannot_read(self):
         for out, err, kept, route in (("Fetching available models...\n", "", True, "cursor"), ("", "", True, "cursor"),
-                                      ("Models: Argon, Flash\n", "", True, "agy"), ("", "authentication required", False, "agy")):
+                                      ("Models: Argon, Flash\n", "", True, "agy"),
+                                      ("gemini-3.8-flash-low\tFlash\nArgon (Medium)\n", "", True, "agy"),
+                                      ("gemini-4-argon-medium\tArgon\nA new version is available\n", "", True, "agy"),
+                                      ("", "authentication required", False, "agy")):
             fake = lambda cmd, **kw: SimpleNamespace(returncode=0, stderr=err, stdout=out if cmd[1] == "models" else "Logged in as x")
             ur.FAILURES.clear()
             with mock.patch.object(ur.subprocess, "run", fake), mock.patch.object(ur.runtime, "log", lambda *a: None), \
