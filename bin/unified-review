@@ -3482,7 +3482,7 @@ def write_notes(draft, run, source=None):
 
 # An id in a notes file's prose, or a stretch where an id may be the draft's own
 # word: code, a quotation, a link target, an address.
-NOTE_REF = re.compile(r"`[^`]*`|\"[^\"]*\"|“[^”]*”|\]\([^)]*\)|https?://\S+|(?<![\w.-])([ABCX]\d+)(?=[a-z]?\b)")
+NOTE_REF = re.compile(r"``.+?``+|`[^`]*`|\"[^\"]*\"|“[^”]*”|\]\([^)]*\)|https?://\S+|(?<![\w.-])([ABCX]\d+)(?=[a-z]?\b)")
 NOTE_RANGE = re.compile(r"\b[ABCX]\d+(?:\.\d+)?\s*(?:to|through|[-–])\s*[ABCX]\d+\b")
 DRAFT_LABEL = re.compile(r"\b(?:tables?|fig(?:ure)?s?|appendix|appendices|sections?|eq(?:uation)?s?|theorem|lemma|algorithm|panel)\.?\s*$", re.I)
 

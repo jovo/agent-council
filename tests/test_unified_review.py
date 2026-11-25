@@ -2815,6 +2815,7 @@ class NotesFile(unittest.TestCase):
 See C2, B7.1, and B7a.
 Table B7 is in the draft.
 The "B7 cells" are a quote, so C2 waits.
+Code ``B7`` is literal.
 
 #### B4.1. Part
 The plan is in B7.
@@ -2846,12 +2847,12 @@ Closed, by their earlier ids: B7 and C2.
         out = self.renumber()
         t = self.notes.read_text()
         for line in ("### A1. Moved up", "See C1, B1.1, and B1a.",
-                     "Table B7 is in the draft.", "The \"B7 cells\" are a quote, so C2 waits.", "#### A1.1. Part",
+                     "Table B7 is in the draft.", "The \"B7 cells\" are a quote, so C2 waits.", "Code ``B7`` is literal.", "#### A1.1. Part",
                      "The plan is in B1.", "### A2. Second", "The old point was A2. C2 to C9 are small. Code `B7`.",
                      "As B7 says, ~~old~~ 🟢 **new**.", "```\nB7\n```", "### B1. Third B4", "| x | (A1.1) |", "### C1. Small",
                      "A1 depends on B1.", "Closed, by their earlier ids: B7 and C2.", "B4 is now A1, A1 is now A2, B7 is now B1, C2 is now C1."):
             self.assertIn(line + "\n", t)
-        for n in (7, 8, 14, 16, 19, 24, 35):
+        for n in (7, 8, 9, 15, 17, 20, 25, 36):
             self.assertIn(f"  line {n}: ", out.split("Check by hand")[1])
 
     def test_renumber_leaves_an_id_the_draft_itself_uses(self):
