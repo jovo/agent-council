@@ -3446,7 +3446,9 @@ def write_notes(draft, run, source=None):
     m = re.search(r"^(?:- Next free ids: |<!-- next ids: )(.+?)\.?(?: -->)?$", old_text, re.M)
     for s, k in re.findall(r"\b([ABCX])(\d+)\b", m.group(1) if m else ""):
         nxt[s] = max(nxt.get(s, 1), int(k))
-    for nid in present:  # ids are never reused, even ones the map does not know
+    was = {i for c in chunks if c[0] == "item" for w in [NOTE_WAS.search(c[2].partition("\n")[0])] if w
+           for i in w.group(1).split(", ")}  # ids moved items had before
+    for nid in present | was:  # ids are never reused, even ones the map does not know
         s, k = nid[0], int(nid[1:])
         nxt[s] = max(nxt.get(s, 1), k + 1)
     found = [(n, sev, lab, g) for n, sev, lab, g in ordered_findings(r)]

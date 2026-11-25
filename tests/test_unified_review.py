@@ -2903,6 +2903,14 @@ class NotesFile(unittest.TestCase):
         t = self.majors([1, 2, 4], [3])
         self.assertRegex(t, r"### A4\. Claim 2 fails .*\(was A2, B2\)")
 
+    def test_an_id_a_moved_item_had_is_not_reused_when_the_map_is_lost(self):
+        self.majors([1, 2], [3])
+        t = self.majors([1], [2, 3])
+        ur.notes_map_file().unlink()
+        self.notes.write_text(re.sub(r"<!-- next ids.*-->\n", "", t))
+        t = self.majors([1, 4], [2, 3])
+        self.assertEqual(self.heads(t, "Major"), ["A1", "A3"])
+
     def test_an_item_moved_by_hand_keeps_its_place_and_record(self):
         t = self.majors([1, 2], [3])
         c = re.search(r"### A2\..*?(?=## Minor)", t, re.S).group(0)
