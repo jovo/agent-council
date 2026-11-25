@@ -202,13 +202,16 @@ is still being checked (then the revision is provisional, and the item says so).
 In a review of a slide deck, every line number also names its slide number,
 counted as the rendered deck counts them, with the cover as slide 1: in the
 item's heading ("B5. Slides 10 and 11 (lines 142–163)") and in each
-cross-reference ("the theorem (slide 16, line 237)"). Every turn, re-read the draft,
+cross-reference ("the theorem (slide 16, line 237)"). Every turn, re-read the draft and the
+notes file, which the user or another session may have edited,
 fix line and slide numbers that moved, and delete each item the user applied or rejected,
 so the user never has to tidy the file. Delete an item you apply in the same
 turn you apply it. Detect the user's own edits: an item whose struck text is
 gone from the draft, or whose added text is in it, is applied. When the draft
 changed the passage some other way, re-check the point and revise or delete
-the item.
+the item. Outside Disputed, each draft sentence has at most one open revision.
+After a change to many items, re-read the whole notes file: struck text is in
+the draft, no revision contradicts a result, and references resolve.
 
 `fix-strikes` finds `~~` spans that would show as bare tildes, such as one that
 opens on a comma glued to the word before it. The script repairs its own output
@@ -232,7 +235,17 @@ set (A2, B7), and the notes file lists the sets in that order. Where an item
 from an older review shows Fix a and Fix b, they are alternatives: A2a and A2b name them. Ids stay fixed and are never
 reused, leaving gaps, so an id the user said earlier still names the same item.
 A new item takes the next free number in its set. An item whose severity
-changes keeps its id.
+changes keeps its id. If the user asks to renumber, first put the items in
+the order and sections the user wants, then run `unified-review --renumber NOTES`.
+It numbers each set in file order and changes the headings, sub-issues,
+references, and its own record of the file. Closed items stay closed. It adds a
+line of earlier ids to the closing section. Check each line it prints: changed
+references, and lines it left for you. Never renumber by hand.
+When several Major items bear on one claim, merge them into one item with
+sub-issues, `#### A4.1. Title`. The merged item takes the next free id and a
+heading of its own. The script tracks one change per item, so under a kept id it
+would remove the whole item once that change is made. It leaves a merged item
+as written, so keep its line numbers, applied parts, and `--applied` records yourself.
 For a script review, record each one with `--applied N` or `--ignore N`, so the
 next review neither raises it again nor forgets it.
 
@@ -375,7 +388,7 @@ Reviewer instructions for feedback on drafts. This covers verification and how f
 - Categories the draft names but does not apply. When it sets up a split, check that each method or condition it mentions falls in exactly one category and that each category is defined well enough to place them. Ask where each one falls when the draft does not say.
 - Mechanisms that cannot produce the stated effect given how the system was built or trained, such as a policy expected to adapt to an input it was never trained on.
 - For each experiment the draft proposes, check that a reader could set it up from the text: the hardware, the task as given to the system (its instruction or goal), what varies and what stays fixed, and for a simulation, what is modeled and what is idealized. Ask about each missing piece.
-- A new term or method introduced without saying why an existing one does not serve.
+- A new term, method, task, or simulator introduced without saying why an existing one does not serve. Judge new tasks and new code separately. For new code, ask what changing the nearest existing one would take.
 - What an expert in the draft's field expects and does not find: standard benchmarks (including well-known ones missing from a list the draft gives), accepted definitions or standards for key terms. Ask, since the omission may be deliberate.
 
 ### What not to touch
@@ -385,7 +398,7 @@ Reviewer instructions for feedback on drafts. This covers verification and how f
 
 ### Output format
 
-- Group findings by severity, judged by one test: do the draft's claims still stand if this goes unfixed? **Major**: no, a claim fails or is unsupported until this is fixed. **Minor**: yes, but the fix makes the draft clearer, more complete, or easier to reproduce. **Nitpick**: style, phrasing, typos, with a few words of point at most and a diff of only the words that change. Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Major first, so a finding can be cited by number alone. For each finding, state the problem, then immediately show its fix, before moving to the next finding. Do not collect all diffs into a separate list at the end.
+- Group findings by severity, judged by one test: do the draft's claims still stand if this goes unfixed? **Major**: no, a claim fails or is unsupported until this is fixed. A wrong value in one table cell or figure is Minor unless a claim rests on it. **Minor**: yes, but the fix makes the draft clearer, more complete, or easier to reproduce. **Nitpick**: style, phrasing, typos, with a few words of point at most and a diff of only the words that change. Within each group, put findings about the whole draft or its structure first, then work through the draft from top to bottom, giving findings in the order of the text they target and naming the section each is in. Enumerate every finding with a sequential integer that runs through the whole response, Major first, so a finding can be cited by number alone. For each finding, state the problem, then immediately show its fix, before moving to the next finding. Do not collect all diffs into a separate list at the end.
 - Each finding has two parts. The problem is one sentence of at most 25 words: the claim or decision affected and what the defect costs it. The fix is the diff, with no restatement of the problem. For a Major finding about a claim, the fix adds the missing support or narrows the claim to what the evidence supports. Keep Nitpicks terse: a few words and the diff.
 - Every finding proposes at least one revision, a question finding included. For a question, state it in one or two sentences, list the readings or options you see, say which one you assumed, and give the revision for that reading. Use a question only when the answer is the author's to give. When the draft already implies the answer, make it an edit.
 - Show every diff as an **inline revision of the original text**, not as a `Replace:` / `With:` pair. Strike deletions with `~~tildes~~`, and make every struck span render as strikeout, never as literal tildes. The opening `~~` touches the first struck character and the closing `~~` touches the last, so a space next to a span sits outside it: `the tokens it covers ~~and the rest~~.`, not `the tokens it covers~~ and the rest~~.`. A span may open on punctuation, as in `~~(v2)~~`, only when a space or the start of a line comes before it. When a deletion starts with punctuation attached to the word before it, as in `choice, because`, widen it to take in that word and restore the word in the 🟢 text: `~~choice, because x~~ 🟢 **choice**`, not `choice~~, because x~~`. Bold each addition and prefix it with `🟢 `. When an addition runs several sentences or lines in a row, one `🟢 ` before the first is enough: bold the whole run once, not each sentence. Tildes mark deletions only, never additions. Leave genuinely unchanged sentences plain, and for a mostly-rewritten paragraph strike the whole old block and follow it with the whole new one rather than a word-level diff. When the finding says the quoted text is wrong, the diff strikes or rewrites that text. A diff that only adds text is for an omission, never for a fix to text the draft already has. The added text does not repeat what neighboring sentences already say.

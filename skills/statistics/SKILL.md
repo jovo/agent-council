@@ -12,6 +12,7 @@ The design decides what the data can conclude. Random assignment permits causal 
 - State the comparison the study has to make, in one sentence, before collecting data.
 - Name the competing explanations and the result each predicts. The design separates them: some outcome favors one and not the others. A design whose every outcome fits every explanation cannot decide between them.
 - The control matches the treatment in everything except the active ingredient: expectations, time on task, exposure, compute, tuning effort. A "no treatment" control rarely does.
+- To claim that an ingredient matters, turn it off and report what changes.
 - Randomize assignment, and blind whoever could bias the measurement. If either is impossible, say why and what stands in for it.
 - Decide the unit of replication (subject, animal, seed, dataset) at design time, and replicate that unit. Repeated measurements within a unit do not add independent samples.
 - Choose the sample size from a realistic effect size, taken from prior work, not from the effect you hope for.
@@ -23,6 +24,7 @@ The design decides what the data can conclude. Random assignment permits causal 
 - Compare methods fairly: the same data, splits, preprocessing, and tuning budget. State the baseline and the sample count.
 - Benchmark on the settings the baseline papers used, and reproduce their published numbers before comparing.
 - Compare per seed or per fold on the same splits, and report the paired differences, not only the gap between means. Show uncertainty when repetitions support it.
+- Run a known solution under the same limits as the methods compared (steps, time, cost), and report why each run stopped.
 - Include at least one setting where the new method underperforms the baseline, and explain why.
 
 ## Inference
@@ -41,6 +43,7 @@ The design decides what the data can conclude. Random assignment permits causal 
 
 - Persist experiment results to human-legible JSON (indent the structure but collapse each numeric array onto one line) and drive figures from those files, so restyling is immediate and never needs re-running.
 - Always record per-algorithm wall-clock time in the JSON: training (fit) and inference (eval) seconds.
+- Time code on inputs it has not just processed. Say whether caches were built first, and report the hardware and the range over runs.
 - Round every reported number to the nearest 1/T, where T is the sample size (for a stream, the stream length): round(round(vT)/T, round(log10(T))). One T for all numbers, not a per-metric window. More digits than 1/T is false precision.
 
 ## Reporting a statistics finding

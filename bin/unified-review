@@ -19,6 +19,7 @@ Usage: unified-review [-o OUTDIR] [-n FOCUS] [-p PANEL] [--context FILE]... [--v
        unified-review --unignore D2                lift a past decline
        unified-review --decisions                  list decisions for this folder
        unified-review --forget FILE                start FILE's history over (kept in runs/forgotten)
+       unified-review --renumber NOTES             renumber a notes file's items in file order
        unified-review --snapshot FILE              save FILE as FILE-v<N> beside it
        unified-review --changes N FILE             write every change since version N
   -o OUTDIR  where to write output (default: <project>-<file>-v<N> under
@@ -3201,6 +3202,8 @@ NOTE_SETS = {"A": "Major", "B": "Minor", "C": "Nitpicks", "X": "Disputed"}
 NOTE_HEAD = re.compile(r"^### ([ABCX])(\d+)\.\s")
 NOT_RAISED = "*Not raised this round.*"
 ABOUT = "About this review"
+IDS_FIXED = "Ids stay fixed and are never reused."
+RENUMBERED = "Renumbered when asked, with the earlier ids below."
 
 
 def notes_map_file():
@@ -3451,14 +3454,15 @@ def write_notes(draft, run, source=None):
         keep.append(c)
     body = "".join(c[2] if c[2].endswith("\n\n") else c[2].rstrip("\n") + "\n\n" for c in keep)
     open_ids = [c[1] for c in keep if c[0] == "item"]
-    count = lambda s: sum(i.startswith(s) for i in open_ids)
-    counts = ", ".join(f"{count(s)} {NOTE_SETS[s] if s != 'C' else 'Nitpick'}" for s in "ABCX" if count(s))
+    counts = note_counts(open_ids)
     who = " and ".join(labels.get(m, m) for m in r["reviewers_ok"])
     med = labels.get(r.get("mediator") or "")
+    earlier = re.findall(r"^- Earlier ids\b.+$", old_text, re.M)  # a renumbered file's old ids
     about = [f"- Open items: {counts or 'none'}.",
              f"- Line numbers refer to {draft.name} as of {time.strftime('%Y-%m-%d %H:%M')}.",
              f"- Review run: `{run}`. Reviewed by {who}" + (f", ties broken by {med}." if med else "."),
-             "- Ids: A Major, B Minor, C Nitpick, X disputed. Ids stay fixed and are never reused.",
+             "- Ids: A Major, B Minor, C Nitpick, X disputed. " + (RENUMBERED if earlier else IDS_FIXED),
+             *earlier,
              *([f"- Closed this round: {', '.join(closed)}."] if closed else []),
              *([f"- Left as written, heading not in the \"### A1. Title\" form: {', '.join(bad)}."] if bad else []),
              *([f"- {not_assessed(r)}"] if not_assessed(r) else []),
@@ -3474,6 +3478,165 @@ def write_notes(draft, run, source=None):
     for b in bad:
         runtime.log(f"notes: left as written, heading not in the \"### A1. Title\" form: {b}")
     return path
+
+
+# An id in a notes file's prose, or a stretch where an id may be the draft's own
+# word: code, a quotation, a link target, an address.
+NOTE_REF = re.compile(r"``.+?``+|`[^`]*`|\"[^\"]*\"|“[^”]*”|\]\([^)]*\)|https?://\S+|(?<![\w.-])([ABCX]\d+)(?=[a-z]?\b)")
+NOTE_RANGE = re.compile(r"\b[ABCX]\d+(?:\.\d+)?\s*(?:to|through|[-–])\s*[ABCX]\d+\b")
+DRAFT_LABEL = re.compile(r"\b(?:tables?|fig(?:ure)?s?|appendix|appendices|sections?|eq(?:uation)?s?|theorem|lemma|algorithm|panel)\.?\s*$", re.I)
+
+
+def note_counts(ids):
+    return ", ".join(f"{n} {NOTE_SETS[s] if s != 'C' else 'Nitpick'}" for s in "ABCX" if (n := sum(i.startswith(s) for i in ids)))
+
+
+def renumber_ids(text):
+    """{old id: new id} for a notes file: each set counted from 1 in file order.
+    An item under another set's section takes that set's letter."""
+    ids, n, sec = {}, dict.fromkeys("ABCX", 0), None
+    for kind, name, _ in split_notes(text):
+        if kind == "h2":
+            m = re.match(r"(major|minor|nitpick|disputed)", name, re.I)
+            sec = {"major": "A", "minor": "B", "nitpick": "C", "disputed": "X"}[m.group(1).lower()] if m else None
+        if kind == "item":
+            if name in ids:
+                sys.exit(f"error: two items are called {name}. Give one a free id, then run this again.")
+            s = sec or name[0]
+            n[s] += 1
+            ids[name] = f"{s}{n[s]}"
+    return ids
+
+
+def renumber_lines(text, ids, in_draft):
+    """The notes text with its headings, sub-issues, and references under the new
+    ids. A reference that could be the draft's own words, or that names a closed
+    item or a range, keeps its whole line as written. Returns (text, changed, left), the last two
+    as [line number, text]."""
+    lines, out, changed, left = text.split("\n"), [], [], []
+    held, fence, start = set(), False, 0  # held: lines of a fence or of a paragraph with a revision
+    for i, line in enumerate(lines + [""]):
+        fenced = line.lstrip().startswith("```")
+        if fence or fenced:
+            held.add(i)
+        if fenced:
+            fence = not fence
+        if not line.strip() or line.startswith("#") and not fence:
+            if any("~~" in l or "🟢" in l or "🔴" in l for l in lines[start:i]):
+                held.update(range(start, i))
+            start = i + 1
+    owner = None
+    for i, line in enumerate(lines):
+        if re.match(r"- Earlier ids\b|- Closed this round|- Next free ids|<!-- next ids", line):
+            out.append(line)
+            continue
+        m = NOTE_HEAD.match(line)
+        if m:
+            owner = m.group(1) + m.group(2)
+        elif line.startswith(("## ", "### ")):
+            owner = None
+        sm = owner and re.match(rf"#### {owner}(?=\.\d)", line)
+        head = ""
+        if m or sm and i not in held:
+            head = f"{'###' if m else '####'} {ids[owner]}"
+            line = line[(m.end(2) if m else sm.end()):]
+        hold = i in held or bool(head) or line.startswith(("#", ">")) or re.search(r"\bearlier ids?\b", line, re.I)
+        ranges = [r.span() for r in NOTE_RANGE.finditer(line)]
+        # Wrong now: an open item's id that moved, or a closed one's that another item took.
+        wrong = lambda t: ids[t] != t if t in ids else t in ids.values()
+        seen = set()
+
+        def ref(r):
+            t = r.group(1)
+            if not t:
+                if any(wrong(x.upper()) for x in re.findall(r"\b[ABCXabcx]\d+\b", r.group(0))):
+                    seen.add("left")
+                return r.group(0)
+            if not wrong(t):
+                return t
+            if (hold or t not in ids or t in in_draft or any(a <= r.start() < b for a, b in ranges)
+                    or DRAFT_LABEL.search(line[:r.start()])):
+                seen.add("left")
+                return t
+            seen.add(f"{t} to {ids[t]}")
+            return ids[t]
+
+        new = NOTE_REF.sub(ref, line)
+        # A range joined by a hyphen hides its second id from NOTE_REF.
+        if "left" in seen or any(wrong(t) for a, b in ranges for t in re.findall(r"[ABCX]\d+", line[a:b])):
+            new = line  # never half of a line's references: that would mix old ids and new
+            left.append((i + 1, (head + new).strip()))
+        elif seen:
+            changed.append((i + 1, ", ".join(sorted(seen))))
+        out.append(head + new)
+    return "\n".join(out), changed, left
+
+
+def renumber(path):
+    """Renumber a notes file's items in file order, and move the script's record of
+    the file to the new ids, so the next review still knows each item. What closed
+    stays closed, under keys that no item can take."""
+    path = Path(path).resolve()
+    old_text = path.read_text()
+    if not re.search(rf"^## {ABOUT}\s*$", old_text, re.M):
+        sys.exit(f"error: {path.name} has no \"## {ABOUT}\" section, so it is not a notes file")
+    ids = renumber_ids(old_text)
+    store_file = notes_map_file()
+    store = json.loads(store_file.read_text()) if store_file.exists() else {}
+    key = next((k for k in store if Path(k).exists() and os.path.samefile(k, path)), None)
+    entries = store[key]["items"] if key else {}
+    shut = sorted((i for i in entries if i not in ids and NOTE_HEAD.match(f"### {i}. ")), key=lambda i: (i[0], int(i[1:])))
+    nxt = {s: 1 + sum(i.startswith(s) for i in ids.values()) for s in "ABCX"}
+    nexts = ", ".join(f"{s}{nxt[s]}" for s in "ABCX")
+    moved = [f"{a} is now {b}" for a, b in ids.items() if a != b]
+    hidden = re.search(r"^<!-- next ids: (.+?) -->$", old_text, re.M)
+    if not moved and not shut and (not hidden or hidden.group(1) == nexts):
+        print(f"{path.name}: the ids already run in file order. Nothing changed.")
+        return
+    drafts = set()
+    for run in {e.get("run") for e in entries.values()} - {None}:
+        with contextlib.suppress(OSError, ValueError):
+            drafts.update(json.loads((Path(run) / "results.json").read_text())["files"])
+    in_draft = {i for f in drafts if Path(f).exists() for i in re.findall(r"\b[ABCX]\d+\b", doc_text(Path(f)))}
+
+    news = ", ".join(moved + [f"{i} had closed" for i in shut]) or "the next ids were reset"
+    log = f"- Earlier ids ({time.strftime('%Y-%m-%d %H:%M')}): {news}."
+    pre, about = re.split(rf"(?m)^(?=## {ABOUT}\s*$)", old_text, maxsplit=1)
+    lines = about.rstrip("\n").replace(IDS_FIXED, RENUMBERED).replace("- Closed this round:", "- Closed this round, by earlier ids:").split("\n")
+    if key:
+        lines = [f"- Open items: {note_counts(ids.values())}." if re.fullmatch(r"- Open items: [\w ,]+\.", l) else l for l in lines]
+    lines = [re.sub(r"^(- Next free ids: |<!-- next ids: ).+?(\.?|\.? -->)$", rf"\g<1>{nexts}\g<2>", l) for l in lines]
+    spots = [i for i, l in enumerate(lines) if re.match(r"- (?:Ids: |Earlier ids\b)", l)]
+    if spots:
+        lines.insert(spots[-1] + 1, log)
+    else:
+        end = next((i for i, l in enumerate(lines) if l.startswith("<!-- next ids")), len(lines))
+        lines[end:end] = ["", log] if end == len(lines) else [log, ""]
+    text, changed, left = renumber_lines(pre + "\n".join(lines) + "\n", ids, in_draft)
+    write_atomic(path, text)
+    if key:
+        items = {ids[i]: e for i, e in entries.items() if i in ids}
+        for i, e in entries.items():
+            if i not in ids:
+                e["closed"] = e.get("closed") or "removed by hand"
+                k, n = f"closed-{i.removeprefix('closed-')}", 1
+                while k in items:
+                    n += 1
+                    k = f"closed-{i.removeprefix('closed-')}-{n}"
+                items[k] = e
+        store[key] = {"items": items, "next": nxt}
+        try:
+            write_atomic(store_file, json.dumps(store, indent=1, ensure_ascii=False) + "\n")
+        except BaseException:
+            write_atomic(path, old_text)  # both or neither
+            raise
+    print(f"{path}: {news}.")
+    for n, what in changed:
+        print(f"  line {n}: reference changed, {what}")
+    if left:
+        print("Check by hand. These lines are as written, since an id in them may be an earlier one or the draft's own word:")
+        for n, what in left:
+            print(f"  line {n}: {what[:160]}")
 
 
 
@@ -6066,6 +6229,8 @@ def main():
     ap.add_argument("--unignore", metavar="D[,D..]", help="lift past declines (D ids)")
     ap.add_argument("--forget", metavar="FILE",
                     help="set aside a file's earlier reviews, decisions, and versions, so its next review is its first")
+    ap.add_argument("--renumber", metavar="NOTES",
+                    help="renumber a notes file's items in file order, with its references and the script's record of it")
     ap.add_argument("--decisions", action="store_true",
                     help="list recorded decisions for files under the current folder")
     ap.add_argument("--note", default="", help="your reason, stored with --ignore or --applied")
@@ -6093,6 +6258,11 @@ def main():
         if not Path(a.forget).is_file():
             sys.exit(f"error: no such file: {a.forget}")
         forget(a.forget)
+        return
+    if a.renumber:
+        if not Path(a.renumber).is_file():
+            sys.exit(f"error: no such file: {a.renumber}")
+        renumber(a.renumber)
         return
     for flag, kind in (("ignore", "ignore"), ("applied", "applied"), ("unignore", "lifted")):
         if getattr(a, flag):
