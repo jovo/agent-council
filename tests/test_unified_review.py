@@ -3109,6 +3109,30 @@ Closed, by their earlier ids: B7 and C2.
                     self.assertIn("### B1. Claim 2 fails", t)
                     self.assertEqual(t.count("Claim 2 fails"), 1)
 
+    def test_an_item_moved_by_hand_twice_before_the_next_review_keeps_its_record(self):
+        self.majors([1, 2], [3])
+        self.move("A2", "B2", "Major")
+        self.notes.write_text(self.notes.read_text().replace("### B2.", "### A9.").replace("(was A2)", "(was A2, B2)"))
+        for _ in range(2):
+            t = self.majors([1], [2, 3])  # rated Minor, and stays where the user put it
+            items = json.loads(ur.notes_map_file().read_text())[str(self.notes)]["items"]
+            self.assertEqual({k: (v["title"], v.get("closed")) for k, v in items.items()},
+                             {"A1": ("Claim 1 fails", None), "A9": ("Claim 2 fails", None), "B1": ("Claim 3 fails", None)})
+            self.assertTrue(items["A9"]["pinned"])
+            self.assertEqual(t.count("Claim 2 fails"), 1)
+
+    def test_an_item_with_its_own_record_does_not_take_one_under_an_id_it_had(self):
+        self.majors([1, 2], [3])
+        self.majors([1], [2, 3])  # A2 is now B2
+        store = json.loads(ur.notes_map_file().read_text())
+        items = store[str(self.notes)]["items"]
+        items["A2"] = {**items["A1"], "title": "Another", "quote": "Other words."}
+        ur.notes_map_file().write_text(json.dumps(store))
+        self.majors([1], [2, 3])
+        items = json.loads(ur.notes_map_file().read_text())[str(self.notes)]["items"]
+        self.assertEqual(items["B2"]["title"], "Claim 2 fails")
+        self.assertEqual((items["A2"]["title"], items["A2"]["closed"]), ("Another", "removed by hand"))
+
     def test_items_moved_by_hand_in_a_chain_keep_their_records(self):
         self.majors([1, 2], [3])
         t = self.notes.read_text()

@@ -3440,8 +3440,12 @@ def note_follow(chunks, entries):
     present = {c[1] for c in items}
     claims = {}  # new id: the open item it says it was, the first to say so
     for c in items:
-        old = (note_was(c) or [None])[-1]
-        if old != c[1] and old in entries and not entries[old].get("closed") and old not in claims.values():
+        e = entries.get(c[1], {})
+        if e.get("title") and not e.get("closed") and e["title"] in c[2].partition("\n")[0]:
+            continue  # it has its own record
+        old = next((i for i in reversed(note_was(c)) if i != c[1] and i in entries
+                    and not entries[i].get("closed") and i not in claims.values()), None)
+        if old:
             claims[c[1]] = old
     moves, more = {}, True
     while more:  # an old id still in the file names its own item, unless that item moved too
