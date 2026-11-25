@@ -496,8 +496,8 @@ class Calls(unittest.TestCase):
                 self.assertEqual(ur.preflight(["argon"]), ["argon"] if kept else [])
 
     def test_agy_preflight_needs_the_model_asked_for(self):
-        for cursor, status, kept in (("/bin/cursor-agent", "Logged in as x", True), ("/bin/cursor-agent", "Not logged in", False),
-                                     (None, "", False)):
+        for cursor, status, kept in ((sys.executable, "Logged in as x", True), (sys.executable, "Not logged in", False),
+                                     (None, "", False), ("/no/such/cursor-agent", "Logged in as x", False)):
             fake = lambda cmd, **kw: SimpleNamespace(
                 returncode=0, stderr="", stdout="Fetching available models...\ngemini-3.8-flash-low\tFlash\n"
                 "gemini-4-argon-medium-x\tOther\n" if cmd[1] == "models" else status)
@@ -508,9 +508,9 @@ class Calls(unittest.TestCase):
                                                    "gemini": ("agy", "gemini-3.8-flash-low", "Flash")}):
                 ur.runtime.CHILD_ENV.pop("CURSOR_API_KEY", None)
                 self.assertEqual(ur.preflight(["argon", "gemini"]), ["argon", "gemini"] if kept else ["gemini"])
-                self.assertEqual(ur.PANELISTS["argon"], ("cursor" if cursor else "agy", "gemini-4-argon-medium", "Argon"))
+                self.assertEqual(ur.PANELISTS["argon"], ("cursor" if cursor == sys.executable else "agy", "gemini-4-argon-medium", "Argon"))
                 self.assertEqual(ur.PANELISTS["gemini"][0], "agy")
-            if not cursor:
+            if cursor != sys.executable:
                 self.assertIn("does not offer gemini-4-argon-medium", ur.FAILURES[0]["reason"])
 
     def test_no_panel_when_nothing_is_available(self):

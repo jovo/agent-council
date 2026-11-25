@@ -562,7 +562,7 @@ def preflight(panel):
             if model in listed:
                 return True, ""
             if listed:  # logged in, on an account without this model: agy would exit 1 on it
-                if not runtime.CURSOR:
+                if not (runtime.CURSOR and os.access(runtime.CURSOR, os.X_OK)):
                     return False, f"agy does not offer {model}, and cursor-agent is not installed"
                 runtime.log(f"  {m}: agy does not offer {model}, using cursor-agent, which can read files")
                 PANELISTS[m] = ("cursor",) + PANELISTS[m][1:]
