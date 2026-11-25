@@ -480,7 +480,7 @@ class Calls(unittest.TestCase):
         self.assertEqual(seen, {})
 
     def test_gemini_uses_agy_only_when_installed(self):
-        for binary, want in ((None, "cursor"), (sys.executable, "agy")):
+        for binary, want in ((None, "cursor"), (tempfile.gettempdir(), "cursor"), (sys.executable, "agy")):
             with mock.patch.object(ur.runtime, "AGY", binary), mock.patch.dict(ur.PANELISTS):
                 ur.use_agy()
                 self.assertEqual([ur.PANELISTS[m][0] for m in ("argon", "gemini")], [want, want])

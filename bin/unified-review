@@ -152,10 +152,15 @@ PANELISTS = {
 }
 
 
+def runnable(binary):
+    """True for an executable file. A folder passes os.access alone."""
+    return bool(binary) and os.path.isfile(binary) and os.access(binary, os.X_OK)
+
+
 def use_agy():
     """Run the Gemini panelists through Google's Antigravity CLI when it is installed.
     Cursor offers the same models under the same ids, and stays the route without it."""
-    if runtime.AGY and os.access(runtime.AGY, os.X_OK):
+    if runnable(runtime.AGY):
         for m in ("argon", "gemini"):
             PANELISTS[m] = ("agy",) + PANELISTS[m][1:]
 
@@ -267,8 +272,7 @@ def cursor_models():
 
 
 def available(name):
-    b = runtime.HARNESS_BIN[PANELISTS[name][0]]
-    return bool(b) and os.access(b, os.X_OK)
+    return runnable(runtime.HARNESS_BIN[PANELISTS[name][0]])
 
 
 # Every failed panelist step, with its reason, for results.json and the reports.
@@ -565,7 +569,7 @@ def preflight(panel):
             # Logged in, on an account without this model: agy would exit 1 on it. Output that
             # is not a model list stays unclear, so a new agy format does not move calls to Cursor.
             if r.returncode == 0 and len(listed) == len(rows) and not AUTH_ERROR.search(r.stderr):
-                if not (runtime.CURSOR and os.path.isfile(runtime.CURSOR) and os.access(runtime.CURSOR, os.X_OK)):
+                if not runnable(runtime.CURSOR):
                     return False, f"agy does not offer {model}, and cursor-agent is not installed"
                 runtime.log(f"  {m}: agy does not offer {model}, using cursor-agent, which can read files")
                 PANELISTS[m] = ("cursor",) + PANELISTS[m][1:]
