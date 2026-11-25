@@ -3121,6 +3121,10 @@ Closed, by their earlier ids: B7 and C2.
         self.assertIn("### C2. First", t)
         self.assertIn("See A4. C1 stays.", t)
         self.assertIn("See A4. C1 stays.", out.split("Check by hand")[1])
+        out = self.renumber()  # nothing to renumber now, and the line is still printed
+        self.assertIn("already run in file order", out)
+        self.assertIn("See A4. C1 stays.", out.split("Check by hand")[1])
+        self.assertEqual(self.notes.read_text(), t)
 
     def test_renumber_does_not_claim_a_closed_items_id_for_the_item_that_names_it(self):
         self.majors([1, 2], [3])

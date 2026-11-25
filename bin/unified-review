@@ -3785,8 +3785,10 @@ def renumber(path):
     olds = {a: [i for i in was[a] + [a] if i != b] for a, b in ids.items()}
     moved = [f"{' and '.join(olds[a])} {'is' if len(olds[a]) == 1 else 'are'} now {b}" for a, b in ids.items() if olds[a]]
     hidden = re.search(r"^<!-- next ids: (.+?) -->$", old_text, re.M)
+    earlier = {i for l in re.findall(r"^- Earlier ids\b.+$", old_text, re.M) for i in re.findall(r"\b[ABCX]\d+\b", l)}
     if not moved and not shut and (not hidden or hidden.group(1) == nexts):
         print(f"{path.name}: the ids already run in file order. Nothing changed.")
+        print_left(renumber_lines(old_text, refs, (), earlier)[2])
         return
     drafts = set()
     for run in {e.get("run") for e in entries.values()} - {None}:
@@ -3795,7 +3797,6 @@ def renumber(path):
     in_draft = {i for f in drafts if Path(f).exists() for i in re.findall(r"\b[ABCX]\d+\b", doc_text(Path(f)))}
 
     news = ", ".join(moved + [f"{i} had closed" for i in shut]) or "the next ids were reset"
-    earlier = {i for l in re.findall(r"^- Earlier ids\b.+$", old_text, re.M) for i in re.findall(r"\b[ABCX]\d+\b", l)}
     log = f"- Earlier ids ({time.strftime('%Y-%m-%d %H:%M')}): {news}."
     pre, about = re.split(rf"(?m)^(?=## {ABOUT}\s*$)", old_text, maxsplit=1)
     lines = about.rstrip("\n").replace(IDS_FIXED, RENUMBERED).replace("- Closed this round:", "- Closed this round, by earlier ids:").split("\n")
@@ -3829,6 +3830,10 @@ def renumber(path):
     print(f"{path}: {news}.")
     for n, what in changed:
         print(f"  line {n}: reference changed, {what}")
+    print_left(left)
+
+
+def print_left(left):
     if left:
         print("Check by hand. These lines are as written, since an id in them may be an earlier one or the draft's own word:")
         for n, what in left:
