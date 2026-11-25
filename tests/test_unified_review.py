@@ -513,6 +513,17 @@ class Calls(unittest.TestCase):
             if cursor != sys.executable:
                 self.assertIn("does not offer gemini-4-argon-medium", ur.FAILURES[0]["reason"])
 
+    def test_agy_preflight_tells_an_empty_list_from_output_it_cannot_read(self):
+        for out, err, kept, route in (("Fetching available models...\n", "", True, "cursor"), ("", "", True, "cursor"),
+                                      ("Models: Argon, Flash\n", "", True, "agy"), ("", "authentication required", False, "agy")):
+            fake = lambda cmd, **kw: SimpleNamespace(returncode=0, stderr=err, stdout=out if cmd[1] == "models" else "Logged in as x")
+            ur.FAILURES.clear()
+            with mock.patch.object(ur.subprocess, "run", fake), mock.patch.object(ur.runtime, "log", lambda *a: None), \
+                    mock.patch.object(ur.runtime, "CURSOR", sys.executable), \
+                    mock.patch.dict(ur.PANELISTS, {"argon": ("agy", "gemini-4-argon-medium", "Argon")}):
+                self.assertEqual(ur.preflight(["argon"]), ["argon"] if kept else [])
+                self.assertEqual(ur.PANELISTS["argon"][0], route)
+
     def test_no_panel_when_nothing_is_available(self):
         with self.assertRaises(SystemExit):
             self.choose(["gpt"], missing=("gpt", "claude", "grok"))

@@ -557,11 +557,14 @@ def preflight(panel):
             except ValueError:
                 return None, "status unclear"
         if harness == "agy":  # agy has no status command. Listing models is the closest, and makes no model call.
-            listed = re.findall(r"^(\S+)\t", r.stdout, re.M) if r.returncode == 0 else []
+            rows = [l for l in r.stdout.splitlines() if l.strip() and not l.startswith("Fetching available models")]
+            listed = [l.split("\t")[0] for l in rows if "\t" in l] if r.returncode == 0 else []
             model = PANELISTS[m][1]
             if model in listed:
                 return True, ""
-            if listed:  # logged in, on an account without this model: agy would exit 1 on it
+            # Logged in, on an account without this model: agy would exit 1 on it. Output that
+            # is not a model list stays unclear, so a new agy format does not move calls to Cursor.
+            if r.returncode == 0 and (listed or not rows) and not AUTH_ERROR.search(r.stderr):
                 if not (runtime.CURSOR and os.access(runtime.CURSOR, os.X_OK)):
                     return False, f"agy does not offer {model}, and cursor-agent is not installed"
                 runtime.log(f"  {m}: agy does not offer {model}, using cursor-agent, which can read files")
