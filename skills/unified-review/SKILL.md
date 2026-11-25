@@ -185,7 +185,7 @@ file. On a re-review it edits the file in place and never rewrites it:
   survive. Its line number is refreshed. If its severity changed, it moves to
   the new set with a new id, unless you or the user had moved it by hand.
 - At most five Majors stay. Beyond five, Majors not raised this round become
-  Minor.
+  Minor. An item moved into Major by hand stays there, even as a sixth.
 - An item whose struck text is gone from the draft, or whose added text is in
   it, is removed and recorded with `--applied`. A declined item is removed.
 - An item not raised again, with its passage unchanged, stays, marked "Not

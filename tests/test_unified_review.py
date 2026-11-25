@@ -3313,6 +3313,20 @@ Closed, by their earlier ids: B7 and C2.
         self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1"], ["B1", "A2"]))
         self.assertIn("- Open items: 1 Major, 2 Minor.", t)
 
+    def test_an_item_moved_into_major_by_hand_stays_as_a_sixth(self):
+        t = self.majors([1, 2, 3, 4, 5], [6])
+        c = re.search(r"### B1\..*?(?=## About)", t, re.S).group(0)
+        t = t.replace(c, "").replace("## Minor\n\n", "").replace("## About", c.replace("B1.", "A6.", 1) + "## About")
+        head = re.search(r"### A6\..*", t).group(0)
+        self.notes.write_text(t.replace(head, head + " (was B1)"))
+        for raised in ([1, 2, 3, 4, 5], [1, 2, 3, 4, 7]):  # a Major not raised again still gives way
+            t = self.majors(raised, [6])
+            self.assertEqual(len(self.heads(t, "Major")), 6)
+            self.assertIn("A6", self.heads(t, "Major"))
+        self.assertRegex(t, r"Claim 5 fails .*\(was A5\)")
+        t = self.majors([1, 2, 3, 4, 7])  # it stays when not raised, too
+        self.assertIn("A6", self.heads(t, "Major"))
+
     def test_majors_not_raised_again_give_way_past_five(self):
         self.majors([1, 2, 3, 4, 5])
         t = self.majors([1, 2, 3, 6, 7])

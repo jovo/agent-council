@@ -3628,6 +3628,7 @@ def write_notes(draft, run, source=None):
         note_add(chunks, s, chunk)
 
     # At most MAX_MAJORS Majors stay open: past that, the ones not raised this round become Minor, last first.
+    # One moved into Major by hand stays, even as a sixth.
     majors = [c for c in chunks if c[0] == "item" and note_section(chunks, c) == "A"]
     stale = [c for c in majors if c[1] in not_raised and not (entries.get(c[1]) or {}).get("pinned")]
     for c in list(reversed(stale))[:max(0, len(majors) - MAX_MAJORS)]:
