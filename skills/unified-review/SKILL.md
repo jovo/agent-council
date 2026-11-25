@@ -12,6 +12,8 @@ in the repo.
 
 For a review by you alone, without the script, follow the Reviewer rules at the end of this skill. The script gives the same rules to its models.
 
+When the draft is a paper, grant, or proposal, or a section of one, always load the `papers-and-proposals` skill too, and check each section against its rules. The script gives its models that skill.
+
 Run the script on the file(s) the user names:
 
 ```bash

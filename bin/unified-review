@@ -6003,14 +6003,20 @@ RULES_SECTION = "# Writing and review guidelines"
 
 
 REVIEW_SKILLS = ["logic", "statistics", "figures", "documents"]  # their rules apply to drafts under review
+PAPER_RULES = ("The rules below apply when the draft under review is a scientific paper, grant, proposal, one-page "
+               "summary, or rebuttal, or a section of one. Apply them to each section the draft has. Ignore them "
+               "for any other draft.")
 
 
 def with_figure_rules(rules):
     """Reviews also check figures, captions, equations, citations, and tables,
-    whose rules live in skills rather than in CLAUDE.md."""
-    for name in REVIEW_SKILLS:
+    and the structure of papers and proposals, whose rules live in skills
+    rather than in CLAUDE.md."""
+    for name in REVIEW_SKILLS + ["papers-and-proposals"]:
         skill = Path(__file__).resolve().parent.parent / "skills" / name / "SKILL.md"
         if skill.exists():
+            if name == "papers-and-proposals":
+                rules += "\n\n" + PAPER_RULES
             rules += "\n\n" + re.sub(r"\A---\n.*?\n---\n", "", skill.read_text(), flags=re.S)
     return rules
 
