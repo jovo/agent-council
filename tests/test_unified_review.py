@@ -1390,6 +1390,17 @@ class NotAssessed(unittest.TestCase):
                           ur.not_assessed({"files": [str(nums), str(fig)], "verify": False}))
 
 
+class PaperRules(unittest.TestCase):
+    def test_paper_skill_reaches_the_panel_with_its_scope(self):
+        rules = ur.with_figure_rules("base rules")
+        self.assertTrue(rules.startswith("base rules"))
+        self.assertIn("# Papers and proposals", rules)
+        self.assertIn("**Abstract.**", rules)
+        self.assertLess(rules.index(ur.PAPER_RULES), rules.index("# Papers and proposals"))
+        # The scope note covers only the paper rules, so it follows the general skills.
+        self.assertLess(rules.index("# Documents"), rules.index(ur.PAPER_RULES))
+
+
 class ClaimRules(unittest.TestCase):
     def test_claim_map_and_finding_rule_reach_the_panel(self):
         rules = ur.reviewer_rules()
@@ -2804,24 +2815,242 @@ class NotesFile(unittest.TestCase):
         self.assertIn("- Open items: 2 Minor, 1 Disputed.", t)
         self.assertIn("ties broken by Claude Opus", t)  # the scripted mediator ruled on X1
 
-    def test_a_renumbered_file_keeps_its_items_and_earlier_ids(self):
+    def renumber(self):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            ur.renumber(self.notes)
+        return out.getvalue()
+
+    def swap(self):
+        """Put B2 above B1 in the file, as the user might."""
+        t = self.notes.read_text()
+        a, b, c = t.index("### B1."), t.index("### B2."), t.index("## About this review")
+        self.notes.write_text(t[:a] + t[b:c] + t[a:b] + t[c:])
+
+    def test_renumber_follows_file_order_and_the_next_review_knows_every_item(self):
+        replies = {"gpt": SKY(), "argon": WATER}
+        self.review(replies)
+        self.swap()
+        self.renumber()
+        for _ in range(2):
+            t = self.notes.read_text()
+            self.assertIn("### B1. Water is not dry", t)
+            self.assertIn("### B2. Sky color is wrong", t)
+            self.assertEqual(t.count("\n### B"), 2)
+            self.assertEqual(t.count("B2 is now B1, B1 is now B2."), 1)
+            self.assertNotIn("never reused", t)
+            self.review(replies)
+        self.assertNotIn(ur.NOT_RAISED, t)
+        self.assertIn("already run in file order", self.renumber())
+        self.swap()
+        self.renumber()
+        self.assertEqual(self.notes.read_text().count("- Earlier ids ("), 2)
+
+    def test_renumber_keeps_two_items_with_one_title_apart(self):
+        cite = lambda q: finding_text("Missing citation", q, "No source is given.", f"{q[:-1]} 🟢 **{{{{citation: Author, year}}}}**.")
+        replies = {"gpt": cite("The sky is green today.") + cite("Water is dry."), "argon": GRASS}
+        self.review(replies)
+        t = self.notes.read_text()
+        first = t.index("### B1.")
+        about = t.index("## About this review")
+        items = re.split(r"(?=^### )", t[first:about], flags=re.M)[1:]
+        self.notes.write_text(t[:first] + "".join(reversed(items)) + t[about:])
+        self.renumber()
+        self.review(replies)
+        t = self.notes.read_text()
+        self.assertEqual(t.count("\n### B"), 3)
+        self.assertRegex(t, r"### B1\. .*\n\*Intro · memo.md, line 7\*")
+        self.assertRegex(t, r"### B3\. .*\n\*Intro · memo.md, line 3\*")
+
+    def test_renumber_closes_gaps_and_a_deleted_item_stays_deleted(self):
+        replies = {"gpt": SKY() + GRASS, "argon": WATER}
+        self.review(replies)
+        t = self.notes.read_text()
+        a, b = t.index("### B1. Sky"), t.index("### B2.")
+        self.notes.write_text(t[:a] + t[b:])
+        self.renumber()
+        t = self.notes.read_text()
+        self.assertIn("B2 is now B1, B3 is now B2, B1 had closed.", t)
+        self.assertIn("<!-- next ids: A1, B3, C1, X1 -->", t)
+        self.assertIn("- Open items: 2 Minor.", t)
+        self.review(replies)
+        t = self.notes.read_text()
+        self.assertNotIn("Sky color is wrong", t)
+        self.assertIn("### B1. Grass", t)
+        self.assertEqual(t.count("\n### B"), 2)
+        a, b = t.index("### B1. Grass"), t.index("### B2.")  # a second B1 closes
+        self.notes.write_text(t[:a] + t[b:])
+        self.renumber()
+        self.review(replies)
+        t = self.notes.read_text()
+        self.assertIn("### B1. Water", t)
+        self.assertEqual(t.count("\n### B"), 1)
+
+    def test_renumber_resets_the_next_id_when_only_the_last_item_closed(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        f = self.d / "memo.md"
+        f.write_text(f.read_text().replace("Water is dry.", "Water is wet."))
+        self.review({"gpt": SKY(), "argon": SKY()})  # B2 closes as applied
+        self.renumber()
+        self.assertIn("already run in file order", self.renumber())
+        self.assertIn("B2 had closed.", self.notes.read_text())
+        self.review({"gpt": SKY() + GRASS, "argon": SKY()})
+        t = self.notes.read_text()
+        self.assertIn("### B1. Sky color is wrong", t)
+        self.assertIn("### B2. Grass speed unsupported", t)
+
+    def test_renumber_changes_references_and_leaves_what_may_be_the_drafts_words(self):
+        self.notes.parent.mkdir()
+        self.notes.write_text("""# Review of memo.md
+
+## Major
+
+### B4. Moved up
+See C2, B7.1, and B7a.
+Table B7 is in the draft.
+The "B7 cells" are a quote, so C2 waits.
+Code ``B7`` is literal.
+
+#### B4.1. Part
+The plan is in B7.
+
+### A1. Second
+The old point was A2. C2 to C9 are small. Code `B7`.
+
+As B7 says, ~~old~~ 🟢 **new**.
+
+```
+B7
+```
+
+## Minor
+
+### B7. Third B4
+| x | (B4.1) |
+
+## Nitpicks
+
+### C2. Small
+
+## About this review
+
+B4 depends on B7.
+
+Closed, by their earlier ids: B7 and C2.
+""")
+        out = self.renumber()
+        t = self.notes.read_text()
+        for line in ("### A1. Moved up", "See C1, B1.1, and B1a.",
+                     "Table B7 is in the draft.", "The \"B7 cells\" are a quote, so C2 waits.", "Code ``B7`` is literal.", "#### A1.1. Part",
+                     "The plan is in B1.", "### A2. Second", "The old point was A2. C2 to C9 are small. Code `B7`.",
+                     "As B7 says, ~~old~~ 🟢 **new**.", "```\nB7\n```", "### B1. Third B4", "| x | (A1.1) |", "### C1. Small",
+                     "A1 depends on B1.", "Closed, by their earlier ids: B7 and C2.", "B4 is now A1, A1 is now A2, B7 is now B1, C2 is now C1."):
+            self.assertIn(line + "\n", t)
+        for n in (7, 8, 9, 15, 17, 20, 25, 36):
+            self.assertIn(f"  line {n}: ", out.split("Check by hand")[1])
+
+    def test_renumber_leaves_an_id_the_draft_itself_uses(self):
+        (self.d / "memo.md").write_text("# Intro\n\nThe sky is green today.\n\nGrass grows slowly, as C1 and B2 plants do.\n\nWater is dry.\n")
         replies = {"gpt": SKY(), "argon": WATER}
         self.review(replies)
         t = self.notes.read_text()
-        self.assertIn("### B1. Sky color is wrong", t)
-        t = t.replace("### B1.", "### B9.").replace("### B2.", "### B1.").replace("### B9.", "### B2.")
-        self.notes.write_text(t.replace("- Ids:", "- Earlier ids: B1 is now B2, and B2 is now B1.\n- Ids:"))
-        store = json.loads(ur.notes_map_file().read_text())
-        del store[str(self.notes)]
-        ur.notes_map_file().write_text(json.dumps(store))
-        self.review(replies)
+        self.notes.write_text(t.replace("## About", "B2 plants differ.\n\nB1 does not.\n\n## About"))
+        self.swap()
+        self.renumber()
+        self.assertIn("B2 plants differ.\n\nB2 does not.", self.notes.read_text())
+
+    def move(self, old, new, head):
+        """Move an item under another section by hand, as the skill says: new id, old id in the heading."""
+        t = self.notes.read_text()
+        a = t.index(f"### {old}.")
+        b = min(x for x in (t.find("\n### ", a + 1) + 1, t.find("\n## ", a) + 1) if x > 0)
+        line, _, rest = t[a:b].partition("\n")
+        was = f" (was {old})" if new != old else ""
+        item = line.replace(f"### {old}.", f"### {new}.") + was + "\n" + rest
+        t = t[:a] + t[b:]
+        self.notes.write_text(t.replace("## Minor", f"## {head}\n\n{item}## Minor", 1))
+
+    def test_renumber_follows_an_item_moved_by_hand_before_the_next_review(self):
+        replies = {"gpt": SKY() + GRASS, "argon": WATER}
         self.review(replies)
         t = self.notes.read_text()
-        self.assertIn("### B2. Sky color is wrong", t)
-        self.assertIn("### B1. Water is not dry", t)
-        self.assertEqual(t.count("### B"), 2)
-        self.assertEqual(t.count("- Earlier ids: B1 is now B2, and B2 is now B1."), 1)
-        self.assertNotIn("never reused", t)
+        self.notes.write_text(t.replace("## About", "Author: B2 waits for B3.\n\n## About"))
+        self.move("B2", "A7", "Major")
+        self.renumber()
+        for _ in range(2):
+            t = self.notes.read_text()
+            self.assertIn("### A1. Grass speed unsupported", t)
+            self.assertLess(t.index("### A1."), t.index("## Minor"))
+            self.assertIn("### B2. Water is not dry", t)
+            self.assertEqual(t.count("Grass speed unsupported"), 1)
+            self.assertNotIn("(was", t)
+            self.assertIn("Author: A1 waits for B2.", t)
+            self.assertIn("B2 and A7 are now A1, B3 is now B2.", t)
+            self.review(replies)  # rated Minor again, and stays where the user put it
+
+    def test_renumber_keeps_an_item_the_user_put_in_another_set_under_its_old_id(self):
+        replies = {"gpt": SKY(), "argon": WATER}
+        self.review(replies)
+        self.move("B2", "B2", "Major")
+        self.renumber()
+        self.review(replies)
+        t = self.notes.read_text()
+        self.assertIn("### A1. Water is not dry", t)
+        self.assertLess(t.index("### A1."), t.index("## Minor"))
+        self.assertIn("- Open items: 1 Major, 1 Minor.", t)
+
+    def test_renumber_after_the_script_moved_an_item(self):
+        self.majors([1, 2], [3])
+        t = self.majors([1, 4], [2, 3])
+        self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1", "A3"], ["B1", "B2"]))
+        self.notes.write_text(t.replace("## About", "Author: A2 waits for A3.\n\n## About"))
+        self.renumber()
+        for _ in range(2):
+            t = self.notes.read_text()
+            self.assertEqual((self.heads(t, "Major"), self.heads(t, "Minor")), (["A1", "A2"], ["B1", "B2"]))
+            self.assertIn("A3 is now A2, A2 is now B2.", t)
+            self.assertIn("Author: B2 waits for A2.", t)
+            self.assertNotIn("(was", t)
+            self.assertIn("<!-- next ids: A3, B3, C1, X1 -->", t)
+            self.assertEqual(t.count("Claim 2 fails"), 1)
+            self.majors([1, 4], [2, 3])
+        t = self.majors([1, 2, 4], [3])  # rated Major again, and free to move
+        self.assertRegex(t, r"### A3\. Claim 2 fails .*\(was B2\)")
+        self.renumber()
+        self.assertIn("B2 is now A3", self.notes.read_text())
+
+    def test_renumber_does_not_claim_a_closed_items_id_for_the_item_that_names_it(self):
+        self.majors([1, 2], [3])
+        f = self.d / "memo.md"
+        f.write_text(f.read_text().replace("Copper conducts heat well.", "Copper conducts heat well in no case."))
+        t = self.majors([1], [3])  # A2 closes as applied
+        self.notes.write_text(t.replace("## About", "### B2. My own note (was A2)\n\nKeep this.\n\n## About"))
+        self.renumber()
+        t = self.notes.read_text()
+        self.assertIn("A2 had closed.", t)
+        self.assertNotIn("are now", t)
+        self.assertIn("### B2. My own note", t)
+
+    def test_renumber_refuses_a_file_that_is_not_a_notes_file_or_has_one_id_twice(self):
+        f = self.d / "memo.md"
+        f.write_text("### A2. A heading\n")
+        with self.assertRaises(SystemExit):
+            ur.renumber(f)
+        f.write_text("### A2. One\n\n### A2. Two\n\n## About this review\n")
+        with self.assertRaises(SystemExit):
+            ur.renumber(f)
+        self.assertIn("### A2. Two", f.read_text())
+
+    def test_renumber_restores_the_file_when_the_record_cannot_be_written(self):
+        self.review({"gpt": SKY(), "argon": WATER})
+        self.swap()
+        before, write = self.notes.read_text(), ur.write_atomic
+        def fail(path, text):
+            if path == ur.notes_map_file():
+                raise OSError("full")
+            write(path, text)
+        with mock.patch.object(ur, "write_atomic", fail), self.assertRaises(OSError):
+            self.renumber()
+        self.assertEqual(self.notes.read_text(), before)
 
     def test_a_merged_item_under_a_new_id_is_left_alone(self):
         replies = {"gpt": SKY(), "argon": WATER}

@@ -12,6 +12,8 @@ in the repo.
 
 For a review by you alone, without the script, follow the Reviewer rules at the end of this skill. The script gives the same rules to its models.
 
+When the draft is a paper, grant, or proposal, or a section of one, always load the `papers-and-proposals` skill too, and check each section against its rules. The script gives its models that skill.
+
 Run the script on the file(s) the user names:
 
 ```bash
@@ -243,17 +245,18 @@ changes moves to the new set, takes its next free id, and shows the old id at
 the end of its heading: `### B22. Title (was A4)`. The old id is not reused and
 still names the item, and the script follows `(was A4)` on the next review.
 Items run in id order within each set, so an item added later goes last.
-If the user asks to renumber, renumber each set in file
-order, fix every cross-reference, and list the old ids on one line in the
-closing section, `- Earlier ids: B4 is now B1.`, which the script keeps. The
-script matches items to findings by id, so when
-`~/.local/share/unified-review/runs/notes-ids.json` lists the file, delete that
-file's entry. The script then leaves items it cannot match by title as written.
+If the user asks to renumber, first put the items in
+the order and sections the user wants, then run `unified-review --renumber NOTES`.
+It numbers each set in file order and changes the headings, sub-issues,
+references, and its own record of the file. It drops each `(was A4)`, since it
+adds a line of earlier ids to the closing section. Closed items stay closed, and
+an item you put in another set stays there. Check each line it prints: changed
+references, and lines it left for you. Never renumber by hand.
 When several Major items bear on one claim, merge them into one item with
 sub-issues, `#### A4.1. Title`. The merged item takes the next free id and a
 heading of its own, with no `(was A4)`. The script tracks one change per item, so under a kept id it
-would remove the whole item once that change is made. When you renumber, drop
-each `(was A4)`, since the closing section lists the old ids.
+would remove the whole item once that change is made. It leaves a merged item
+as written, so keep its line numbers, applied parts, and `--applied` records yourself.
 For a script review, record each one with `--applied N` or `--ignore N`, so the
 next review neither raises it again nor forgets it.
 
