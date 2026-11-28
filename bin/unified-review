@@ -145,10 +145,10 @@ VERDICTS = ["contradicted", "unverifiable", "plausible", "confirmed"]  # most ca
 # default (DEFAULT_PANEL) is GPT alone. Fast settings for the others: Sonnet,
 # GPT-5.6 Luna at low effort, Gemini Flash Low.
 PANELISTS = {
-    "argon": ("cursor", "gemini-4-argon-medium", "Gemini 4 Argon Medium"),
+    "argon": ("agy", "gemini-4-argon-medium", "Gemini 4 Argon Medium"),
     "claude": ("claude", "sonnet", "Claude Sonnet"),
     "gpt": ("codex", "gpt-5.6-luna", "GPT-5.6 Luna"),
-    "gemini": ("cursor", "gemini-3.8-flash-low", "Gemini 3.8 Flash Low"),
+    "gemini": ("agy", "gemini-3.8-flash-low", "Gemini 3.8 Flash Low"),
     "grok": ("cursor", "grok-4.7-low-fast", "Grok 4.7 Low Fast"),
 }
 
@@ -157,13 +157,6 @@ def runnable(binary):
     """True for an executable file. A folder passes os.access alone."""
     return bool(binary) and os.path.isfile(binary) and os.access(binary, os.X_OK)
 
-
-def use_agy():
-    """Run the Gemini panelists through Google's Antigravity CLI when it is installed.
-    Cursor offers the same models under the same ids, and stays the route without it."""
-    if runnable(runtime.AGY):
-        for m in ("argon", "gemini"):
-            PANELISTS[m] = ("agy",) + PANELISTS[m][1:]
 
 
 # When a panelist fails, the first of these not already on the panel stands in,
@@ -176,7 +169,7 @@ STANDINS = ["claude", "grok"]
 FACTCHECK_PANELISTS = {
     "claude": ("claude", None, "Claude"),
     "gpt": ("codex", None, "GPT (Codex default)"),
-    "gemini": ("cursor", "gemini-3.8-flash-low", "Gemini 3.8 Flash Low"),
+    "gemini": ("agy", "gemini-3.8-flash-low", "Gemini 3.8 Flash Low"),
     "grok": ("cursor", "grok-4.7-high", "Grok 4.7 High"),
 }
 # App that opens unified.md and factcheck.md when they are ready. Empty means:
@@ -246,6 +239,8 @@ def panelist(spec):
     elif harness == "codex":
         name = CODEX_MODELS.get(model, model) + (f" {effort}" if effort else " low")
         EFFORT[spec] = effort or "low"
+    elif harness == "agy" or model.startswith("gemini-"):  # Gemini runs on the user's Google account
+        harness, name = "agy", agy_models().get(model) or cursor_models().get(model, model)
     else:
         name = cursor_models().get(model, model)
     PANELISTS[spec] = (harness, model, name)
@@ -270,6 +265,26 @@ def cursor_models():
             if sep and mid and " " not in mid:
                 _CURSOR_MODELS[mid] = re.sub(r"[\u200b\s]+", " ", name).strip()
     return _CURSOR_MODELS
+
+
+_AGY_MODELS = None
+
+
+def agy_models():
+    """{id: display name} of the models agy offers on the user's Google account, cached."""
+    global _AGY_MODELS
+    if _AGY_MODELS is None:
+        _AGY_MODELS = {}
+        try:
+            out = subprocess.run([runtime.AGY, "models"], capture_output=True, text=True, timeout=30,
+                                 stdin=subprocess.DEVNULL, env=runtime.CHILD_ENV).stdout if runnable(runtime.AGY) else ""
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        for line in out.splitlines():
+            mid, sep, name = line.strip().partition("\t")
+            if sep and mid and " " not in mid and mid.startswith("gemini-"):
+                _AGY_MODELS[mid] = name.strip()
+    return _AGY_MODELS
 
 
 def available(name):
@@ -413,10 +428,6 @@ exactly as printed."""
 def call_once(name, prompt, out, workdir, web):
     """One attempt. Returns (text, None) or (None, reason)."""
     harness, model, _ = PANELISTS[name]
-    if harness == "agy" and (web or READ_FILES):  # agy runs with no tools, so it can do neither
-        if not runtime.CURSOR:
-            return None, "agy has no web search or file access here, and cursor-agent is not installed"
-        harness = "cursor"
     box = None  # agy's own empty folder
     out, err = Path(out), Path(out).with_suffix(".err")
     if harness == "claude":
@@ -433,8 +444,8 @@ def call_once(name, prompt, out, workdir, web):
         box = tempfile.TemporaryDirectory(prefix="unified-review-agy-")
         agent = Path(box.name) / ".agents/agents/unified-reviewer.md"
         agent.parent.mkdir(parents=True)
-        agent.write_text(runtime.AGY_AGENT)
-        cmd = [runtime.AGY, "-p", prompt, "--agent", "unified-reviewer", "--settings", runtime.AGY_SETTINGS,
+        agent.write_text(runtime.agy_agent(READ_FILES, web))
+        cmd = [runtime.AGY, "-p", prompt, "--agent", "unified-reviewer", "--settings", runtime.agy_settings(READ_FILES, web),
                "--sandbox", "--disable-slash-commands", "--output-format", "text"] + (["--model", model] if model else [])
     else:
         cmd = [runtime.CURSOR, "-p", "--mode", "ask", "--trust", "--output-format", "text",
@@ -548,6 +559,8 @@ def preflight(panel):
         key = {"codex": "CODEX_API_KEY", "cursor": "CURSOR_API_KEY"}.get(harness)
         if key and runtime.CHILD_ENV.get(key):
             return True, ""
+        if harness == "agy" and not runnable(runtime.AGY):
+            return False, "the Antigravity CLI (agy) is not installed"
         cmd = {"claude": [runtime.CLAUDE, "auth", "status"], "codex": [runtime.CODEX, "login", "status"],
                "cursor": [runtime.CURSOR, "status"], "agy": [runtime.AGY, "models"]}[harness]
         try:
@@ -568,13 +581,9 @@ def preflight(panel):
             if model in listed:
                 return True, ""
             # Logged in, on an account without this model: agy would exit 1 on it. Output that
-            # is not a model list stays unclear, so a new agy format does not move calls to Cursor.
-            if r.returncode == 0 and len(listed) == len(rows) and not AUTH_ERROR.search(r.stderr):
-                if not runnable(runtime.CURSOR):
-                    return False, f"agy does not offer {model}, and cursor-agent is not installed"
-                runtime.log(f"  {m}: agy does not offer {model}, using cursor-agent, which can read files")
-                PANELISTS[m] = ("cursor",) + PANELISTS[m][1:]
-                return check(m)
+            # is not a model list stays unclear, and the call goes ahead.
+            if r.returncode == 0 and rows and len(listed) == len(rows) and not AUTH_ERROR.search(r.stderr):
+                return False, f"agy does not offer {model} on this Google account"
             return (False, "not logged in") if AUTH_ERROR.search(outp) else (None, f"status unclear: {outp.strip()[:80]}")
         if re.search(r"not logged in|logged out", outp, re.I):
             return False, "not logged in"
@@ -586,7 +595,7 @@ def preflight(panel):
         if ok is False:
             login = {"claude": "claude, then /login", "codex": "codex login",
                      "cursor": "cursor-agent login", "agy": "agy, then sign in"}[PANELISTS[m][0]]
-            fail("preflight", m, why if "does not offer" in why else f"not logged in. Run: {login}")
+            fail("preflight", m, why if "does not offer" in why or "not installed" in why else f"not logged in. Run: {login}")
         else:
             if ok is None:
                 runtime.log(f"  {m}: {why}, trying anyway")
@@ -5576,10 +5585,11 @@ def model_menu():
         model = n.split()[-1]
         tree["OpenAI"].setdefault(model, {})[m.split("-")[1] + ", via Codex"] = [
             ((EFFORTS.index(e), 0, 0), {"spec": f"codex:{m}@{e}", "label": e.capitalize()}) for e in ("low", "medium", "high")]
-    for mid in cursor_models():
+    # Gemini models come from agy, which runs them on the user's Google account, never from cursor-agent.
+    for harness, mid in [("agy", m) for m in agy_models()] + [("cursor", m) for m in cursor_models() if not m.startswith("gemini-")]:
         lab = next((n for n, pat in LABS if re.match(pat, mid)), "Other")
         model, version, setting, key = parse_model_id(mid)
-        tree[lab].setdefault(model, {}).setdefault(version, []).append((key, {"spec": "cursor:" + mid, "label": setting}))
+        tree[lab].setdefault(model, {}).setdefault(version, []).append((key, {"spec": f"{harness}:{mid}", "label": setting}))
     order = lambda m: (MODEL_ORDER.index(m) if m in MODEL_ORDER else len(MODEL_ORDER), m)
     vorder = lambda v: (0 if "via" in v else 1, version_key(v))
     return [{"lab": lab, "models": [
@@ -6440,7 +6450,6 @@ def load_rules(path):
 
 
 def main():
-    use_agy()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("files", nargs="*")
     ap.add_argument("-o", dest="outdir")
