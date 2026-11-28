@@ -2,6 +2,7 @@
 child process environment, the per-call timeout, logging, and the small text
 helpers several parts of the tool use."""
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -23,21 +24,32 @@ HARNESS_BIN = {"claude": CLAUDE, "codex": CODEX, "cursor": CURSOR, "agy": AGY}
 
 # In one-prompt mode agy runs shell commands, reads files outside its folder, and
 # searches the web without asking, even with --sandbox. So a panelist runs as an
-# agent whose only tool is ask_question, with every permission denied, in an empty
-# folder of its own. An unknown --agent makes agy exit 1, so a missing file fails
-# closed. The deny rules hold without the agent, but leave web search on.
-AGY_AGENT = """---
-name: unified-reviewer
-description: Answers from the prompt alone.
-tools:
-  - ask_question
-mainAgent: true
-subagent: false
----
-Answer from the prompt alone.
-"""
-AGY_SETTINGS = ('{"permissions":{"deny":["command(*)","unsandboxed(*)","read_file(*)","write_file(*)",'
-                '"read_url(*)","execute_url(*)","mcp(*)"]},"allowNonWorkspaceAccess":false}')
+# agent with only the tools its call needs, in an empty folder of its own, with
+# every other permission denied. An unknown --agent makes agy exit 1, so a missing
+# file fails closed. agy cannot confine reads to a folder (its permission rules
+# match only "*", and it reads paths outside its folder), so a call that reads files
+# can read any file the user can, as Codex, Cursor, and Claude can when they read
+# files. It gets no extra folder: the prompt names each file by its full path. Shell commands, writes, URL
+# execution, and MCP stay denied on every call.
+def agy_agent(read=False, web=False):
+    """The agent file for one agy call: file reading for a PDF or figures, web
+    search and page reading for a fact-check, otherwise no tools."""
+    tools = ["ask_question"] + (["read_file"] if read else []) + (["search_web", "read_url_content"] if web else [])
+    does = ("Read the files the prompt names. " if read else "") + ("Search the web and read pages. " if web else "")
+    return ("---\nname: unified-reviewer\ndescription: Answers from the prompt"
+            + (" and the files it names" if read else "") + (", and the web" if web else "") + ".\ntools:\n"
+            + "".join(f"  - {x}\n" for x in tools) + "mainAgent: true\nsubagent: false\n---\n"
+            + (does + "Do not change any file.\n" if read or web else "Answer from the prompt alone.\n"))
+
+
+def agy_settings(read=False, web=False):
+    deny = ["command(*)", "unsandboxed(*)"] + ([] if read else ["read_file(*)"]) + ["write_file(*)"] + (
+        [] if web else ["read_url(*)"]) + ["execute_url(*)", "mcp(*)"]
+    return json.dumps({"permissions": {"deny": deny}, "allowNonWorkspaceAccess": False}, separators=(",", ":"))
+
+
+AGY_AGENT = agy_agent()  # the review's own call: no tools
+AGY_SETTINGS = agy_settings()
 
 # When launched from inside Claude Code, Codex, or Cursor, the parent agent's
 # session variables leak into the child CLIs and break their auth. Drop them.
