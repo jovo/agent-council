@@ -1995,10 +1995,12 @@ def pdf_extras(p):
 # The text review never sees an image, so every review also runs a figure pass:
 # each reviewer looks at the draft's figures, with their captions and the
 # sentences that cite them, and reports findings in the usual form.
-IMG_REF = re.compile(r'<img\b[^>]*?\bsrc="([^"]+)"|!\[[^\]]*\]\(<?([^)\s>]+)')
+# An HTML src in either quote style, or a Markdown destination, which may be
+# <bracketed> to hold spaces.
+IMG_REF = re.compile(r'<img\b[^>]*?\bsrc=(?:"([^"]+)"|\'([^\']+)\')|!\[[^\]]*\]\((?:<([^>]+)>|([^)\s]+))')
 FIG_LABEL = re.compile(r"^[\W_]*(?:Supplementary\s+|Extended\s+Data\s+)?(?:Figure|Fig\.?)\s*(S?\d+)\b", re.I)
 FIG_CITE = re.compile(r"\b(?:Supplementary\s+|Extended\s+Data\s+)?Fig(?:ure)?s?\.?\s*"
-                      r"((?:S?\d+[a-z]?(?:\s*[-–]\s*[a-z]\b)?(?:\s*(?:,|and|&)\s*(?=S?\d))?)+)", re.I)
+                      r"((?:S?\d+[a-z]?(?:\s*[-–]\s*(?:S?\d+[a-z]?|[a-z]\b))?(?:\s*(?:,|and|&)\s*(?=S?\d))?)+)", re.I)
 # A sentence ends at . ! or ? and a space, but not after Fig., Figs., al., e.g., or i.e.
 SENTENCE_END = re.compile(r"(?<=[.!?])(?<!\bFig\.)(?<!\bFigs\.)(?<!\bal\.)(?<!e\.g\.)(?<!i\.e\.)\s+")
 MAX_FIGURES = 40  # a longer draft's later figures are left out, and the review says so
@@ -2021,6 +2023,19 @@ def fig_key(num):
     return "Figure " + num.upper()
 
 
+def cited_numbers(group):
+    """Figure numbers in a citation's list: '1, 3' gives 1 and 3, '1–3' gives
+    1, 2, and 3, 'S2-S4' gives S2 to S4, and a panel range '1d–e' gives 1."""
+    out = []
+    for m in re.finditer(r"(S?)(\d+)[a-z]?(?:\s*[-–]\s*(S?)(\d+))?", group, re.I):
+        lo, hi = int(m.group(2)), int(m.group(4) or m.group(2))
+        if m.group(4) and bool(m.group(1)) == bool(m.group(3)) and 0 <= hi - lo <= 20:
+            out += [m.group(1) + str(n) for n in range(lo, hi + 1)]
+        else:  # one figure, or two that do not make a range (4–S2)
+            out += [m.group(1) + m.group(2)] + ([m.group(3) + m.group(4)] if m.group(4) else [])
+    return out
+
+
 def figure_cites(lines, skip):
     """{label: [(line, sentence)]}: sentences that cite each figure, outside the
     lines in skip (images and captions)."""
@@ -2029,7 +2044,7 @@ def figure_cites(lines, skip):
         if i in skip:
             continue
         for sent in SENTENCE_END.split(line):
-            labels = {fig_key(n) for m in FIG_CITE.finditer(sent) for n in re.findall(r"S?\d+", m.group(1), re.I)}
+            labels = {fig_key(n) for m in FIG_CITE.finditer(sent) for n in cited_numbers(m.group(1))}
             for lab in sorted(labels):
                 if len(out[lab]) < 6:
                     out[lab].append((i, sent.strip()[:400]))
@@ -2046,7 +2061,7 @@ def find_figures(path, text):
     para = lambda j: next((k for k in range(j, len(lines)) if not blank(k)), None)
     for i, line in enumerate(lines):
         for m in IMG_REF.finditer(line):
-            src = urllib.parse.unquote(m.group(1) or m.group(2))
+            src = urllib.parse.unquote(next(g for g in m.groups() if g))
             if re.match(r"[a-z][a-z0-9+.-]*:", src, re.I) and not src.startswith("file:"):
                 continue  # a web image: not opened
             img = (base / re.sub(r"^file://", "", src)).resolve()
@@ -2149,13 +2164,21 @@ def collect_figures(files, outdir):
     figs = []
     for p in map(Path, files):
         if is_pdf(p):
-            figs += pdf_figure_pages(p, doc_text(p), outdir)
+            figs += [dict(f, draft=p.name) for f in pdf_figure_pages(p, doc_text(p), outdir)]
         else:
             text = p.read_text(errors="replace")
             found = find_figures(p, text)
             if not found and str(p) in PDF_SOURCE:
                 found = pdf_figure_pages(PDF_SOURCE[str(p)], text, outdir)
-            figs += found
+            figs += [dict(f, draft=p.name) for f in found]
+    # Two files can each have a Figure 1: name the file in the later one's label.
+    seen = set()
+    for f in figs:
+        if f["label"] in seen:
+            f["label"] = f'{f["label"]} ({f["draft"]})'
+        if f["label"] in seen:
+            f["label"] = f'{f["label"]} (figure {len(seen) + 1})'
+        seen.add(f["label"])
     FIGURES_LEFT = max(0, len(figs) - MAX_FIGURES)
     folder = Path(outdir) / "figures"
     folder.mkdir(parents=True, exist_ok=True)

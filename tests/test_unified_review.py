@@ -3615,6 +3615,29 @@ class FigureTests(unittest.TestCase):
                                          "Figure S5", "Figure S6"])
         self.assertEqual(cites["Figure 1"], [(3, "Fig. 1d–e shows it.")])
 
+    def test_numeric_figure_ranges_cite_every_figure_in_them(self):
+        cites = ur.figure_cites(["As Figs. 1–3 show.", "See Figures S2-S4.", "Fig. 9-12a holds."], set())
+        self.assertEqual(sorted(cites), ["Figure 1", "Figure 10", "Figure 11", "Figure 12", "Figure 2",
+                                         "Figure 3", "Figure 9", "Figure S2", "Figure S3", "Figure S4"])
+        self.assertEqual(ur.cited_numbers("4–S2"), ["4", "S2"])  # mixed main and supplement: not a range
+
+    def test_image_paths_with_spaces_and_single_quotes(self):
+        (self.tmp / "figure 1.png").write_bytes(b"png")
+        (self.tmp / "figure 2.png").write_bytes(b"png")
+        text = ("![](<figure 1.png>)\n\nFigure 1. One.\n\n<img src='figure 2.png' />\n\nFigure 2. Two.\n")
+        figs = ur.find_figures(self.tmp / "d.md", text)
+        self.assertEqual([(f["label"], Path(f["image"]).name) for f in figs],
+                         [("Figure 1", "figure 1.png"), ("Figure 2", "figure 2.png")])
+
+    def test_same_numbered_figures_in_two_files_are_both_kept(self):
+        for d in ("a", "b"):
+            (self.tmp / d).mkdir()
+            (self.tmp / d / "f.png").write_bytes(b"png")
+            (self.tmp / d / "draft.md").write_text("![](f.png)\n\nFigure 1. Cap.\n")
+        with mock.patch.object(ur, "prepare_figure", lambda src, dst: [str(dst)]):
+            ur.collect_figures([self.tmp / "a" / "draft.md", self.tmp / "b" / "draft.md"], self.tmp / "out")
+        self.assertEqual(list(ur.FIGURES), ["Figure 1", "Figure 1 (draft.md)"])
+
     def test_parse_findings_keeps_the_figure_line(self):
         reply = ("=== FINDING\nseverity: Major\nkind: evidence\nform: edit\ntitle: Panels repeat\n"
                  "quote: Kendall correlation of disease gene modules\nfigure: Figure 1\n---\n"
