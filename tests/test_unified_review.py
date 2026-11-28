@@ -3712,3 +3712,10 @@ class FigureTests(unittest.TestCase):
                       ur.not_assessed({"files": [str(draft)], "verify": True}))
         self.assertNotIn("images", ur.not_assessed({"files": [str(draft)], "verify": True,
                                                     "figures": {"reviewed": 2, "by": {"gpt": 2}}}))
+
+    def test_a_failure_repeated_across_figure_calls_is_recorded_once(self):
+        with mock.patch.object(ur, "FAILURES", []):
+            for _ in range(3):
+                ur.fail("figures", "argon", "usage limit")
+            ur.fail("vote", "argon", "usage limit")
+            self.assertEqual([f["stage"] for f in ur.FAILURES], ["figures", "vote"])

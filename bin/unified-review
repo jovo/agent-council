@@ -288,8 +288,11 @@ AUTH_ERROR = re.compile(r"not logged in|logged out|please (?:log ?in|sign in)|lo
 
 
 def fail(stage, name, reason):
-    FAILURES.append({"stage": stage, "model": name, "reason": reason})
-    runtime.log(f"  {name}: {stage} failed ({reason})")
+    """Record a failure once: per-figure calls can fail the same way many times."""
+    entry = {"stage": stage, "model": name, "reason": reason}
+    if entry not in FAILURES:
+        FAILURES.append(entry)
+        runtime.log(f"  {name}: {stage} failed ({reason})")
 
 
 def call(name, prompt, out, workdir, web=False, stage="call", images=None):
