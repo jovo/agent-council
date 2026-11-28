@@ -3562,3 +3562,160 @@ Closed, by their earlier ids: B7 and C2.
 
 if __name__ == "__main__":
     unittest.main()
+
+
+FIXTURE_FIGURES = REPO / "tests" / "fixtures" / "figures"
+
+
+class FigureTests(unittest.TestCase):
+    """The figure pass: finding figures, preparing their images, calling models
+    with them, and reporting what was reviewed."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.addCleanup(ur.FIGURES.clear)
+        self.addCleanup(ur.FIGURE_STATUS.clear)
+
+    def test_finds_each_image_with_its_caption_and_citing_sentences(self):
+        draft = FIXTURE_FIGURES / "draft.md"
+        figs = ur.find_figures(draft, draft.read_text())
+        self.assertEqual([f["label"] for f in figs], ["Figure 1", "Figure 2"])
+        self.assertTrue(figs[0]["caption"].startswith("**Figure 1. Cross-disorder"))
+        self.assertEqual(figs[0]["line"], 7)
+        self.assertEqual(Path(figs[1]["image"]).name, "figure2.png")
+        self.assertEqual([n for n, _ in figs[0]["cites"]], [3])
+        self.assertIn("highest regional disease load", figs[1]["cites"][0][1])  # cited as "Fig. 2"
+
+    def test_pandoc_line_breaks_and_html_images_still_pair_with_captions(self):
+        (self.tmp / "media").mkdir()
+        (self.tmp / "media" / "a.png").write_bytes(b"png")
+        text = ('Intro.\n\n<img src="./media/a.png" style="width:6in" />\\\n\\\n'
+                "Figure 4. Support cells differ by layer.\n")
+        figs = ur.find_figures(self.tmp / "d.md", text)
+        self.assertEqual([(f["label"], f["line"]) for f in figs], [("Figure 4", 5)])
+
+    def test_caption_above_the_image_and_unlabeled_images(self):
+        for name in ("a.png", "b.png"):
+            (self.tmp / name).write_bytes(b"png")
+        text = "Supplementary Figure S2. Counts per dataset.\n\n![](a.png)\n\nText.\n\n![](b.png)\n\n## Next\n"
+        figs = ur.find_figures(self.tmp / "d.md", text)
+        self.assertEqual([f["label"] for f in figs], ["Figure S2", "Image 2"])
+        self.assertEqual(figs[1]["caption"], "")
+
+    def test_web_images_and_missing_files_are_skipped(self):
+        text = "![](https://example.org/x.png)\n\n![](missing.png)\n"
+        self.assertEqual(ur.find_figures(self.tmp / "d.md", text), [])
+
+    def test_citations_cover_lists_ranges_and_supplements(self):
+        lines = ["See Figures S5 & S6 for layers.", "Overlap was minimal (Figure 6c, 7c).",
+                 "Fig. 1d–e shows it. Unrelated sentence.", "Supplementary Figure S3 and S4 list genes."]
+        cites = ur.figure_cites(lines, set())
+        self.assertEqual(sorted(cites), ["Figure 1", "Figure 6", "Figure 7", "Figure S3", "Figure S4",
+                                         "Figure S5", "Figure S6"])
+        self.assertEqual(cites["Figure 1"], [(3, "Fig. 1d–e shows it.")])
+
+    def test_parse_findings_keeps_the_figure_line(self):
+        reply = ("=== FINDING\nseverity: Major\nkind: evidence\nform: edit\ntitle: Panels repeat\n"
+                 "quote: Kendall correlation of disease gene modules\nfigure: Figure 1\n---\n"
+                 "problem: Panels a and b show the same matrix.\n\n~~a~~ 🟢 **b**\n")
+        f = ur.parse_findings(reply)[0]
+        self.assertEqual(f["figure"], "Figure 1")
+        self.assertNotIn("figure", ur.parse_findings(REVIEW)[0])
+
+    def test_figure_prompt_lists_files_and_asks_for_the_figure_line(self):
+        ur.FIGURES["Figure 1"] = {"label": "Figure 1", "image": "x", "caption": "Figure 1. A.", "line": 7,
+                                  "cites": [(3, "See Figure 1.")], "files": ["/f/fig-01.png", "/f/fig-01-tile1.png"]}
+        p = ur.review_prompt("the draft", "", "", figures=ur.figure_block(["Figure 1"]))
+        self.assertTrue(p.startswith("Review the figures of the draft below."))
+        self.assertIn("figure: <the label of the figure", p)
+        self.assertIn("Figure 1: image /f/fig-01.png; tiles /f/fig-01-tile1.png", p)
+        self.assertIn("cited at line 3: See Figure 1.", p)
+        self.assertNotIn("figure: <", ur.review_prompt("the draft", "", ""))
+
+    def test_figure_of_falls_back_to_the_quote(self):
+        ur.FIGURES["Figure 2"] = {"label": "Figure 2", "caption": "Figure 2. Mean load.", "cites": [], "files": ["a"]}
+        self.assertEqual(ur.figure_of({"figure": "Fig. 2"}), "Figure 2")
+        self.assertEqual(ur.figure_of({"quote": "Mean load."}), "Figure 2")
+        self.assertEqual(ur.figure_of({"quote": "elsewhere"}), "")
+
+    def run_call(self, harness, images):
+        seen = {}
+
+        def fake(cmd, **kw):
+            seen["cmd"] = cmd
+            return SimpleNamespace(returncode=0, stdout="fine")
+        out = self.tmp / "out.md"
+        out.write_text("fine")  # codex writes its own output file
+        with mock.patch.object(ur.subprocess, "run", fake), \
+                mock.patch.dict(ur.PANELISTS, {"m": (harness, "model-x", "M")}):
+            ur.call_once("m", "prompt", out, self.tmp, False, images)
+        return seen["cmd"]
+
+    def test_each_harness_gets_the_images(self):
+        imgs = [str(self.tmp / "figures" / "fig-01.png"), str(self.tmp / "figures" / "fig-01-tile1.png")]
+        codex = self.run_call("codex", imgs)
+        self.assertIn(f"--image={imgs[0]}", codex)
+        self.assertLess(codex.index(f"--image={imgs[1]}"), codex.index("-o"))  # the prompt is not read as an image
+        claude = self.run_call("claude", imgs)
+        self.assertEqual(claude[claude.index("--tools") + 1], "Read")
+        self.assertEqual(claude[claude.index("--add-dir") + 1], str(self.tmp / "figures"))
+        self.assertIn('model_reasoning_effort="medium"', codex)  # images raise low effort
+        self.assertIn('model_reasoning_effort="low"', self.run_call("codex", None))
+        with mock.patch.dict(ur.EFFORT, {"m": "high"}):
+            self.assertIn('model_reasoning_effort="high"', self.run_call("codex", imgs))
+        cursor = self.run_call("cursor", imgs)
+        self.assertEqual(cursor[cursor.index("--workspace") + 1], str(self.tmp / "figures"))
+        self.assertNotIn("--add-dir", self.run_call("claude", None))
+
+    @unittest.skipUnless(shutil.which("sips"), "sips is macOS only")
+    def test_large_images_get_tiles_and_small_ones_do_not(self):
+        out = self.tmp / "out"
+        ur.collect_figures([FIXTURE_FIGURES / "draft.md"], out)
+        self.assertEqual(list(ur.FIGURES), ["Figure 1", "Figure 2"])
+        self.assertEqual(len(ur.FIGURES["Figure 1"]["files"]), 1)  # 1000 px: under the tile size
+        with mock.patch.object(ur, "FIG_TILE_PX", 800):
+            files = ur.prepare_figure(FIXTURE_FIGURES / "figure1.png", out / "big.png")
+        self.assertEqual(len(files), 5)
+        self.assertEqual(ur.image_size(files[1]), (550, 275))
+
+    def test_figure_review_batches_figures_and_records_failures(self):
+        for k in range(1, 6):
+            ur.FIGURES[f"Figure {k}"] = {"label": f"Figure {k}", "caption": f"Figure {k}. Cap {k}.", "cites": [],
+                                         "line": k, "files": [f"/f/fig-0{k}.png"]}
+        calls = []
+        reply = ("=== FINDING\nseverity: Minor\nkind: evidence\nform: edit\ntitle: T\nquote: Cap 5.\n---\n"
+                 "problem: P.\n\n~~Cap~~ 🟢 **Caption**\n")
+
+        def fake_call(m, prompt, out, workdir, web=False, stage="", images=None):
+            calls.append((prompt, images))
+            return reply if "Figure 5" in prompt else None
+        with mock.patch.object(ur, "call", fake_call):
+            fs = ur.figure_review("gpt", lambda labels: "\n".join(labels), self.tmp, self.tmp)
+        self.assertEqual([len(i) for _, i in calls], [1] * 5)  # one figure per call
+        self.assertEqual([f["figure"] for f in fs], ["Figure 5"])  # found from the quote
+        self.assertEqual(ur.FIGURE_STATUS["gpt"], 1)
+        with mock.patch.object(ur, "call", lambda *a, **k: None):
+            self.assertEqual(ur.figure_review("argon", lambda labels: "", self.tmp, self.tmp), [])
+        self.assertIsNone(ur.FIGURE_STATUS["argon"])
+
+    def test_reports_who_reviewed_the_figures(self):
+        r = {"labels": {"gpt": "GPT", "argon": "Argon"},
+             "figures": {"reviewed": 23, "left_out": 0, "by": {"gpt": 23, "argon": None}}}
+        self.assertEqual(ur.figures_line(r), "Figures: 23 reviewed with their images by GPT. Argon could not review them.")
+        r["figures"]["by"] = {"gpt": 23, "argon": 19}
+        self.assertEqual(ur.figures_line(r), "Figures: 23 reviewed with their images by GPT and Argon"
+                                             " (in part: Argon 19 of 23).")
+        self.assertEqual(ur.figures_line({"figures": {"reviewed": 0}}), "")
+        draft = FIXTURE_FIGURES / "draft.md"
+        self.assertIn("the images the draft links to",
+                      ur.not_assessed({"files": [str(draft)], "verify": True}))
+        self.assertNotIn("images", ur.not_assessed({"files": [str(draft)], "verify": True,
+                                                    "figures": {"reviewed": 2, "by": {"gpt": 2}}}))
+
+    def test_a_failure_repeated_across_figure_calls_is_recorded_once(self):
+        with mock.patch.object(ur, "FAILURES", []):
+            for _ in range(3):
+                ur.fail("figures", "argon", "usage limit")
+            ur.fail("vote", "argon", "usage limit")
+            self.assertEqual([f["stage"] for f in ur.FAILURES], ["figures", "vote"])
