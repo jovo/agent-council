@@ -1,10 +1,12 @@
 """The plugin manifests, the APM manifest, and the MCP server."""
 import json
+import os
 import re
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -51,46 +53,99 @@ class Manifests(unittest.TestCase):
 
 
 class Server(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name).resolve()
+        self.f = self.d / "memo.md"
+        self.f.write_text("# Memo\n")
+        for patch in (mock.patch.object(mcp, "ROOTS", [self.d]), mock.patch.object(mcp, "JOBS", self.d / "jobs")):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
     def call(self, method, params=None, mid=1):
         return mcp.handle({"jsonrpc": "2.0", "id": mid, "method": method, "params": params or {}})
 
-    def test_initialize_and_list(self):
+    def tool(self, name, **args):
+        r = self.call("tools/call", {"name": name, "arguments": args})["result"]
+        return r["isError"], r["content"][0]["text"]
+
+    def test_initialize_negotiates_a_supported_version(self):
         r = self.call("initialize", {"protocolVersion": "2025-03-26"})["result"]
         self.assertEqual((r["protocolVersion"], r["serverInfo"]["name"]), ("2025-03-26", "agent-council"))
+        self.assertEqual(self.call("initialize", {"protocolVersion": "1999-01-01"})["result"]["protocolVersion"],
+                         mcp.SUPPORTED[0])
         names = [t["name"] for t in self.call("tools/list")["result"]["tools"]]
         self.assertEqual(names, ["review", "review_status", "review_item", "review_decide"])
         self.assertIsNone(mcp.handle({"jsonrpc": "2.0", "method": "notifications/initialized"}))
         self.assertEqual(self.call("nope")["error"]["code"], -32601)
 
-    def test_tool_errors_come_back_as_results(self):
-        r = self.call("tools/call", {"name": "review", "arguments": {"file": "relative.md"}})["result"]
-        self.assertTrue(r["isError"])
-        r = self.call("tools/call", {"name": "review_status", "arguments": {"job": "../x"}})["result"]
-        self.assertTrue(r["isError"])
+    def test_malformed_requests_get_errors_not_a_crash(self):
+        self.assertEqual(mcp.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": []})["error"]["code"], -32600)
+        self.assertEqual(self.call("tools/call", {"name": "review", "arguments": []})["error"]["code"], -32602)
+        self.assertEqual(self.call("tools/call", {"name": 5})["error"]["code"], -32602)
+        for args in ({"job": 1}, {"job": "../x"}, {"job": "20261128-001543-zzzzzz"}):
+            self.assertTrue(self.tool("review_status", **args)[0], args)
+        self.assertTrue(self.tool("review", file=str(self.f), panel=["gpt"])[0])
+        self.assertTrue(self.tool("review_decide", file=str(self.f), decision="maybe", items="1")[0])
 
-    def test_review_runs_the_cli_in_the_background_with_its_options(self):
-        with tempfile.TemporaryDirectory() as d:
-            f = Path(d) / "memo.md"
-            f.write_text("# Memo\n")
-            seen = {}
-            fake = lambda cmd, **kw: seen.update(cmd=cmd, cwd=kw["cwd"]) or mock.Mock(poll=lambda: None)
-            with mock.patch.object(mcp, "JOBS", Path(d) / "jobs"), mock.patch.object(mcp.subprocess, "Popen", fake):
-                r = self.call("tools/call", {"name": "review", "arguments": {
-                    "file": str(f), "panel": "gpt,argon", "focus": "methods", "verify": True}})["result"]
-                job = r["content"][0]["text"].split("Job: ")[1].split(".")[0]
-                s = self.call("tools/call", {"name": "review_status", "arguments": {"job": job}})["result"]
-            self.assertEqual(seen["cmd"][1:], [str(mcp.CLI), "-p", "gpt,argon", "-n", "methods", "--verify", str(f)])
-            self.assertEqual(seen["cwd"], f.parent)
-            self.assertTrue(s["content"][0]["text"].startswith("Running"))
+    def test_files_outside_the_roots_or_in_hidden_folders_are_refused(self):
+        hidden = self.d / ".secrets" / "key.md"
+        hidden.parent.mkdir()
+        hidden.write_text("x")
+        link = self.d / "link.md"
+        link.symlink_to("/etc/hosts")
+        for f in ("relative.md", str(hidden), str(link), "/etc/hosts"):
+            err, text = self.tool("review", file=f)
+            self.assertTrue(err, f)
 
-    def test_decide_passes_the_flag_and_note(self):
-        with tempfile.TemporaryDirectory() as d:
-            f = Path(d) / "memo.md"
-            f.write_text("x")
-            with mock.patch.object(mcp, "run_cli", lambda args, cwd: (" ".join(args), False)):
-                r = self.call("tools/call", {"name": "review_decide", "arguments": {
-                    "file": str(f), "decision": "ignore", "items": "5,7", "note": "out of scope"}})["result"]
-        self.assertEqual(r["content"][0]["text"], "--ignore 5,7 --note out of scope")
+    def test_review_runs_the_cli_in_the_background_and_status_follows_the_exit_file(self):
+        seen = {}
+        fake = lambda cmd, **kw: seen.update(cmd=cmd, cwd=kw["cwd"]) or SimpleNamespace(pid=os.getpid())
+        with mock.patch.object(mcp.subprocess, "Popen", fake):
+            err, text = self.tool("review", file=str(self.f), panel="gpt,argon", focus="methods", verify=True)
+        self.assertFalse(err, text)
+        job = text.split("Job: ")[1].split(".")[0]
+        self.assertEqual(seen["cmd"][4:], [sys.executable, str(mcp.CLI), "-p", "gpt,argon", "-n", "methods", "--verify", str(self.f)])
+        self.assertEqual(seen["cwd"], self.f.parent)
+        self.assertTrue(self.tool("review_status", job=job)[1].startswith("Running"))
+        d = self.d / "jobs" / job
+        run = self.d / "run"
+        run.mkdir()
+        (d / "stdout.txt").write_text(f"Notes: {self.d}/notes/review.md\n{run}/unified.md\n")
+        (d / "exit").write_text("0\n")
+        text = self.tool("review_status", job=job)[1]
+        self.assertIn("Done.", text)
+        self.assertIn("Fact-check: still running", text)
+        (run / "factcheck.md").write_text("x")
+        self.assertIn("Fact-check: done", self.tool("review_status", job=job)[1])
+        (d / "exit").write_text("1\n")
+        self.assertIn("Failed (exit 1)", self.tool("review_status", job=job)[1])
+
+    def test_a_job_whose_process_died_reports_it(self):
+        d = self.d / "jobs" / "20261128-001543-abcdef"
+        d.mkdir(parents=True)
+        (d / "job.json").write_text(json.dumps({"pid": 2 ** 22 + 12345}))
+        (d / "log.txt").write_text("1/4 review\n")
+        self.assertIn("Stopped without finishing", self.tool("review_status", job="20261128-001543-abcdef")[1])
+
+    def test_item_and_decide_name_the_files_own_run(self):
+        calls = []
+        with mock.patch.object(mcp, "run_cli", lambda args, cwd: (calls.append(args), (" ".join(args), False))[1]), \
+                mock.patch.object(mcp, "run_of", lambda f: Path("/runs/r1")):
+            self.tool("review_item", file=str(self.f), items="3")
+            self.tool("review_decide", file=str(self.f), decision="ignore", items="5,7", note="out of scope")
+        self.assertEqual(calls, [["--item", "3", "--run", "/runs/r1"],
+                                 ["--ignore", "5,7", "--run", "/runs/r1", "--note", "out of scope"]])
+
+    def test_run_of_finds_only_this_files_review(self):
+        ur = mcp.cli_module()
+        with mock.patch.object(ur, "runs_for", lambda p: [Path("/runs/new")] if p == self.f else []):
+            self.assertEqual(mcp.run_of(self.f), Path("/runs/new"))
+            with self.assertRaises(ValueError):
+                mcp.run_of(self.d / "other.md")
 
 
 if __name__ == "__main__":
