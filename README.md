@@ -189,6 +189,17 @@ Then run `./install.sh`. It links `unified-review`, `make-pdf`, `edit-md`, and `
 
 **In a GitHub Codespace (untested).** To run the tool in the cloud instead of on your Mac, name this repository as your dotfiles repository in your [Codespaces settings](https://github.com/settings/codespaces). Every new codespace then runs `install.sh`, which runs `codespaces/setup.sh` to install the three CLIs, poppler, and Ghostscript, and fixes the page's port at 8737. Log in to each CLI once per codespace, or store a `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY`, a `CODEX_API_KEY`, and a `CURSOR_API_KEY` as Codespaces secrets. `unified-review --page FILE` then prints the page's forwarded address, which only your GitHub account can open. Edits go to the codespace's checkout, so commit and push from there. The codespace uses your monthly Codespaces allowance and stops after its idle timeout.
 
+### As a plugin
+
+The repo is also a Claude Code plugin, a GitHub Copilot CLI plugin, an APM package, and an MCP server. Each install brings the skills and `unified-review`. The model CLIs above still need to be installed and logged in, since the panel runs on them.
+
+- **Claude Code:** `claude plugin marketplace add jovo/agent-council`, then `claude plugin install agent-council@jovo`. Skills are namespaced, as in `/agent-council:unified-review`. The commands in `bin/` go on the PATH of Claude's Bash tool. The plugin also starts the MCP server. If you ran `install.sh`, remove its skill links in `~/.claude/skills` so each skill loads once.
+- **GitHub Copilot CLI:** `copilot plugin install jovo/agent-council`. It reads `.github/plugin/plugin.json`: the skills and the MCP server.
+- **APM:** `apm install jovo/agent-council --target copilot` installs the skills into `.agents/skills/`.
+- **MCP server, for any client:** `python3 mcp/agent_council_mcp.py`, a stdio server with no dependencies. Its tools are `review`, which starts a review in the background and returns a job id, `review_status`, `review_item` (the `--item` text), and `review_decide` (`--applied` or `--ignore`). In VS Code: `code --add-mcp '{"name":"agent-council","type":"stdio","command":"python3","args":["/path/to/agent-council/mcp/agent_council_mcp.py"]}'`.
+
+A plugin install does not fetch the `plain-words` word lists or install the PDF fonts. Run `plain-words fetch` once, and `install.sh` for the fonts. The Copilot and APM installs are untested: neither CLI was available when they were written, so they follow the published formats.
+
 ## Limits
 
 - Grouping duplicates depends on voters flagging them. Two findings that make the same point about different sentences can both survive.

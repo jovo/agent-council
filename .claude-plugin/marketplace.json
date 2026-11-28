@@ -1,0 +1,17 @@
+{
+  "name": "jovo",
+  "owner": {
+    "name": "jovo",
+    "url": "https://github.com/jovo"
+  },
+  "metadata": {
+    "description": "agent-council: multi-lab draft review and writing skills."
+  },
+  "plugins": [
+    {
+      "name": "agent-council",
+      "source": "./",
+      "description": "Multi-lab draft review (unified-review) and writing skills for papers, proposals, figures, statistics, slides, and PDFs."
+    }
+  ]
+}
