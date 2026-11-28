@@ -1,0 +1,21 @@
+{
+  "name": "agent-council",
+  "version": "0.1.0",
+  "description": "Multi-lab draft review (unified-review: GPT and Gemini review and vote, Claude mediates) and writing skills for papers, proposals, figures, statistics, slides, and PDFs.",
+  "author": {
+    "name": "jovo",
+    "url": "https://github.com/jovo"
+  },
+  "homepage": "https://github.com/jovo/agent-council",
+  "repository": "https://github.com/jovo/agent-council",
+  "license": "MIT",
+  "keywords": [
+    "review",
+    "writing",
+    "multi-model",
+    "papers",
+    "proposals",
+    "figures",
+    "statistics"
+  ]
+}

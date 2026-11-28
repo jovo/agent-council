@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "agent-council": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/agent_council_mcp.py"]
+    }
+  }
+}

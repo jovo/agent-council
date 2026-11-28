@@ -1,0 +1,6 @@
+# APM (Agent Package Manager) manifest. APM installs the skills in skills/;
+# with --target copilot they land in .agents/skills/ (or ~/.agents/skills/).
+# The MCP server ships with the Claude Code and Copilot plugins instead.
+name: agent-council
+version: 0.1.0
+description: Multi-lab draft review (unified-review) and writing skills for papers, proposals, figures, statistics, slides, and PDFs.
