@@ -76,9 +76,12 @@ copy, and a PDF's pages with images or figure captions are rendered to PNG). It
 pairs each image with its caption and the sentences that cite it. It copies the
 images to `figures/` in the run folder, at most 2,000 pixels on a side, and
 splits large ones into four overlapping tiles so small values stay legible.
-Each reviewer then looks at the figures in batches of four, beside the text
-review. It checks each figure against its caption and text, and looks for
-repeated panels, missing groups, and encodings a reader cannot decode. Figure
+Each reviewer then looks at the figures one per call, six calls at a time,
+after its text review. A Codex reviewer runs these at medium effort or more:
+at low effort, or with several figures per call, it missed duplicated panels in
+a test. Each call checks the figure against its caption and text, compares
+panels of one kind pair by pair, and looks for missing groups and encodings a
+reader cannot decode. Figure
 findings quote the caption or a citing sentence, so they are placed and applied
 like any other. Voters and the mediator get the images of the figures they
 judge. Codex gets the images attached, Claude opens them with Read, and

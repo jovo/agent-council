@@ -3660,6 +3660,10 @@ class FigureTests(unittest.TestCase):
         claude = self.run_call("claude", imgs)
         self.assertEqual(claude[claude.index("--tools") + 1], "Read")
         self.assertEqual(claude[claude.index("--add-dir") + 1], str(self.tmp / "figures"))
+        self.assertIn('model_reasoning_effort="medium"', codex)  # images raise low effort
+        self.assertIn('model_reasoning_effort="low"', self.run_call("codex", None))
+        with mock.patch.dict(ur.EFFORT, {"m": "high"}):
+            self.assertIn('model_reasoning_effort="high"', self.run_call("codex", imgs))
         cursor = self.run_call("cursor", imgs)
         self.assertEqual(cursor[cursor.index("--workspace") + 1], str(self.tmp / "figures"))
         self.assertNotIn("--add-dir", self.run_call("claude", None))
@@ -3688,7 +3692,7 @@ class FigureTests(unittest.TestCase):
             return reply if "Figure 5" in prompt else None
         with mock.patch.object(ur, "call", fake_call):
             fs = ur.figure_review("gpt", lambda labels: "\n".join(labels), self.tmp, self.tmp)
-        self.assertEqual(sorted(len(i) for _, i in calls), [1, 4])
+        self.assertEqual([len(i) for _, i in calls], [1] * 5)  # one figure per call
         self.assertEqual([f["figure"] for f in fs], ["Figure 5"])  # found from the quote
         self.assertEqual(ur.FIGURE_STATUS["gpt"], 1)
         with mock.patch.object(ur, "call", lambda *a, **k: None):

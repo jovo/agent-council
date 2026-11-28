@@ -411,6 +411,16 @@ Read every page, including figures, tables, and equations. Quote its text
 exactly as printed."""
 
 
+def codex_effort(name, images=None):
+    """A Codex model's reasoning effort: its own, but at least FIG_EFFORT when it
+    must look at images, since at low effort it skims them."""
+    effort = EFFORT.get(name, "low")
+    order = ["minimal", "low", "medium", "high", "xhigh"]
+    if images and effort in order and order.index(effort) < order.index(FIG_EFFORT):
+        return FIG_EFFORT
+    return effort
+
+
 def call_once(name, prompt, out, workdir, web, images=None):
     """One attempt. Returns (text, None) or (None, reason). images: files the
     model opens itself. Codex also gets them attached, and cursor-agent works in
@@ -432,7 +442,7 @@ def call_once(name, prompt, out, workdir, web, images=None):
             cmd += ["--add-dir", str(Path(images[0]).parent)]
     elif harness == "codex":
         cmd = [runtime.CODEX] + (["--search"] if web else []) + (
-            ["-m", model, "-c", f'model_reasoning_effort="{EFFORT.get(name, "low")}"'] if model else []) + [
+            ["-m", model, "-c", f'model_reasoning_effort="{codex_effort(name, images)}"'] if model else []) + [
             "exec", "-s", "read-only", "--skip-git-repo-check", "--ephemeral",
             "--color", "never", "-C", str(workdir), *(f"--image={i}" for i in images), "-o", str(out), prompt]
     elif harness == "agy":
@@ -1989,7 +1999,12 @@ FIG_CITE = re.compile(r"\b(?:Supplementary\s+|Extended\s+Data\s+)?Fig(?:ure)?s?\
 # A sentence ends at . ! or ? and a space, but not after Fig., Figs., al., e.g., or i.e.
 SENTENCE_END = re.compile(r"(?<=[.!?])(?<!\bFig\.)(?<!\bFigs\.)(?<!\bal\.)(?<!e\.g\.)(?<!i\.e\.)\s+")
 MAX_FIGURES = 40  # a longer draft's later figures are left out, and the review says so
-FIG_BATCH = 4  # figures per model call: each brings its image and four tiles
+# One figure per call: in a test on a manuscript, GPT-5.6 Luna found duplicated
+# heatmap panels with one figure per call at medium effort, and missed them with
+# two or four figures per call, or at low effort.
+FIG_BATCH = 1
+FIG_WORKERS = 6  # figure calls at once, per reviewer
+FIG_EFFORT = "medium"  # the least Codex effort for a call that looks at images
 FIG_MAX_PX = 2000  # longest side of an image sent to a model
 FIG_TILE_PX = 1400  # an image this large or larger also goes as four overlapping tiles
 FIGURES = {}  # label: {"label", "image", "caption", "line", "cites", "files"}, set by collect_figures
@@ -2157,7 +2172,11 @@ cite it:
 - a caption or text claim the image does not show or contradicts: values, which
   group is highest, marked regions, panel letters, cell types, counts;
 - panels the caption describes that are missing, or panels it does not describe;
-- repeated panels: the same plot, matrix, or values shown under different labels;
+- repeated panels: the same plot, matrix, or values shown under different
+  labels. When a figure has several panels of one kind (heatmaps, matrices,
+  bar charts, embeddings), compare each pair: read the same three or four cells
+  or bars in both, from the tiles, and report any two panels whose values all
+  match although their labels differ;
 - axes, units, legends, colorbars, or encodings a reader cannot decode;
 - groups or conditions missing from a panel without explanation, or drawn as zero;
 - text too small or clipped to read, and encodings that rely on red and green alone.
@@ -2237,7 +2256,8 @@ def figure_review(m, prompt_for, outdir, workdir):
         for f in fs:
             f["figure"] = figure_of(f) or (b[0] if len(b) == 1 else "")
         return b, fs
-    got = parallel(one, range(len(batches)))
+    with ThreadPoolExecutor(min(FIG_WORKERS, len(batches)) or 1) as ex:
+        got = dict(zip(range(len(batches)), ex.map(one, range(len(batches)))))
     done = [v for v in got.values() if v is not None]
     FIGURE_STATUS[m] = sum(len(b) for b, _ in done) if done else None
     return [f for _, fs in done for f in fs]
