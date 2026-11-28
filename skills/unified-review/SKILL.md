@@ -228,7 +228,10 @@ check after each Markdown edit.
 The file opens with its title and goes straight to the items. Everything else
 goes in one section at the end, `## About this review`: the counts by
 severity, the date the line numbers refer to, the review run, how ids work,
-which items are closed and why, and what the review could not assess. Nothing
+which Majors need new analysis, data, or results and which an edit to the text
+fixes, which items are closed and why, and what the review could not assess.
+Sort a Major by the fix the item shows: new work when that fix cannot be true
+until the author reruns an analysis, collects data, or replaces a result. Nothing
 else: findings the mediator dropped, the mechanical checks, and the next free
 ids stay out of it (the script keeps the next ids in a hidden comment). An item
 in A, B, or C never says how the panel or the mediator settled it, such as which
