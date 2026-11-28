@@ -197,6 +197,23 @@ class Parsing(unittest.TestCase):
         self.assertEqual(fs[1]["quote"], "")
         self.assertIn("753 BC", fs[0]["body"])
 
+    def test_parse_work(self):
+        for said, want in (("new work", "new work"), ("New work (rerun)", "new work"), ("edit", "edit"), (None, "")):
+            fs = ur.parse_findings(finding_text("T", "q", "p", "~~a~~ 🟢 **b**", "Major", said))
+            self.assertEqual(fs[0]["work"], want)
+        self.assertIn("work: edit | new work", ur.review_prompt("draft", "", "rules"))
+
+    def test_group_work_follows_the_fix_shown(self):
+        byid = {"A1": {"work": "new work"}, "B1": {"work": "edit"}, "B2": {"work": "edit"}}
+        g = {"rep": {"work": "edit"}, "members": ["A1", "B1", "B2"]}
+        self.assertEqual(ur.group_work({**g, "alts": [{"id": "A1", "fix": "x"}]}, byid), "new work")
+        self.assertEqual(ur.group_work({**g, "alts": [{"id": "B1", "fix": "x"}]}, byid), "edit")
+        self.assertEqual(ur.group_work({**g, "alts": None}, byid), "edit")  # one reviewer: its own finding
+        own = {"by": "claude:opus", "fix": "x", "unreviewed": True}
+        self.assertEqual(ur.group_work({**g, "alts": [own]}, byid), "edit")  # mediator's fix: 2 of 3 say edit
+        self.assertEqual(ur.group_work({**g, "members": ["A1", "B1"], "alts": [own]}, byid), "new work")  # a tie
+        self.assertEqual(ur.group_work({"rep": {}, "members": ["C1"], "alts": [own]}, {"C1": {}}), "")
+
     def test_parse_question_form(self):
         fs = ur.parse_findings("=== FINDING\nseverity: Minor\nkind: clarity\nform: question\n"
                                "title: Which gripper\nquote: a robot arm\n---\nTwo-finger or three-finger?\n")
@@ -2408,8 +2425,9 @@ def two_lab_review(d, replies, votes, mediation=None, draft_text=DRAFT2, fails=(
     return out, prompts
 
 
-def finding_text(title, quote, problem, fix, severity="Minor"):
-    return (f"=== FINDING\nseverity: {severity}\nkind: logic\nform: edit\ntitle: {title}\nquote: {quote}\n---\n"
+def finding_text(title, quote, problem, fix, severity="Minor", work=None):
+    return (f"=== FINDING\nseverity: {severity}\nkind: logic\nform: edit\n" + (f"work: {work}\n" if work else "")
+            + f"title: {title}\nquote: {quote}\n---\n"
             f"problem: {problem}\n{fix}\n")
 
 
@@ -2799,10 +2817,12 @@ SEVEN = ["Rivers freeze each winter", "Copper conducts heat well", "Owls hunt af
          "Maples drop red leaves", "Bread rises with yeast", "Comets orbit the sun"]
 
 
-def claims(*ns, severity="Major"):
-    """One finding per claim number in DRAFT7, so two reviewers with the same text agree on each."""
+def claims(*ns, severity="Major", work=None):
+    """One finding per claim number in DRAFT7, so two reviewers with the same text agree on each.
+    work is one value for all, or {claim number: value}."""
     return "".join(finding_text(f"Claim {n} fails", f"{SEVEN[n - 1]}.", "It fails.",
-                                f"{SEVEN[n - 1]} 🟢 **in no case**.", severity) for n in ns)
+                                f"{SEVEN[n - 1]} 🟢 **in no case**.", severity,
+                                work.get(n) if isinstance(work, dict) else work) for n in ns)
 
 
 DRAFT7 = "# Intro\n\n" + "\n\n".join(f"{x}." for x in SEVEN) + "\n"
@@ -3321,15 +3341,28 @@ Closed, by their earlier ids: B7 and C2.
         self.assertNotIn("Sky color is wrong", t)
         self.assertNotIn("Next free ids", t)
 
-    def majors(self, ns, minor=(), rank=""):
+    def heads(self, t, name):
+        return re.findall(r"^### (\w+)\.", t.split(f"## {name}\n")[1].split("\n## ")[0], re.M)
+
+    def test_about_sorts_the_majors_by_the_work_their_fixes_need(self):
+        t = self.majors([1, 2, 3], work={1: "new work", 2: "edit", 3: "new work"})
+        about = t.split("## About this review")[1]
+        self.assertIn("- Majors that need new analysis, data, or results: A1, A3. Majors an edit to the text fixes: A2.", about)
+        self.assertNotIn("Not sorted", about)
+
+    def test_about_marks_majors_no_reviewer_sorted(self):
+        t = self.majors([1, 2], work={1: "edit"})
+        self.assertIn("- Majors an edit to the text fixes: A1. Not sorted: A2.", t)
+
+    def test_no_majors_line_without_majors(self):
+        self.assertEqual(ur.majors_work_line([], {}), "")
+
+    def majors(self, ns, minor=(), rank="", work=None):
         f = self.d / "memo.md"
         if not f.exists():
             f.write_text(DRAFT7)
-        text = claims(*ns) + claims(*minor, severity="Minor")
+        text = claims(*ns, work=work) + claims(*minor, severity="Minor")
         return self.review({"gpt": text, "argon": text}, rank=rank)[0].read_text()
-
-    def heads(self, t, name):
-        return re.findall(r"^### (\w+)\.", t.split(f"## {name}\n")[1].split("\n## ")[0], re.M)
 
     def test_a_severity_change_moves_the_item_and_keeps_the_old_id(self):
         self.majors([1, 2], [3])

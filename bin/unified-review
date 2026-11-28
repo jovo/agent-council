@@ -793,6 +793,7 @@ Otherwise output only findings, each in exactly this form, and nothing else:
 severity: Major | Minor | Nitpick
 kind: logic | evidence | clarity | style
 form: edit | question
+work: edit | new work
 title: <under 12 words>
 quote: <the exact text this finding targets, copied verbatim from the draft or
   the author's focus material. For a finding about one section, its heading
@@ -818,6 +819,11 @@ claim; Minor, the central claims stand without the fix, but it makes the draft
 clearer, more complete, or easier to reproduce; Nitpick, wording, style, or a
 typo. A missing reference, a wrong count or value, a mislabeled panel, or an
 overworded sentence is Minor or Nitpick, unless a central claim rests on it.
+
+Work: edit, your fix is a change to the text alone (a narrowed claim, an
+added caveat, a definition, a fixed number or citation); new work, your fix
+cannot be truthful until the author runs a new analysis or experiment, collects
+data, or replaces a result.
 
 Kinds: logic, a step that does not follow (missing premise, non sequitur,
 circular setup, unaddressed alternative, over- or underclaim, or an inference
@@ -968,11 +974,11 @@ def parse_findings(text):
         head, sep, body = block.partition("\n---")
         if not sep:
             continue
-        f = {"severity": "Minor", "kind": "", "form": "edit", "title": "", "quote": ""}
+        f = {"severity": "Minor", "kind": "", "form": "edit", "work": "", "title": "", "quote": ""}
         for line in head.strip().splitlines():
             k, _, v = line.partition(":")
             k = k.strip().lower()
-            if k in ("severity", "kind", "form", "title", "quote"):
+            if k in ("severity", "kind", "form", "work", "title", "quote"):
                 f[k] = v.strip()
         sev = f["severity"].lower()
         # The first severity name in the field wins, as in "polish (minor)" from older reviewers.
@@ -980,6 +986,7 @@ def parse_findings(text):
         f["severity"] = canon_sev(hits[0][1]) if hits else "Minor"
         f["kind"] = next((k for k in KINDS if k in f["kind"].lower()), "")
         f["form"] = "question" if "question" in f["form"].lower() else "edit"
+        f["work"] = "new work" if "new" in f["work"].lower() else "edit" if "edit" in f["work"].lower() else ""
         f["problem"], f["fix"] = split_problem(strip_end(body))
         # The body keeps the old shape, the problem then the fix, which the page and the diff parser read.
         f["body"] = "\n\n".join(p for p in (f["problem"], f["fix"]) if p)
@@ -1549,6 +1556,20 @@ def cap_majors(groups, rank=None, room=MAX_MAJORS):
     for g in demoted:
         g["severity"], g["demoted"] = "Minor", True
     return demoted
+
+
+def group_work(g, byid):
+    """Whether the fix the review shows is a change to the text alone ("edit")
+    or needs new analysis, data, or results first ("new work"), as its author
+    said. A fix the mediator wrote goes by the group's findings, a tie by new
+    work. "" when no finding says."""
+    alt = (g.get("alts") or [None])[0]
+    if alt and not alt.get("unreviewed") and alt.get("id") in byid:
+        return byid[alt["id"]].get("work", "")
+    if not alt or not alt.get("unreviewed"):
+        return g["rep"].get("work", "")
+    said = [byid[i].get("work") for i in g.get("members", []) if byid.get(i, {}).get("work")]
+    return "" if not said else "new work" if said.count("new work") * 2 >= len(said) else "edit"
 
 
 OTHER_FIX = "Other fix"
@@ -3300,6 +3321,9 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
             if d:
                 og["declined"] = {"id": d["id"], "title": d["title"]}
             groups.append(og)
+    byid = {f["id"]: f for f in flat}
+    for g in groups:
+        g["work"] = group_work(g, byid)
     since = carry_over(groups, prev, dnorm)  # after the mediator, so a finding it dropped is not carried
     since = since if earlier else None
     n_rej = sum(g["rejected"] for g in groups)
@@ -3608,7 +3632,7 @@ def write_notes(draft, run, source=None):
             c[2] = "\n".join(l for l in lines if l != NOT_RAISED)
             e.update(key=g.get("key"), run=str(run), n=n, title=g["rep"]["title"], quote=g["rep"]["quote"],
                      fix=fix_of(g["rep"]) if g.get("alts") is None else (g["alts"][0]["fix"] if g["alts"] else ""),
-                     order=note_order(g, sev))
+                     order=note_order(g, sev), work=g.get("work", ""))
             s = note_set(g, sev)
             if s != nid[0] and "X" not in (s, nid[0]) and not e.get("pinned"):
                 note_move(chunks, c, s, entries, nxt, present)
@@ -3651,7 +3675,7 @@ def write_notes(draft, run, source=None):
         nid = f"{s}{k}"
         order = note_order(g, sev)
         entries[nid] = {"key": g.get("key"), "run": str(run), "n": n, "title": g["rep"]["title"],
-                        "quote": g["rep"]["quote"], "order": order,
+                        "quote": g["rep"]["quote"], "order": order, "work": g.get("work", ""),
                         "fix": fix_of(g["rep"]) if g.get("alts") is None else (g["alts"][0]["fix"] if g["alts"] else "")}
         chunk = ["item", nid, note_item(nid, g, sev, labels, voters, files, text, deck)]
         note_add(chunks, s, chunk)
@@ -3683,6 +3707,7 @@ def write_notes(draft, run, source=None):
              f"- Review run: `{run}`. Reviewed by {who}" + (f", ties broken by {med}." if med else "."),
              "- Ids: A Major, B Minor, C Nitpick, X disputed. " + (RENUMBERED if earlier else IDS_FIXED),
              *earlier,
+             *([line] if (line := majors_work_line([c[1] for c in keep if c[0] == "item" and note_section(keep, c) == "A"], entries)) else []),
              *([f"- Closed this round: {', '.join(closed)}."] if closed else []),
              *([f"- Left as written, heading not in the \"### A1. Title\" form: {', '.join(bad)}."] if bad else []),
              *([f"- {not_assessed(r)}"] if not_assessed(r) else []),
@@ -3705,6 +3730,18 @@ def write_notes(draft, run, source=None):
 NOTE_REF = re.compile(r"``.+?``+|`[^`]*`|\"[^\"]*\"|“[^”]*”|\]\([^)]*\)|https?://\S+|(?<![\w.-])([ABCX]\d+)(?=[a-z]?\b)")
 NOTE_RANGE = re.compile(r"\b[ABCX]\d+(?:\.\d+)?\s*(?:to|through|[-–])\s*[ABCX]\d+\b")
 DRAFT_LABEL = re.compile(r"\b(?:tables?|fig(?:ure)?s?|appendix|appendices|sections?|eq(?:uation)?s?|theorem|lemma|algorithm|panel)\.?\s*$", re.I)
+
+
+def majors_work_line(majors, entries):
+    """The About line that sorts the open Majors by the work their fixes need:
+    new analysis, data, or results, or an edit to the text. Empty with no Majors."""
+    if not majors:
+        return ""
+    by = {w: [m for m in majors if (entries.get(m) or {}).get("work", "") == w] for w in ("new work", "edit", "")}
+    parts = ([f"Majors that need new analysis, data, or results: {', '.join(by['new work'])}."] if by["new work"] else []) + (
+        [f"Majors an edit to the text fixes: {', '.join(by['edit'])}."] if by["edit"] else []) + (
+        [f"Not sorted: {', '.join(by[''])}."] if by[""] else [])
+    return "- " + " ".join(parts)
 
 
 def note_counts(ids):
