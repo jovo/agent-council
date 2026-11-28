@@ -197,6 +197,23 @@ class Parsing(unittest.TestCase):
         self.assertEqual(fs[1]["quote"], "")
         self.assertIn("753 BC", fs[0]["body"])
 
+    def test_parse_work(self):
+        for said, want in (("new work", "new work"), ("New work (rerun)", "new work"), ("edit", "edit"), (None, "")):
+            fs = ur.parse_findings(finding_text("T", "q", "p", "~~a~~ 🟢 **b**", "Major", said))
+            self.assertEqual(fs[0]["work"], want)
+        self.assertIn("work: edit | new work", ur.review_prompt("draft", "", "rules"))
+
+    def test_group_work_follows_the_fix_shown(self):
+        byid = {"A1": {"work": "new work"}, "B1": {"work": "edit"}, "B2": {"work": "edit"}}
+        g = {"rep": {"work": "edit"}, "members": ["A1", "B1", "B2"]}
+        self.assertEqual(ur.group_work({**g, "alts": [{"id": "A1", "fix": "x"}]}, byid), "new work")
+        self.assertEqual(ur.group_work({**g, "alts": [{"id": "B1", "fix": "x"}]}, byid), "edit")
+        self.assertEqual(ur.group_work({**g, "alts": None}, byid), "edit")  # one reviewer: its own finding
+        own = {"by": "claude:opus", "fix": "x", "unreviewed": True}
+        self.assertEqual(ur.group_work({**g, "alts": [own]}, byid), "edit")  # mediator's fix: 2 of 3 say edit
+        self.assertEqual(ur.group_work({**g, "members": ["A1", "B1"], "alts": [own]}, byid), "new work")  # a tie
+        self.assertEqual(ur.group_work({"rep": {}, "members": ["C1"], "alts": [own]}, {"C1": {}}), "")
+
     def test_parse_question_form(self):
         fs = ur.parse_findings("=== FINDING\nseverity: Minor\nkind: clarity\nform: question\n"
                                "title: Which gripper\nquote: a robot arm\n---\nTwo-finger or three-finger?\n")
@@ -376,7 +393,7 @@ class Calls(unittest.TestCase):
             out = {"auth": '{"loggedIn": true}', "login": "Not logged in", "status": "Logged in as x"}[cmd[1]]
             return SimpleNamespace(returncode=0, stdout=out, stderr="")
         with mock.patch.object(ur.subprocess, "run", fake):
-            self.assertEqual(ur.preflight(["claude", "gpt", "gemini"]), ["claude", "gemini"])
+            self.assertEqual(ur.preflight(["claude", "gpt", "grok"]), ["claude", "grok"])
         self.assertEqual(ur.FAILURES[0]["model"], "gpt")
 
     def test_preflight_keeps_panelist_with_api_key(self):
@@ -384,7 +401,7 @@ class Calls(unittest.TestCase):
             return SimpleNamespace(returncode=1, stdout="Not logged in", stderr="")
         with mock.patch.object(ur.subprocess, "run", fake), \
                 mock.patch.dict(ur.runtime.CHILD_ENV, {"CODEX_API_KEY": "k", "CURSOR_API_KEY": "k"}):
-            self.assertEqual(ur.preflight(["gpt", "gemini"]), ["gpt", "gemini"])
+            self.assertEqual(ur.preflight(["gpt", "grok"]), ["gpt", "grok"])
         self.assertEqual(ur.FAILURES, [])
 
     def choose(self, panel, missing=(), logged_out=()):
@@ -439,20 +456,28 @@ class Calls(unittest.TestCase):
         panel, _ = self.choose(["argon", "gpt", "gemini"], missing=("gpt",))
         self.assertEqual(panel, ["argon", "gemini", "grok"])
 
-    def run_agy(self, writes=None, web=False, cursor="/bin/cursor-agent"):
+    def run_agy(self, writes=None, web=False, read=False):
         seen = {}
 
         def fake(cmd, **kw):
             seen.update(cmd=cmd, cwd=kw.get("cwd"))
             if kw.get("cwd"):
                 seen["files"] = sorted(str(p.relative_to(kw["cwd"])) for p in Path(kw["cwd"]).rglob("*") if p.is_file())
+                seen["agent"] = (Path(kw["cwd"]) / ".agents/agents/unified-reviewer.md").read_text()
                 if writes:
                     (Path(kw["cwd"]) / writes).write_text("x")
             return SimpleNamespace(returncode=0, stdout="fine")
         with mock.patch.object(ur.subprocess, "run", fake), mock.patch.object(ur.runtime, "AGY", "/bin/agy"), \
-                mock.patch.object(ur.runtime, "CURSOR", cursor), \
+                mock.patch.object(ur, "READ_FILES", read), \
                 mock.patch.dict(ur.PANELISTS, {"argon": ("agy", "gemini-4-argon-medium", "Argon")}):
             return ur.call_once("argon", "the draft", self.tmp / "out.md", self.tmp, web), seen
+
+    @staticmethod
+    def agy_tools(seen):
+        agent = seen["agent"]
+        tools = re.findall(r"^  - (\S+)$", agent, re.M)
+        deny = json.loads(seen["cmd"][seen["cmd"].index("--settings") + 1])["permissions"]["deny"]
+        return tools, deny
 
     def test_agy_runs_with_no_tools_in_its_own_empty_folder(self):
         (text, reason), seen = self.run_agy()
@@ -460,11 +485,13 @@ class Calls(unittest.TestCase):
         self.assertEqual(seen["files"], [".agents/agents/unified-reviewer.md"])
         self.assertNotEqual(Path(seen["cwd"]), self.tmp)
         self.assertFalse(Path(seen["cwd"]).exists())  # removed after the call
-        settings = json.loads(seen["cmd"][seen["cmd"].index("--settings") + 1])
+        tools, deny = self.agy_tools(seen)
+        self.assertEqual(tools, ["ask_question"])
         for rule in ("command(*)", "read_file(*)", "write_file(*)", "read_url(*)", "mcp(*)"):
-            self.assertIn(rule, settings["permissions"]["deny"])
+            self.assertIn(rule, deny)
         self.assertEqual(seen["cmd"][seen["cmd"].index("--agent") + 1], "unified-reviewer")
         self.assertNotIn("--dangerously-skip-permissions", seen["cmd"])
+        self.assertNotIn("--add-dir", seen["cmd"])
 
     def test_agy_output_is_refused_when_it_wrote_a_file(self):
         (text, reason), seen = self.run_agy(writes="probe.md")
@@ -472,19 +499,50 @@ class Calls(unittest.TestCase):
         self.assertIn("probe.md", reason)
         self.assertFalse(Path(seen["cwd"]).exists())
 
-    def test_agy_hands_web_calls_to_cursor(self):
+    def test_agy_searches_the_web_itself_for_a_web_call(self):
         (text, _), seen = self.run_agy(web=True)
-        self.assertEqual((text, seen["cmd"][0], seen["cwd"]), ("fine", "/bin/cursor-agent", None))
-        (text, reason), seen = self.run_agy(web=True, cursor=None)
-        self.assertIsNone(text)
-        self.assertEqual(seen, {})
+        self.assertEqual((text, seen["cmd"][0]), ("fine", "/bin/agy"))
+        tools, deny = self.agy_tools(seen)
+        self.assertEqual(tools, ["ask_question", "search_web", "read_url_content"])
+        self.assertNotIn("read_url(*)", deny)
+        for rule in ("command(*)", "read_file(*)", "write_file(*)", "execute_url(*)", "mcp(*)"):
+            self.assertIn(rule, deny)
 
-    def test_gemini_uses_agy_only_when_installed(self):
-        for binary, want in ((None, "cursor"), (tempfile.gettempdir(), "cursor"), (sys.executable, "agy")):
-            with mock.patch.object(ur.runtime, "AGY", binary), mock.patch.dict(ur.PANELISTS):
-                ur.use_agy()
-                self.assertEqual([ur.PANELISTS[m][0] for m in ("argon", "gemini")], [want, want])
-                self.assertEqual(ur.PANELISTS["grok"][0], "cursor")
+    def test_agy_reads_files_itself_when_the_panel_reads_files(self):
+        (text, _), seen = self.run_agy(read=True)
+        self.assertEqual((text, seen["cmd"][0]), ("fine", "/bin/agy"))
+        tools, deny = self.agy_tools(seen)
+        self.assertEqual(tools, ["ask_question", "read_file"])
+        self.assertNotIn("read_file(*)", deny)
+        for rule in ("command(*)", "write_file(*)", "read_url(*)", "execute_url(*)", "mcp(*)"):
+            self.assertIn(rule, deny)
+        self.assertNotIn("--add-dir", seen["cmd"])
+
+    def test_gemini_runs_on_agy_never_cursor(self):
+        self.assertEqual([ur.PANELISTS[m][0] for m in ("argon", "gemini")], ["agy", "agy"])
+        self.assertEqual(ur.FACTCHECK_PANELISTS["gemini"][0], "agy")
+        self.assertEqual(ur.PANELISTS["grok"][0], "cursor")
+        with mock.patch.object(ur, "cursor_models", lambda: {}), mock.patch.object(ur, "agy_models", lambda: {}), \
+                mock.patch.dict(ur.PANELISTS):
+            self.assertEqual(ur.PANELISTS[ur.panelist("cursor:gemini-3.8-flash-high")][0], "agy")
+            self.assertEqual(ur.PANELISTS[ur.panelist("agy:gemini-4-argon-high")][0], "agy")
+            self.assertEqual(ur.PANELISTS[ur.panelist("cursor:grok-4.7-high")][0], "cursor")
+
+    def test_panel_menu_lists_gemini_from_agy_only(self):
+        cursor = {"gemini-3.8-flash-low": "Gemini 3.8 Flash Low", "grok-4.7-high": "Grok 4.7 High"}
+        agy = {"gemini-4-argon-medium": "Gemini 4 Argon (Medium)"}
+        with mock.patch.object(ur, "cursor_models", lambda: cursor), mock.patch.object(ur, "agy_models", lambda: agy):
+            specs = [i["spec"] for lab in ur.model_menu() for m in lab["models"] for v in m["versions"] for i in v["items"]]
+        self.assertIn("agy:gemini-4-argon-medium", specs)
+        self.assertIn("cursor:grok-4.7-high", specs)
+        self.assertFalse([s for s in specs if s.startswith("cursor:gemini")])
+
+    def test_agy_models_reads_the_google_list(self):
+        out = "Fetching available models...\ngemini-4-argon-medium\tGemini 4 Argon (Medium)\ngemini-pro-orchestrator\tOrchestrator\nbad line\n"
+        with mock.patch.object(ur.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=out)), \
+                mock.patch.object(ur.runtime, "AGY", sys.executable), mock.patch.object(ur, "_AGY_MODELS", None):
+            self.assertEqual(ur.agy_models(), {"gemini-4-argon-medium": "Gemini 4 Argon (Medium)",
+                                               "gemini-pro-orchestrator": "Orchestrator"})
 
     def test_agy_preflight(self):
         for rc, out, kept in ((0, "gemini-4-argon-medium\tArgon", True), (1, "authentication required", False),
@@ -492,41 +550,44 @@ class Calls(unittest.TestCase):
             fake = lambda cmd, **kw: SimpleNamespace(returncode=rc, stdout=out, stderr="")
             ur.FAILURES.clear()
             with mock.patch.object(ur.subprocess, "run", fake), mock.patch.object(ur.runtime, "log", lambda *a: None), \
+                    mock.patch.object(ur.runtime, "AGY", sys.executable), \
                     mock.patch.dict(ur.PANELISTS, {"argon": ("agy", "gemini-4-argon-medium", "Argon")}):
                 self.assertEqual(ur.preflight(["argon"]), ["argon"] if kept else [])
+
+    def test_agy_preflight_fails_without_agy(self):
+        for binary in (None, tempfile.gettempdir()):
+            ur.FAILURES.clear()
+            with mock.patch.object(ur.runtime, "AGY", binary), mock.patch.object(ur.runtime, "log", lambda *a: None), \
+                    mock.patch.dict(ur.PANELISTS, {"argon": ("agy", "gemini-4-argon-medium", "Argon")}):
+                self.assertEqual(ur.preflight(["argon"]), [])
+            self.assertIn("not installed", ur.FAILURES[0]["reason"])
 
     def test_agy_preflight_needs_the_model_asked_for(self):
-        for cursor, status, kept in ((sys.executable, "Logged in as x", True), (sys.executable, "Not logged in", False),
-                                     (None, "", False), ("/no/such/cursor-agent", "Logged in as x", False),
-                                     (tempfile.gettempdir(), "Logged in as x", False)):
-            fake = lambda cmd, **kw: SimpleNamespace(
-                returncode=0, stderr="", stdout="Fetching available models...\ngemini-3.8-flash-low\tFlash\n"
-                "gemini-4-argon-medium-x\tOther\n" if cmd[1] == "models" else status)
-            ur.FAILURES.clear()
-            with mock.patch.object(ur.subprocess, "run", fake), mock.patch.object(ur.runtime, "log", lambda *a: None), \
-                    mock.patch.object(ur.runtime, "CURSOR", cursor), mock.patch.dict(ur.runtime.CHILD_ENV), \
-                    mock.patch.dict(ur.PANELISTS, {"argon": ("agy", "gemini-4-argon-medium", "Argon"),
-                                                   "gemini": ("agy", "gemini-3.8-flash-low", "Flash")}):
-                ur.runtime.CHILD_ENV.pop("CURSOR_API_KEY", None)
-                self.assertEqual(ur.preflight(["argon", "gemini"]), ["argon", "gemini"] if kept else ["gemini"])
-                self.assertEqual(ur.PANELISTS["argon"], ("cursor" if cursor == sys.executable else "agy", "gemini-4-argon-medium", "Argon"))
-                self.assertEqual(ur.PANELISTS["gemini"][0], "agy")
-            if cursor != sys.executable:
-                self.assertIn("does not offer gemini-4-argon-medium", ur.FAILURES[0]["reason"])
+        fake = lambda cmd, **kw: SimpleNamespace(
+            returncode=0, stderr="", stdout="Fetching available models...\ngemini-3.8-flash-low\tFlash\n"
+            "gemini-4-argon-medium-x\tOther\n")
+        ur.FAILURES.clear()
+        with mock.patch.object(ur.subprocess, "run", fake), mock.patch.object(ur.runtime, "log", lambda *a: None), \
+                mock.patch.object(ur.runtime, "AGY", sys.executable), \
+                mock.patch.dict(ur.PANELISTS, {"argon": ("agy", "gemini-4-argon-medium", "Argon"),
+                                               "gemini": ("agy", "gemini-3.8-flash-low", "Flash")}):
+            self.assertEqual(ur.preflight(["argon", "gemini"]), ["gemini"])
+            self.assertEqual([ur.PANELISTS[m][0] for m in ("argon", "gemini")], ["agy", "agy"])
+        self.assertIn("does not offer gemini-4-argon-medium", ur.FAILURES[0]["reason"])
 
     def test_agy_preflight_tells_an_empty_list_from_output_it_cannot_read(self):
-        for out, err, kept, route in (("Fetching available models...\n", "", True, "cursor"), ("", "", True, "cursor"),
-                                      ("Models: Argon, Flash\n", "", True, "agy"),
-                                      ("gemini-3.8-flash-low\tFlash\nArgon (Medium)\n", "", True, "agy"),
-                                      ("gemini-4-argon-medium\tArgon\nA new version is available\n", "", True, "agy"),
-                                      ("", "authentication required", False, "agy")):
-            fake = lambda cmd, **kw: SimpleNamespace(returncode=0, stderr=err, stdout=out if cmd[1] == "models" else "Logged in as x")
+        for out, err, kept in (("Fetching available models...\n", "", True), ("", "", True),
+                               ("Models: Argon, Flash\n", "", True),
+                               ("gemini-3.8-flash-low\tFlash\nArgon (Medium)\n", "", True),
+                               ("gemini-4-argon-medium\tArgon\nA new version is available\n", "", True),
+                               ("", "authentication required", False)):
+            fake = lambda cmd, **kw: SimpleNamespace(returncode=0, stderr=err, stdout=out)
             ur.FAILURES.clear()
             with mock.patch.object(ur.subprocess, "run", fake), mock.patch.object(ur.runtime, "log", lambda *a: None), \
-                    mock.patch.object(ur.runtime, "CURSOR", sys.executable), \
+                    mock.patch.object(ur.runtime, "AGY", sys.executable), \
                     mock.patch.dict(ur.PANELISTS, {"argon": ("agy", "gemini-4-argon-medium", "Argon")}):
                 self.assertEqual(ur.preflight(["argon"]), ["argon"] if kept else [])
-                self.assertEqual(ur.PANELISTS["argon"][0], route)
+                self.assertEqual(ur.PANELISTS["argon"][0], "agy")
 
     def test_no_panel_when_nothing_is_available(self):
         with self.assertRaises(SystemExit):
@@ -2408,8 +2469,9 @@ def two_lab_review(d, replies, votes, mediation=None, draft_text=DRAFT2, fails=(
     return out, prompts
 
 
-def finding_text(title, quote, problem, fix, severity="Minor"):
-    return (f"=== FINDING\nseverity: {severity}\nkind: logic\nform: edit\ntitle: {title}\nquote: {quote}\n---\n"
+def finding_text(title, quote, problem, fix, severity="Minor", work=None):
+    return (f"=== FINDING\nseverity: {severity}\nkind: logic\nform: edit\n" + (f"work: {work}\n" if work else "")
+            + f"title: {title}\nquote: {quote}\n---\n"
             f"problem: {problem}\n{fix}\n")
 
 
@@ -2799,10 +2861,12 @@ SEVEN = ["Rivers freeze each winter", "Copper conducts heat well", "Owls hunt af
          "Maples drop red leaves", "Bread rises with yeast", "Comets orbit the sun"]
 
 
-def claims(*ns, severity="Major"):
-    """One finding per claim number in DRAFT7, so two reviewers with the same text agree on each."""
+def claims(*ns, severity="Major", work=None):
+    """One finding per claim number in DRAFT7, so two reviewers with the same text agree on each.
+    work is one value for all, or {claim number: value}."""
     return "".join(finding_text(f"Claim {n} fails", f"{SEVEN[n - 1]}.", "It fails.",
-                                f"{SEVEN[n - 1]} 🟢 **in no case**.", severity) for n in ns)
+                                f"{SEVEN[n - 1]} 🟢 **in no case**.", severity,
+                                work.get(n) if isinstance(work, dict) else work) for n in ns)
 
 
 DRAFT7 = "# Intro\n\n" + "\n\n".join(f"{x}." for x in SEVEN) + "\n"
@@ -3321,15 +3385,41 @@ Closed, by their earlier ids: B7 and C2.
         self.assertNotIn("Sky color is wrong", t)
         self.assertNotIn("Next free ids", t)
 
-    def majors(self, ns, minor=(), rank=""):
+    def heads(self, t, name):
+        return re.findall(r"^### (\w+)\.", t.split(f"## {name}\n")[1].split("\n## ")[0], re.M)
+
+    def test_about_sorts_the_majors_by_the_work_their_fixes_need(self):
+        t = self.majors([1, 2, 3], work={1: "new work", 2: "edit", 3: "new work"})
+        about = t.split("## About this review")[1]
+        self.assertIn("- Majors that need new analysis, data, or results: A1, A3. Majors an edit to the text fixes: A2.", about)
+        self.assertNotIn("Not sorted", about)
+
+    def test_about_marks_majors_no_reviewer_sorted(self):
+        t = self.majors([1, 2], work={1: "edit"})
+        self.assertIn("- Majors an edit to the text fixes: A1. Not sorted: A2.", t)
+
+    def test_a_repeat_without_a_tag_keeps_the_earlier_one(self):
+        self.majors([1], work="new work")
+        t = self.majors([1])
+        self.assertIn("- Majors that need new analysis, data, or results: A1.", t)
+
+    def test_carry_over_passes_the_earlier_tag_on(self):
+        g = {"rep": {"title": "T", "quote": "q"}, "rejected": False}
+        ur.carry_over([g], [{"key": "K1", "seen": 1, "title": "T", "quote": "q", "work": "new work"}], "q")
+        self.assertEqual(g["work"], "new work")
+        g = {"rep": {"title": "T", "quote": "q"}, "rejected": False, "work": "edit"}
+        ur.carry_over([g], [{"key": "K1", "seen": 1, "title": "T", "quote": "q", "work": "new work"}], "q")
+        self.assertEqual(g["work"], "edit")
+
+    def test_no_majors_line_without_majors(self):
+        self.assertEqual(ur.majors_work_line([], {}), "")
+
+    def majors(self, ns, minor=(), rank="", work=None):
         f = self.d / "memo.md"
         if not f.exists():
             f.write_text(DRAFT7)
-        text = claims(*ns) + claims(*minor, severity="Minor")
+        text = claims(*ns, work=work) + claims(*minor, severity="Minor")
         return self.review({"gpt": text, "argon": text}, rank=rank)[0].read_text()
-
-    def heads(self, t, name):
-        return re.findall(r"^### (\w+)\.", t.split(f"## {name}\n")[1].split("\n## ")[0], re.M)
 
     def test_a_severity_change_moves_the_item_and_keeps_the_old_id(self):
         self.majors([1, 2], [3])
