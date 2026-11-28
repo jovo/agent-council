@@ -3354,6 +3354,19 @@ Closed, by their earlier ids: B7 and C2.
         t = self.majors([1, 2], work={1: "edit"})
         self.assertIn("- Majors an edit to the text fixes: A1. Not sorted: A2.", t)
 
+    def test_a_repeat_without_a_tag_keeps_the_earlier_one(self):
+        self.majors([1], work="new work")
+        t = self.majors([1])
+        self.assertIn("- Majors that need new analysis, data, or results: A1.", t)
+
+    def test_carry_over_passes_the_earlier_tag_on(self):
+        g = {"rep": {"title": "T", "quote": "q"}, "rejected": False}
+        ur.carry_over([g], [{"key": "K1", "seen": 1, "title": "T", "quote": "q", "work": "new work"}], "q")
+        self.assertEqual(g["work"], "new work")
+        g = {"rep": {"title": "T", "quote": "q"}, "rejected": False, "work": "edit"}
+        ur.carry_over([g], [{"key": "K1", "seen": 1, "title": "T", "quote": "q", "work": "new work"}], "q")
+        self.assertEqual(g["work"], "edit")
+
     def test_no_majors_line_without_majors(self):
         self.assertEqual(ur.majors_work_line([], {}), "")
 

@@ -3632,7 +3632,7 @@ def write_notes(draft, run, source=None):
             c[2] = "\n".join(l for l in lines if l != NOT_RAISED)
             e.update(key=g.get("key"), run=str(run), n=n, title=g["rep"]["title"], quote=g["rep"]["quote"],
                      fix=fix_of(g["rep"]) if g.get("alts") is None else (g["alts"][0]["fix"] if g["alts"] else ""),
-                     order=note_order(g, sev), work=g.get("work", ""))
+                     order=note_order(g, sev), work=g.get("work") or e.get("work", ""))
             s = note_set(g, sev)
             if s != nid[0] and "X" not in (s, nid[0]) and not e.get("pinned"):
                 note_move(chunks, c, s, entries, nxt, present)
@@ -4375,7 +4375,8 @@ def previous_open(path):
     r = json.loads((runs[0] / "results.json").read_text())
     decided = {d["title"] for d in load_decisions().get(str(Path(path).resolve()), []) if d.get("run") == runs[0].name}
     return [{"key": g.get("key") or "K" + hashlib.sha256((g["rep"]["title"] + g["rep"]["quote"]).encode()).hexdigest()[:6],
-             "n": n, "title": g["rep"]["title"], "quote": g["rep"]["quote"], "seen": g.get("seen", 1)}
+             "n": n, "title": g["rep"]["title"], "quote": g["rep"]["quote"], "seen": g.get("seen", 1),
+             "work": g.get("work", "")}
             for n, _, _, g in ordered_findings(r) if g["rep"]["title"] not in decided]
 
 
@@ -4407,6 +4408,7 @@ def carry_over(groups, prev, dnorm):
         if hit:
             left.remove(hit)
             g["key"], g["seen"] = hit["key"], hit["seen"] + 1
+            g["work"] = g.get("work") or hit.get("work", "")  # a repeat that does not say keeps the earlier tag
             if g["rejected"]:
                 left.append(hit)  # raised again but voted down: not repeated
         else:
@@ -5158,7 +5160,9 @@ def review_passage(path, run, passage):
                     return write_atomic(status, json.dumps({"status": "failed", "reason": "every voter failed"}))
             if flat:
                 ids = {d["id"]: d for d in declines}
+                byid = {f["id"]: f for f in flat}
                 for g in (score_group(g, votes, voters, owner) for g in group_findings(flat, votes)):
+                    g["work"] = group_work(g, byid)
                     g["where"] = where(g, dnorm, "")
                     g["fpos"] = 0
                     g["added"] = time.strftime("%Y-%m-%d %H:%M:%S")
