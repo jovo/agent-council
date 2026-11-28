@@ -27,8 +27,9 @@ HARNESS_BIN = {"claude": CLAUDE, "codex": CODEX, "cursor": CURSOR, "agy": AGY}
 # agent with only the tools its call needs, in an empty folder of its own, with
 # every other permission denied. An unknown --agent makes agy exit 1, so a missing
 # file fails closed. agy cannot confine reads to a folder (its permission rules
-# match only "*"), so a call that reads files can read any file the user can, as
-# Codex, Cursor, and Claude can when they read files. Shell commands, writes, URL
+# match only "*", and it reads paths outside its folder), so a call that reads files
+# can read any file the user can, as Codex, Cursor, and Claude can when they read
+# files. It gets no extra folder: the prompt names each file by its full path. Shell commands, writes, URL
 # execution, and MCP stay denied on every call.
 def agy_agent(read=False, web=False):
     """The agent file for one agy call: file reading for a PDF or figures, web

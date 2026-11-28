@@ -499,15 +499,33 @@ class Calls(unittest.TestCase):
         self.assertNotIn("read_file(*)", deny)
         for rule in ("command(*)", "write_file(*)", "read_url(*)", "execute_url(*)", "mcp(*)"):
             self.assertIn(rule, deny)
-        self.assertEqual(seen["cmd"][seen["cmd"].index("--add-dir") + 1], str(self.tmp))
+        self.assertNotIn("--add-dir", seen["cmd"])
 
     def test_gemini_runs_on_agy_never_cursor(self):
         self.assertEqual([ur.PANELISTS[m][0] for m in ("argon", "gemini")], ["agy", "agy"])
         self.assertEqual(ur.FACTCHECK_PANELISTS["gemini"][0], "agy")
         self.assertEqual(ur.PANELISTS["grok"][0], "cursor")
-        with mock.patch.object(ur, "cursor_models", lambda: {}), mock.patch.dict(ur.PANELISTS):
+        with mock.patch.object(ur, "cursor_models", lambda: {}), mock.patch.object(ur, "agy_models", lambda: {}), \
+                mock.patch.dict(ur.PANELISTS):
             self.assertEqual(ur.PANELISTS[ur.panelist("cursor:gemini-3.8-flash-high")][0], "agy")
+            self.assertEqual(ur.PANELISTS[ur.panelist("agy:gemini-4-argon-high")][0], "agy")
             self.assertEqual(ur.PANELISTS[ur.panelist("cursor:grok-4.7-high")][0], "cursor")
+
+    def test_panel_menu_lists_gemini_from_agy_only(self):
+        cursor = {"gemini-3.8-flash-low": "Gemini 3.8 Flash Low", "grok-4.7-high": "Grok 4.7 High"}
+        agy = {"gemini-4-argon-medium": "Gemini 4 Argon (Medium)"}
+        with mock.patch.object(ur, "cursor_models", lambda: cursor), mock.patch.object(ur, "agy_models", lambda: agy):
+            specs = [i["spec"] for lab in ur.model_menu() for m in lab["models"] for v in m["versions"] for i in v["items"]]
+        self.assertIn("agy:gemini-4-argon-medium", specs)
+        self.assertIn("cursor:grok-4.7-high", specs)
+        self.assertFalse([s for s in specs if s.startswith("cursor:gemini")])
+
+    def test_agy_models_reads_the_google_list(self):
+        out = "Fetching available models...\ngemini-4-argon-medium\tGemini 4 Argon (Medium)\ngemini-pro-orchestrator\tOrchestrator\nbad line\n"
+        with mock.patch.object(ur.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=out)), \
+                mock.patch.object(ur.runtime, "AGY", sys.executable), mock.patch.object(ur, "_AGY_MODELS", None):
+            self.assertEqual(ur.agy_models(), {"gemini-4-argon-medium": "Gemini 4 Argon (Medium)",
+                                               "gemini-pro-orchestrator": "Orchestrator"})
 
     def test_agy_preflight(self):
         for rc, out, kept in ((0, "gemini-4-argon-medium\tArgon", True), (1, "authentication required", False),
