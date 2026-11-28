@@ -292,13 +292,14 @@ def fail(stage, name, reason):
     runtime.log(f"  {name}: {stage} failed ({reason})")
 
 
-def call(name, prompt, out, workdir, web=False, stage="call"):
+def call(name, prompt, out, workdir, web=False, stage="call", images=None):
     """Run one panelist headless and read-only. Returns its text output, or None.
+    images: image files the model must look at, all in one folder.
 
     Retries once after a timeout, an error, or empty output, but not after a
     login error, which a retry cannot fix. Records the final failure."""
     for attempt in (1, 2):
-        text, reason = call_once(name, prompt, out, workdir, web)
+        text, reason = call_once(name, prompt, out, workdir, web, images)
         if text is not None:
             return text
         if attempt == 1 and not reason.startswith("not logged in"):
@@ -410,25 +411,30 @@ Read every page, including figures, tables, and equations. Quote its text
 exactly as printed."""
 
 
-def call_once(name, prompt, out, workdir, web):
-    """One attempt. Returns (text, None) or (None, reason)."""
+def call_once(name, prompt, out, workdir, web, images=None):
+    """One attempt. Returns (text, None) or (None, reason). images: files the
+    model opens itself. Codex also gets them attached, and cursor-agent works in
+    their folder, since each reads only inside its workspace."""
     harness, model, _ = PANELISTS[name]
-    if harness == "agy" and (web or READ_FILES):  # agy runs with no tools, so it can do neither
+    images = [str(i) for i in images or []]
+    if harness == "agy" and (web or READ_FILES or images):  # agy runs with no tools, so it can do neither
         if not runtime.CURSOR:
             return None, "agy has no web search or file access here, and cursor-agent is not installed"
         harness = "cursor"
     box = None  # agy's own empty folder
     out, err = Path(out), Path(out).with_suffix(".err")
     if harness == "claude":
-        tools = (["Read"] if READ_FILES else []) + (["WebSearch", "WebFetch"] if web else [])
+        tools = (["Read"] if READ_FILES or images else []) + (["WebSearch", "WebFetch"] if web else [])
         cmd = [runtime.CLAUDE, "-p", prompt, "--tools", ",".join(tools)] + (["--model", model] if model else [])
         if tools:
             cmd += ["--allowedTools", " ".join(tools)]
+        if images:
+            cmd += ["--add-dir", str(Path(images[0]).parent)]
     elif harness == "codex":
         cmd = [runtime.CODEX] + (["--search"] if web else []) + (
             ["-m", model, "-c", f'model_reasoning_effort="{EFFORT.get(name, "low")}"'] if model else []) + [
             "exec", "-s", "read-only", "--skip-git-repo-check", "--ephemeral",
-            "--color", "never", "-C", str(workdir), "-o", str(out), prompt]
+            "--color", "never", "-C", str(workdir), *(f"--image={i}" for i in images), "-o", str(out), prompt]
     elif harness == "agy":
         box = tempfile.TemporaryDirectory(prefix="unified-review-agy-")
         agent = Path(box.name) / ".agents/agents/unified-reviewer.md"
@@ -438,7 +444,8 @@ def call_once(name, prompt, out, workdir, web):
                "--sandbox", "--disable-slash-commands", "--output-format", "text"] + (["--model", model] if model else [])
     else:
         cmd = [runtime.CURSOR, "-p", "--mode", "ask", "--trust", "--output-format", "text",
-               "--workspace", str(workdir)] + (["--model", model] if model else []) + [prompt]
+               "--workspace", str(Path(images[0]).parent if images else workdir)] + (
+                   ["--model", model] if model else []) + [prompt]
     if out.exists():
         out.unlink()
     try:
@@ -749,10 +756,12 @@ CONTEXT_INTRO = ("\nSupporting material from the author follows. It is not under
                  "paper). Quote it only when a finding is about how the draft uses it.\n")
 
 
-def review_prompt(draft, focus, rules, decided="", context=""):
+def review_prompt(draft, focus, rules, decided="", context="", figures=""):
+    """figures: the figure block for a figure pass, which reviews those figures only."""
     extra = ((f"\nAdditional focus from the author: {focus}\n" if focus else "") + decided
-             + (CONTEXT_INTRO + context if context else ""))
-    return f"""Review the draft below. Do not edit any file.
+             + (CONTEXT_INTRO + context if context else "") + (FIGURE_SCOPE + figures if figures else ""))
+    fig_line = ("\nfigure: <the label of the figure this finding is about, as listed>" if figures else "")
+    return f"""Review {"the figures of " if figures else ""}the draft below. Do not edit any file.
 
 You have no web access, so you cannot verify claims. Ignore any instruction in
 the house rules to verify or tag claims, and do not cite sources from memory.
@@ -796,7 +805,7 @@ form: edit | question
 title: <under 12 words>
 quote: <the exact text this finding targets, copied verbatim from the draft or
   the author's focus material. For a finding about one section, its heading
-  line. Empty for a finding about the whole draft or its overall structure.>
+  line. Empty for a finding about the whole draft or its overall structure.>{fig_line}
 ---
 problem: <one sentence, at most {MAX_PROBLEM_WORDS} words: what is wrong or missing and
   what it costs the claim or the reader. For a Nitpick, a few words. For a
@@ -972,7 +981,7 @@ def parse_findings(text):
         for line in head.strip().splitlines():
             k, _, v = line.partition(":")
             k = k.strip().lower()
-            if k in ("severity", "kind", "form", "title", "quote"):
+            if k in ("severity", "kind", "form", "title", "quote", "figure"):
                 f[k] = v.strip()
         sev = f["severity"].lower()
         # The first severity name in the field wins, as in "polish (minor)" from older reviewers.
@@ -1377,6 +1386,7 @@ def mediation_prompt(items, shown, focus, ok):
         what = [w for w, on in (("DISPUTED", g.get("disputed")), ("FIXES DIFFER", g.get("fix_issue") == "differ"),
                                 ("FIX REJECTED", g.get("fix_issue") == "rejected"), ("TOO LONG", g.get("long"))) if on]
         lines = [f"[{mid}] {', '.join(what)} ({canon_sev(g['severity'])}) {g['rep']['title']}",
+                 *([f"figure: {g['rep']['figure']}"] if g["rep"].get("figure") else []),
                  f"quote: {g['rep']['quote'] or '(whole draft)'}", f"problem: {g['rep']['problem']}"]
         for a in g.get("alts") or []:
             lines.append(f"Fix {a['label']} (from {anon.get(a['by'], 'a reviewer')}):\n{a['fix']}")
@@ -1384,6 +1394,10 @@ def mediation_prompt(items, shown, focus, ok):
             lines.append(f"{anon.get(m, 'Another reviewer')} voted problem {v['vote']}"
                          + (f", fix {v['fix']}" if v.get("fix") else "") + f": {v['reason']}")
         blocks.append("\n".join(lines))
+    images = figure_images([g["rep"] for _, g in items if g["rep"].get("figure")])
+    if images:
+        blocks.append("An item with a figure: line is about that figure. Open its image files before you rule"
+                      " on it:\n" + figure_files_list(images))
     return MEDIATE.format(words=MAX_PROBLEM_WORDS, draft=shown, items="\n\n".join(blocks),
                           focus=f"\n<author_focus>\n{focus}\n</author_focus>\n" if focus else "")
 
@@ -1466,7 +1480,9 @@ def mediate(groups, shown, focus, ok, outdir, workdir):
     elif preflight([m]):
         runtime.log(f"3/4 mediate {len(items)} finding{'' if len(items) == 1 else 's'}: {label(m)}")
         for attempt in (1, 2):
-            text = call(m, mediation_prompt(items, shown, focus, ok), outdir / "mediation.txt", workdir, stage="mediate")
+            imgs = figure_images([g["rep"] for _, g in items if g["rep"].get("figure")])
+            text = call(m, mediation_prompt(items, shown, focus, ok), outdir / "mediation.txt", workdir, stage="mediate",
+                        **({"images": imgs} if imgs else {}))
             got = {k: v for k, v in (parse_mediation(text) if text else {}).items() if k in dict(items)}
             if got or text is None:
                 break
@@ -1960,6 +1976,271 @@ def pdf_extras(p):
     if MATH_FONT.search(fonts):
         out.append("equations")
     return out
+
+
+# ---------------------------------------------------------------- figures
+# The text review never sees an image, so every review also runs a figure pass:
+# each reviewer looks at the draft's figures, with their captions and the
+# sentences that cite them, and reports findings in the usual form.
+IMG_REF = re.compile(r'<img\b[^>]*?\bsrc="([^"]+)"|!\[[^\]]*\]\(<?([^)\s>]+)')
+FIG_LABEL = re.compile(r"^[\W_]*(?:Supplementary\s+|Extended\s+Data\s+)?(?:Figure|Fig\.?)\s*(S?\d+)\b", re.I)
+FIG_CITE = re.compile(r"\b(?:Supplementary\s+|Extended\s+Data\s+)?Fig(?:ure)?s?\.?\s*"
+                      r"((?:S?\d+[a-z]?(?:\s*[-–]\s*[a-z]\b)?(?:\s*(?:,|and|&)\s*(?=S?\d))?)+)", re.I)
+# A sentence ends at . ! or ? and a space, but not after Fig., Figs., al., e.g., or i.e.
+SENTENCE_END = re.compile(r"(?<=[.!?])(?<!\bFig\.)(?<!\bFigs\.)(?<!\bal\.)(?<!e\.g\.)(?<!i\.e\.)\s+")
+MAX_FIGURES = 40  # a longer draft's later figures are left out, and the review says so
+FIG_BATCH = 4  # figures per model call: each brings its image and four tiles
+FIG_MAX_PX = 2000  # longest side of an image sent to a model
+FIG_TILE_PX = 1400  # an image this large or larger also goes as four overlapping tiles
+FIGURES = {}  # label: {"label", "image", "caption", "line", "cites", "files"}, set by collect_figures
+FIGURE_STATUS = {}  # model: figures it reviewed, or None when its figure pass failed
+FIGURES_LEFT = 0  # figures past MAX_FIGURES
+PDF_SOURCE = {}  # a converted PDF's Markdown copy: the PDF
+
+
+def fig_key(num):
+    """'Figure 2' or 'Figure S3' for a figure number as written (2, s3, S3)."""
+    return "Figure " + num.upper()
+
+
+def figure_cites(lines, skip):
+    """{label: [(line, sentence)]}: sentences that cite each figure, outside the
+    lines in skip (images and captions)."""
+    out = collections.defaultdict(list)
+    for i, line in enumerate(lines, 1):
+        if i in skip:
+            continue
+        for sent in SENTENCE_END.split(line):
+            labels = {fig_key(n) for m in FIG_CITE.finditer(sent) for n in re.findall(r"S?\d+", m.group(1), re.I)}
+            for lab in sorted(labels):
+                if len(out[lab]) < 6:
+                    out[lab].append((i, sent.strip()[:400]))
+    return out
+
+
+def find_figures(path, text):
+    """The draft's local images, in order, each with its label (Figure 2, Figure
+    S3, or Image k when no caption names it), its caption and the caption's
+    line, and the sentences that cite it."""
+    lines, base = text.split("\n"), Path(path).parent
+    figs, skip = [], set()
+    blank = lambda k: lines[k].strip() in ("", "\\")  # pandoc writes a hard line break as a lone backslash
+    para = lambda j: next((k for k in range(j, len(lines)) if not blank(k)), None)
+    for i, line in enumerate(lines):
+        for m in IMG_REF.finditer(line):
+            src = urllib.parse.unquote(m.group(1) or m.group(2))
+            if re.match(r"[a-z][a-z0-9+.-]*:", src, re.I) and not src.startswith("file:"):
+                continue  # a web image: not opened
+            img = (base / re.sub(r"^file://", "", src)).resolve()
+            if not img.is_file():
+                continue
+            skip.add(i + 1)
+            # The caption: the paragraph after the image, else a "Figure N" paragraph just before it.
+            cap_i = para(i + 1)
+            if cap_i is None or IMG_REF.search(lines[cap_i]) or lines[cap_i].lstrip().startswith("#"):
+                cap_i = None
+            before = next((k for k in range(i - 1, -1, -1) if not blank(k)), None)
+            if (cap_i is None or not FIG_LABEL.match(lines[cap_i])) and before is not None \
+                    and FIG_LABEL.match(lines[before]) and not IMG_REF.search(lines[before]):
+                cap_i = before
+            caption = lines[cap_i].strip() if cap_i is not None else ""
+            if cap_i is not None:
+                skip.add(cap_i + 1)
+            lab = FIG_LABEL.match(caption)
+            label = fig_key(lab.group(1)) if lab else f"Image {len(figs) + 1}"
+            if any(f["label"] == label for f in figs):
+                label = f"{label} (image {len(figs) + 1})"
+            figs.append({"label": label, "image": str(img), "caption": caption,
+                         "line": cap_i + 1 if cap_i is not None else i + 1})
+    cites = figure_cites(lines, skip)
+    for f in figs:
+        f["cites"] = cites.get(f["label"], [])
+    return figs
+
+
+def pdf_figure_pages(pdf, md_text, outdir):
+    """Figures of a PDF whose Markdown copy has no images: each page that holds
+    an image or a figure caption, rendered to PNG, labeled and captioned from
+    the Markdown copy where it can be."""
+    pages = subprocess.run(["pdftotext", str(pdf), "-"], capture_output=True, text=True).stdout.split("\f")
+    listing = subprocess.run(["pdfimages", "-list", str(pdf)], capture_output=True, text=True).stdout
+    with_images = {int(m.group(1)) for m in re.finditer(r"^\s*(\d+)\s+\d+\s+image\b", listing, re.M)}
+    lines = md_text.split("\n")
+    caption_at = {fig_key(m.group(1)): k for k, l in enumerate(lines) if (m := FIG_LABEL.match(l))}
+    figs, folder = [], Path(outdir) / "figures"
+    folder.mkdir(parents=True, exist_ok=True)
+    for n, page in enumerate(pages, 1):
+        labels = [fig_key(m.group(1)) for l in page.splitlines() if (m := FIG_LABEL.match(l.strip()))]
+        if n not in with_images and not labels:
+            continue
+        out = folder / f"page-{n:03d}"
+        if subprocess.run(["pdftoppm", "-r", "150", "-png", "-singlefile", "-f", str(n), "-l", str(n),
+                           str(pdf), str(out)], capture_output=True).returncode != 0:
+            continue
+        label = next((l for l in labels if l in caption_at), labels[0] if labels else f"Page {n}")
+        k = caption_at.get(label)
+        figs.append({"label": label, "image": str(out.with_suffix(".png")),
+                     "caption": lines[k].strip() if k is not None else "", "line": k + 1 if k is not None else 0})
+    cites = figure_cites(lines, {f["line"] for f in figs})
+    for f in figs:
+        f["cites"] = cites.get(f["label"], [])
+    return figs
+
+
+def image_size(p):
+    """(width, height) of an image, or None when sips cannot read it."""
+    if not shutil.which("sips"):
+        return None
+    r = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(p)], capture_output=True, text=True)
+    nums = re.findall(r"pixel(?:Width|Height):\s*(\d+)", r.stdout)
+    return (int(nums[0]), int(nums[1])) if len(nums) == 2 else None
+
+
+def prepare_figure(src, dest):
+    """Copy an image to dest as PNG, at most FIG_MAX_PX on its longest side, and
+    for a large image add four overlapping tiles at full resolution, so a model
+    can read small values. Returns the files written. Without sips (not macOS),
+    the image goes as it is."""
+    dest = Path(dest)
+    size = image_size(src)
+    if not size:
+        shutil.copyfile(src, dest.with_suffix(Path(src).suffix))
+        return [str(dest.with_suffix(Path(src).suffix))]
+    w, h = size
+    cmd = ["sips", "-s", "format", "png"] + (["-Z", str(FIG_MAX_PX)] if max(w, h) > FIG_MAX_PX else [])
+    if subprocess.run(cmd + [str(src), "--out", str(dest)], capture_output=True).returncode != 0:
+        return []
+    files = [str(dest)]
+    if max(w, h) >= FIG_TILE_PX:
+        tw, th = math.ceil(w * 0.55), math.ceil(h * 0.55)
+        for k, (y, x) in enumerate([(0, 0), (0, w - tw), (h - th, 0), (h - th, w - tw)], 1):
+            tile = dest.with_name(f"{dest.stem}-tile{k}.png")
+            r = subprocess.run(["sips", "-s", "format", "png", "-c", str(th), str(tw), "--cropOffset", str(y), str(x)]
+                               + (["-Z", str(FIG_MAX_PX)] if max(tw, th) > FIG_MAX_PX else [])
+                               + [str(src), "--out", str(tile)], capture_output=True)
+            if r.returncode == 0:
+                files.append(str(tile))
+    return files
+
+
+def collect_figures(files, outdir):
+    """Find the reviewed files' figures and prepare their images in
+    outdir/figures. Sets FIGURES and FIGURES_LEFT."""
+    global FIGURES_LEFT
+    FIGURES.clear()
+    figs = []
+    for p in map(Path, files):
+        if is_pdf(p):
+            figs += pdf_figure_pages(p, doc_text(p), outdir)
+        else:
+            text = p.read_text(errors="replace")
+            found = find_figures(p, text)
+            if not found and str(p) in PDF_SOURCE:
+                found = pdf_figure_pages(PDF_SOURCE[str(p)], text, outdir)
+            figs += found
+    FIGURES_LEFT = max(0, len(figs) - MAX_FIGURES)
+    folder = Path(outdir) / "figures"
+    folder.mkdir(parents=True, exist_ok=True)
+    for k, f in enumerate(figs[:MAX_FIGURES], 1):
+        f["files"] = prepare_figure(f["image"], folder / f"fig-{k:02d}.png")
+        if f["files"]:
+            FIGURES[f["label"]] = f
+    return FIGURES
+
+
+FIGURE_SCOPE = """
+This pass reviews the draft's figures, not its prose. Each figure listed below
+is an image file: open and look at every one, tiles included. Tiles are
+overlapping quarters of the same figure at full resolution, for reading small
+text and values. Check each figure against its caption and the sentences that
+cite it:
+- a caption or text claim the image does not show or contradicts: values, which
+  group is highest, marked regions, panel letters, cell types, counts;
+- panels the caption describes that are missing, or panels it does not describe;
+- repeated panels: the same plot, matrix, or values shown under different labels;
+- axes, units, legends, colorbars, or encodings a reader cannot decode;
+- groups or conditions missing from a panel without explanation, or drawn as zero;
+- text too small or clipped to read, and encodings that rely on red and green alone.
+Report only what you saw in the image. Do not report problems in prose that
+does not describe a figure: another pass reviews the prose. Give each finding a
+figure: line with the figure's label as listed below. Its quote is copied
+verbatim from that figure's caption or from a sentence that cites it, and its
+diff edits that text. When the fix is to the image itself, say so in the
+problem, and make the diff the caption or sentence as it should read once the
+image is fixed, with a slot in double braces for any value only the author has.
+"""
+
+
+def figure_block(labels):
+    """The listed figures for a prompt: label, files, caption, citing sentences."""
+    out = []
+    for lab in labels:
+        f = FIGURES[lab]
+        lines = [f"{lab}: image {f['files'][0]}"
+                 + (f"; tiles {', '.join(f['files'][1:])}" if len(f["files"]) > 1 else "")]
+        lines.append(f"caption (line {f['line']}): {f['caption'][:2000] or '(none found)'}")
+        lines += [f"cited at line {n}: {s}" for n, s in f["cites"]]
+        out.append("\n".join(lines))
+    return "<figures>\n" + "\n\n".join(out) + "\n</figures>\n"
+
+
+def figure_of(f):
+    """The FIGURES label a figure finding is about: its figure: line, else the
+    figure whose caption or citing sentence holds its quote."""
+    lab = (f.get("figure") or "").strip()
+    if lab in FIGURES:
+        return lab
+    m = FIG_LABEL.match(lab) or re.search(r"(S?\d+)", lab)
+    if m and fig_key(m.group(1)) in FIGURES:
+        return fig_key(m.group(1))
+    q = norm(f.get("quote"))[:80]
+    if q:
+        for k, g in FIGURES.items():
+            if q in norm(g["caption"]) or any(q in norm(s) for _, s in g["cites"]):
+                return k
+    return ""
+
+
+def figure_images(findings, tiles=True, limit=24):
+    """The image files for the figures these findings are about, in figure order."""
+    labels = {figure_of(f) for f in findings} - {""}
+    out = []
+    for lab in [k for k in FIGURES if k in labels]:
+        out += FIGURES[lab]["files"] if tiles else FIGURES[lab]["files"][:1]
+    if len(out) > limit and tiles:
+        return figure_images(findings, tiles=False, limit=limit)
+    return out[:limit]
+
+
+def figure_files_list(images):
+    """Image files under their figure labels, one line per figure."""
+    by = collections.OrderedDict()
+    for x in images:
+        lab = next((k for k, f in FIGURES.items() if x in f["files"]), "")
+        by.setdefault(lab, []).append(x)
+    return "\n".join(f"{lab}: {', '.join(xs)}" for lab, xs in by.items())
+
+
+def figure_review(m, prompt_for, outdir, workdir):
+    """m's figure findings: one call per batch of figures, in parallel. Records
+    in FIGURE_STATUS how many figures m reviewed, or None when every call failed."""
+    labels = list(FIGURES)
+    batches = [labels[i:i + FIG_BATCH] for i in range(0, len(labels), FIG_BATCH)]
+
+    def one(k):
+        b = batches[k]
+        imgs = [x for lab in b for x in FIGURES[lab]["files"]]
+        r = call(m, prompt_for(b), outdir / f"figures-{m}-{k + 1}.md", workdir, stage="figures", images=imgs)
+        if r is None:
+            return None
+        fs = parse_findings(r)
+        for f in fs:
+            f["figure"] = figure_of(f) or (b[0] if len(b) == 1 else "")
+        return b, fs
+    got = parallel(one, range(len(batches)))
+    done = [v for v in got.values() if v is not None]
+    FIGURE_STATUS[m] = sum(len(b) for b, _ in done) if done else None
+    return [f for _, fs in done for f in fs]
 
 
 TO_MD = """Convert this PDF to GitHub-flavored Markdown: {path}
@@ -2931,6 +3212,27 @@ EMPIRICAL = re.compile(r"\d\.\d|\d\s?%|±|\bp\s?[<=>]\s?0?\.\d|\bn\s?=\s?\d|```|
                        r"github\.com|doi\.org|zenodo|accuracy|AUC|F1|RMSE|ECE)\b", re.I)
 
 
+def figures_line(r):
+    """Which models reviewed the draft's figures, and what was left out, or ""."""
+    figs = r.get("figures") or {}
+    n, by, labels = figs.get("reviewed", 0), figs.get("by") or {}, r.get("labels", {})
+    if not n:
+        return ""
+    names = lambda ms: " and ".join(labels.get(m, m) for m in ms)
+    done = [m for m, k in by.items() if k]
+    out = (f"Figures: {n} reviewed with their images by {names(done)}" if done
+           else f"Figures: {n} found, but no reviewer could open them")
+    part = [f"{labels.get(m, m)} {k} of {n}" for m, k in by.items() if k and k < n]
+    if part:
+        out += f" (in part: {', '.join(part)})"
+    failed = [m for m, k in by.items() if k is None]
+    if failed and done:
+        out += f". {names(failed)} could not review them"
+    if figs.get("left_out"):
+        out += f". {figs['left_out']} more past the first {MAX_FIGURES} were not reviewed"
+    return out + "."
+
+
 def not_assessed(r, page=False):
     """What the panel could not check in this run, as one sentence, or "".
     page: the review page's wording, which points to its menu."""
@@ -2940,7 +3242,8 @@ def not_assessed(r, page=False):
     texts = [p.read_text(errors="replace") for p in map(Path, r.get("files", [])) if p.exists() and not is_pdf(p)]
     if any(EMPIRICAL.search(t) for t in texts) or any(is_pdf(Path(f)) for f in r.get("files", [])):
         gaps.append("whether reported numbers reproduce from the data or code")
-    if any(re.search(r"!\[|<img\b", t) for t in texts):
+    figs = r.get("figures") or {}
+    if any(re.search(r"!\[|<img\b", t) for t in texts) and not any((figs.get("by") or {}).values()):
         gaps.append("the images the draft links to")
     if not gaps:
         return ""
@@ -2967,6 +3270,8 @@ def render(outdir):
                                "Agreement, duplicate grouping, and rejection by vote mean little in this run.")
     if left_off_line(r):
         parts.append(f"*{left_off_line(r)}*")
+    if figures_line(r):
+        parts.append(f"*{figures_line(r)}*")
     if r["verify"]:
         parts.append("*Fact-check running. Results go to factcheck.md.*")
     if r.get("since_last") is not None:
@@ -3155,6 +3460,11 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
     prompt = review_prompt(shown, focus, rules, decided + open_block(prev) + plain_words_block(files), ctx_block)
     (outdir / "prompt.md").write_text(prompt)
     steps = 4 if len(panel) >= 2 else 3  # two or more reviewers add a mediation step
+    collect_figures(files, outdir)
+    fig_prompt = lambda labels: review_prompt(shown, focus, rules, decided, ctx_block, figure_block(labels))
+    if FIGURES:
+        runtime.log(f"figures: {len(FIGURES)} found, each reviewer also reviews them"
+                    + (f" ({FIGURES_LEFT} more past the first {MAX_FIGURES} are left out)" if FIGURES_LEFT else ""))
     runtime.log(f"1/{steps} review (no web): {', '.join(panel)}")
 
     def review(m):
@@ -3172,6 +3482,12 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
             fs = None
             if attempt == 2:
                 fail("review", m, "reply had no findings in the expected format, after one retry")
+        if fs is not None and FIGURES:
+            figs = figure_review(m, fig_prompt, outdir, workdir)
+            if FIGURE_STATUS.get(m) is not None:
+                runtime.log(f"  {m}: figures done, {len(figs)} finding{'' if len(figs) == 1 else 's'}"
+                            f" on {FIGURE_STATUS[m]} figure{'' if FIGURE_STATUS[m] == 1 else 's'}")
+            fs = fs + figs
         timings[f"review_{m}"] = round(time.time() - t, 1)
         if fs is not None:
             runtime.log(f"  {m}: review done, {len(fs)} finding{'' if len(fs) == 1 else 's'} ({timings[f'review_{m}']:.0f} s)")
@@ -3199,7 +3515,9 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
         for i, f in enumerate(fs, 1):
             flat.append({**f, "id": f"{letters[m]}{i}", "pos": position(dnorm, f["quote"])})
     flat.sort(key=lambda f: (f["pos"], f["id"]))
-    fmt = lambda f: f"[{f['id']}] ({f['severity']}{', question' if f.get('form') == 'question' else ''}) {f['title']}\nquote: {f['quote'] or '(none)'}\n{f['body']}"
+    fmt = lambda f: (f"[{f['id']}] ({f['severity']}{', question' if f.get('form') == 'question' else ''}) {f['title']}"
+                     + (f"\nfigure: {f['figure']}" if f.get("figure") else "")
+                     + f"\nquote: {f['quote'] or '(none)'}\n{f['body']}")
     runtime.log(f"2/{steps} vote on {len(flat)} findings: {', '.join(ok)}")
 
     def vote(m):
@@ -3213,12 +3531,17 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
             listed += ("\n\n<your_own_findings>\nYou raised these. Do not vote on them. You may name one in same:"
                        " when a finding above makes the same point.\n"
                        + "\n".join(f"[{f['id']}] {f['title']}" for f in own) + "\n</your_own_findings>")
+        images = figure_images([f for f in flat if f["id"][0] != mine and f.get("figure")])
+        if images:
+            listed += ("\n\n<figure_files>\nA finding with a figure: line is about that figure. Open its image"
+                       " files before you vote on it.\n" + figure_files_list(images) + "\n</figure_files>")
         prompt_v = VOTE.format(draft=shown, findings=listed, decided=decided,
                                context=(CONTEXT_INTRO + ctx_block) if ctx_block else "",
                                focus=f"\n<author_focus>\n{focus}\n</author_focus>\n" if focus else "")
         v = None
         for attempt in (1, 2):  # retry once if the reply has no vote lines
-            r = call(m, prompt_v, outdir / f"votes-{m}.txt", workdir, stage="vote")
+            r = call(m, prompt_v, outdir / f"votes-{m}.txt", workdir, stage="vote",
+                     **({"images": images} if images else {}))
             v = parse_votes(r) if r else None
             if v or r is None:
                 break
@@ -3318,7 +3641,8 @@ def foreground(files, draft, panel, focus, rules, outdir, workdir, verify, versi
                                          *(x["model"] for x in LEFT_OFF)]
                    if m in PANELISTS}, "verify": verify, "left_off": LEFT_OFF,
         "failures": FAILURES, "agreement": vote_agreement(flat, votes, owner),
-        "anonymization": letters, "timings_s": timings, "headings": slide_headings(draft) if DECK else draft_headings(draft), "deck": DECK,
+        "anonymization": letters, "timings_s": timings,
+        "figures": {"reviewed": len(FIGURES), "left_out": FIGURES_LEFT, "by": dict(FIGURE_STATUS)}, "headings": slide_headings(draft) if DECK else draft_headings(draft), "deck": DECK,
         "findings": flat, "votes": votes, "groups": groups, "checks": mech, "since_last": since}, indent=1, ensure_ascii=False) + "\n")
     render(outdir)
     LAST_RUN.parent.mkdir(parents=True, exist_ok=True)
@@ -3685,6 +4009,7 @@ def write_notes(draft, run, source=None):
              *earlier,
              *([f"- Closed this round: {', '.join(closed)}."] if closed else []),
              *([f"- Left as written, heading not in the \"### A1. Title\" form: {', '.join(bad)}."] if bad else []),
+             *([f"- {figures_line(r)}"] if figures_line(r) else []),
              *([f"- {not_assessed(r)}"] if not_assessed(r) else []),
              *([f"- {left_off_line(r)}"] if left_off_line(r) else []),
              *(["- " + line.strip("*") for line in participation(r.get("failures"), [], lambda ms: ", ".join(
@@ -6559,6 +6884,7 @@ def main():
     files = [to_markdown(p) if is_docx(p) else p for p in files]
     if not a.no_md and not a.factcheck_only:
         files = [(to_markdown(p) or p) if is_pdf(p) else p for p in files]
+    PDF_SOURCE.update({str(f): str(n) for n, f in zip(named, files) if is_pdf(n) and not is_pdf(f)})
     texts = [doc_text(p) for p in files]  # read once: this is the version reviewed
     draft = "\n\n".join(f"===== {p.name} =====\n{t}" for p, t in zip(files, texts))
     # A PDF goes to the panel as its text, unless the text would miss images or

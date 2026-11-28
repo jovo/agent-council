@@ -24,7 +24,8 @@ If the user attaches or names supporting material with the request (reviewer
 comments, a call for proposals, a source paper, a style guide), pass it with
 `--context FILE`, once per file. The panel reads it but does not review it.
 Text files and PDFs work. An attachment that exists only in the chat must be
-saved to a temporary file first. Images are not supported yet: say so.
+saved to a temporary file first. Images are not supported as supporting
+material yet: say so. The draft's own figures are reviewed (below).
 
 The file to review can itself be a PDF. The script first converts it to
 Markdown with Claude, keeping its links, under
@@ -68,6 +69,24 @@ sentence and a common word for each flagged word that has one, and leave field
 terms, names, and defined terms alone. These come back as Nitpicks unless the
 wording hides a logic or clarity problem. A `plain-words-allow.txt` beside the
 reviewed text adds words that pass.
+
+Every review also reviews the draft's figures. The script finds each local
+image in the reviewed Markdown (a Word file's images come with its Markdown
+copy, and a PDF's pages with images or figure captions are rendered to PNG). It
+pairs each image with its caption and the sentences that cite it. It copies the
+images to `figures/` in the run folder, at most 2,000 pixels on a side, and
+splits large ones into four overlapping tiles so small values stay legible.
+Each reviewer then looks at the figures in batches of four, beside the text
+review. It checks each figure against its caption and text, and looks for
+repeated panels, missing groups, and encodings a reader cannot decode. Figure
+findings quote the caption or a citing sentence, so they are placed and applied
+like any other. Voters and the mediator get the images of the figures they
+judge. Codex gets the images attached, Claude opens them with Read, and
+cursor-agent works in their folder. agy cannot open files, so a reviewer on agy
+uses cursor-agent for this. The review's header and the notes file's closing
+section say how many figures were reviewed and by whom. They also name any
+reviewer that could not open them. Pass that line on when you report the
+review. Only the first 40 figures are reviewed.
 
 How it works: each panelist reviews without web search. Each finding is a
 problem (one sentence, at most 25 words) and a fix (the inline diff). With two
